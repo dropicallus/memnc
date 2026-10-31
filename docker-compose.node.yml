@@ -1,0 +1,34 @@
+# Additional worker node: join an existing NATS server.
+#
+#   NATS_URL=nats://192.168.1.10:4222 NODE_NAME=node-b \
+#     docker compose -f docker-compose.node.yml up --build -d
+#
+# Do not run the `nats` or `orchestrator` service here; the first node owns them.
+
+services:
+  worker-planner:
+    extends:
+      file: docker-compose.yml
+      service: worker-planner
+    environment:
+      NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NODE_NAME: ${NODE_NAME:-node-b}-planner
+      INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+
+  worker-coder:
+    extends:
+      file: docker-compose.yml
+      service: worker-coder
+    environment:
+      NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NODE_NAME: ${NODE_NAME:-node-b}-coder
+      INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+
+  worker-critic:
+    extends:
+      file: docker-compose.yml
+      service: worker-critic
+    environment:
+      NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NODE_NAME: ${NODE_NAME:-node-b}-critic
+      INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
