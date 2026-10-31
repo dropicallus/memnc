@@ -1,0 +1,41 @@
+version: "3.8"
+services:
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["--jetstream", "--store", "/data"]
+    volumes:
+      - nats-data:/data
+    restart: unless-stopped
+
+  worker-minipc:
+    build: ./workers
+    environment:
+      NATS_URL: nats://nats:4222
+      NODE_ID: minipc
+      OLLAMA_URL: http://192.168.1.10:11434
+      LITELLM_URL: http://192.168.1.10:4000
+    depends_on: [nats]
+    restart: unless-stopped
+
+  worker-gpu:
+    build: ./workers
+    environment:
+      NATS_URL: nats://nats:4222
+      NODE_ID: gpu-pc
+      OLLAMA_URL: http://192.168.1.11:11434
+      LITELLM_URL: http://192.168.1.10:4000
+    depends_on: [nats]
+    restart: unless-stopped
+
+  orchestrator:
+    build: ./orchestrator
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on: [nats]
+    restart: unless-stopped
+
+volumes:
+  nats-data:
