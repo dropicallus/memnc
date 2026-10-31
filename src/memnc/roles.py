@@ -29,11 +29,17 @@ SYSTEM_PROMPTS: dict[Role, str] = {
         '{"summary": "...", "files": [{"path": "relative/path", "content": "full file"}], '
         '"commands": ["optional shell command"]}\n'
         "Every file content must be complete and runnable; never use placeholders or diffs. "
-        "If you are revising, address every issue from the critique. No prose, no markdown fences."
+        "If you write files with tools, you MUST still return their full contents in the "
+        "JSON response. Before finishing, verify every Python file compiles "
+        "(for example run `python -m py_compile <file>` with run_shell when available). "
+        "If you are revising, address every issue from the critique. "
+        "No prose, no markdown fences."
     ),
     Role.CRITIC: (
         "You are the CRITIC in a multi-agent software engineering mesh. "
         "Review the implementation against the task and the plan. Do not rewrite code. "
+        "When tools are available, verify the files you were given (for example run "
+        "`python -m py_compile <file>`), and do not approve code that fails to parse. "
         "Reply with ONLY a JSON object of the form:\n"
         '{"approved": true|false, "summary": "...", '
         '"issues": [{"file": "...", "line": 1, "severity": "minor|major|blocker", '
@@ -85,6 +91,15 @@ def build_user_prompt(role: Role, payload: dict[str, Any]) -> str:
         parts.append(
             "CRITIQUE TO ADDRESS (this is revision "
             f"{payload.get('revisions', 0)}):\n{_dump(critique)}"
+        )
+
+    last_error = payload.get("last_error")
+    if last_error and role is Role.CODER:
+        parts.append(
+            "YOUR PREVIOUS ATTEMPT FAILED:\n"
+            f"{last_error}\n"
+            "Fix this before answering, and verify it with the tools "
+            "(for example `python -m py_compile <file>`)."
         )
 
     workspace = payload.get("workspace_root")
