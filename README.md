@@ -89,6 +89,33 @@ Models with native tool calling work best. Without tools the worker still
 works: the coder returns file contents as JSON and the orchestrator applies
 them.
 
+### AMD iGPU (Radeon 780M / Ryzen 8845HS)
+
+Ollama does not enable ROCm for every `gfx11` iGPU out of the box. Force the
+compatible target and enable iGPU offload on the Ollama container:
+
+```bash
+docker run -d --name ollama \
+  --device /dev/kfd --device /dev/dri \
+  --group-add video --group-add render \
+  -e HSA_OVERRIDE_GFX_VERSION=11.0.0 \
+  -e OLLAMA_IGPU_ENABLE=1 \
+  -e OLLAMA_KEEP_ALIVE=-1 \
+  -p 11434:11434 ollama/ollama:rocm
+```
+
+Verify that the model is actually on the GPU rather than the CPU:
+
+```bash
+docker exec ollama ollama run llama3.2:3b "hi"
+docker exec ollama ollama ps        # PROCESSOR must say 100% GPU
+docker logs ollama 2>&1 | grep -E 'offloaded|ROCm0'
+```
+
+With the override in place a 14B Q4 model fits in the 16 GiB shared VRAM and
+runs fully offloaded. Without it Ollama falls back to CPU (much slower) or the
+bundled `llama-server` can segfault while loading large models.
+
 ## Scaling out
 
 More capacity on one host:
