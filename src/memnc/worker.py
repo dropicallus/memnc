@@ -18,7 +18,9 @@ from .fsutil import apply_artifacts
 from .mcp.client import MCPClient
 from .roles import PROMPT_VERSION, SYSTEM_PROMPTS, build_user_prompt
 from .schema import (
+    CoderOutput,
     Envelope,
+    FileArtifact,
     ResultPayload,
     Role,
     SUBJECT_HEARTBEAT,
@@ -39,6 +41,34 @@ def tool_key(command_id: str, name: str, arguments: dict) -> str:
     return digest[:32]
 
 
+def python_syntax_errors(files: dict[str, str]) -> list[str]:
+    """Compile Python sources and return human-readable syntax errors."""
+
+    errors: list[str] = []
+    for path, content in files.items():
+        if not path.endswith(".py"):
+            continue
+        try:
+            compile(content, path, "exec")
+        except SyntaxError as exc:
+            errors.append(f"{path}:{exc.lineno}: {exc.msg}")
+    return errors
+
+
+def merge_written_files(
+    output: CoderOutput, written: dict[str, str]
+) -> dict[str, str]:
+    """Combine artifacts returned as JSON with files written through tools.
+
+    Small models often use ``write_file`` and then return an empty ``files``
+    list. Adopt those writes so the orchestrator and critic see the artifact.
+    """
+
+    merged = dict(written)
+    merged.update({item.path: item.content for item in output.files})
+    return merged
+
+
 class Worker:
     def __init__(
         self,
@@ -56,6 +86,7 @@ class Worker:
         self._busy = False
         self._current_task: str | None = None
         self._subscription = None
+        self._written_files: dict[str, str] = {}
 
     @property
     def role(self) -> Role:
@@ -211,6 +242,7 @@ class Worker:
     async def _run(self, envelope: Envelope, snapshot: TaskSnapshot) -> ResultPayload:
         role = envelope.role or self.role
         model = self.settings.model_for(role)
+        self._written_files = {}
         tools = (
             list(self.tools.schemas)
             if self.tools is not None and getattr(self.tools, "available", False)
@@ -252,6 +284,19 @@ class Worker:
                 )
 
         if role is Role.CODER and self.settings.apply_artifacts:
+            merged = merge_written_files(output, self._written_files)
+            if not output.files and merged:
+                output.files = [
+                    FileArtifact(path=path, content=content)
+                    for path, content in merged.items()
+                ]
+            errors = python_syntax_errors(merged)
+            if errors:
+                return ResultPayload(
+                    ok=False,
+                    error="python syntax error: " + "; ".join(errors),
+                    tool_steps=run.tool_steps,
+                )
             try:
                 apply_artifacts(
                     Path(self.settings.workspace_root),
@@ -284,6 +329,18 @@ class Worker:
             log.warning("output repair failed", exc_info=True)
             return None
 
+    def _note_written(
+        self, name: str, arguments: dict, output: str
+    ) -> None:
+        if name != "write_file":
+            return
+        try:
+            result = json.loads(output)
+        except ValueError:
+            return
+        if result.get("ok") and "path" in arguments and "content" in arguments:
+            self._written_files[str(arguments["path"])] = str(arguments["content"])
+
     async def _execute_tool(
         self, envelope: Envelope, name: str, arguments: dict
     ) -> str:
@@ -299,10 +356,12 @@ class Worker:
                 "tool replay skipped",
                 extra={"task_id": envelope.task_id, "tool": name},
             )
+            self._note_written(name, arguments, cache[key])
             return cache[key]
 
         output = await self.tools.call(name, arguments)
         output = output[:MAX_TOOL_RESULT_CHARS]
+        self._note_written(name, arguments, output)
 
         cache = await self.bus.get_tool_cache(
             envelope.task_id, envelope.id
