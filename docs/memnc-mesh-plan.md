@@ -2,6 +2,141 @@
 
 Implementation plan for `task.md`. Status: draft for review.
 
+## 0. Vision delta — from homogeneous mesh to heterogeneous agent fabric
+
+The core implementation (below, §1–§17) already delivers a correct, tested
+**homogeneous** mesh: all workers run the same memnc binary against a local
+inference runtime, coordinated by one orchestrator over NATS. That satisfies
+the "NATS as transport + MCP as tool convention" base. This section records
+what the *stated goal* actually adds on top — **agents on different machines
+and different harnesses collaborating** — and the design decisions taken from
+referenced work (hive, ormica via pypi, SwarmHarness arXiv:2605.28764, Cotal on
+NATS, Synadia Agent Protocol, Internet-of-Agents 2407.07061).
+
+### 0.1 What is missing in the homogeneous plan
+
+| Capability | In §1–§17 today | Needed for the stated goal |
+|---|---|---|
+| Heterogeneous harnesses (Hermes, Claude Code, pi, own agent) | All workers are the same `memnc.worker` binary | A per-harness **adapter/bridge** so any agent that speaks MCP (or HTTP/SSE) can join the mesh unchanged |
+| Capability discovery ("who can do X") | Roles are statically assigned (`planner/coder/critic`) | A **capability registry**: nodes advertise skills; callers discover them (SwarmHarness registry, Cotal presence-KV, Synadia `$SRV`) |
+| Routing by suitability | Fixed role → fixed queue group | **Utility-based routing** over capability, load, latency, trust — needed once nodes differ in hardware/models/availability |
+| Presence & liveness of heterogeneous nodes | `mesh.node.*.heartbeat` exists (model + busy) | Strengthen to full **presence KV with TTL** (idle/working/offline + capabilities), watched live for late joiners |
+| Adding a new machine/harness | Manual: add replicas/env in compose | **Self-registration** — a node joins, advertises, starts receiving work |
+| Ormica-style stigmergy | N/A | Optional: routing/trust signals act as **digital pheromones** (indirect coordination, no brittle message-passing) |
+
+### 0.2 What we copy from each reference
+
+**hive (aden-hive/hive).** The *Queen → Pilot → Workers* shape and the insight
+that **orchestration is a tool call, not a compiled graph**: `run_worker` fans
+subtasks out and returns immediately; the shared state is a **tracker** other
+agents can query with SQL. → Lessons for memnc: keep the FSM, but let the
+orchestrator *emit* subtasks as events any registered worker can pick up, and
+expose the KV snapshot as a queryable ledger (closer to Cotal's presence KV +
+`meshctl state`), rather than a fixed pipeline.
+
+**ormica.** Three ideas transfer cleanly onto NATS:
+- *Emergent hierarchy* — agents/roles spawned to meet demand rather than a
+  fixed graph. NATS already gives this: anycast work queues let any number of
+  role instances claim work.
+- *Permission chain* — every sub-agent born passes a gate (AUTO/CHAIN/ROOT).
+  → memnc maps this to the orchestrator's dispatch policy: only the
+  orchestrator may dispatch, and only to roles it knows. Heterogeneous nodes
+  must register via a capability grant, not self-declare authority.
+- *Pheromone field (stigmergy) instead of message-passing* — agents post
+  state/intent/progress to a shared field; others sense strong trails.
+  → memnc's `mesh.node.*.heartbeat` + the workflow KV are already a weak
+  pheromone field; SwarmHarness formalizes the same as **trust/credit scores
+  feeding the router**.
+
+**SwarmHarness (arXiv:2605.28764)** — the most directly on-point for the
+heterogeneous distributed goal:
+- *Skill-first nodes*: a node is a set of **skills** (typed folders) exposed
+  simultaneously as HTTP and MCP — one source of truth, no dual maintenance.
+  → memnc: the MCP tool server is the skill surface; a node's advertised
+  skills = its MCP tool set + role.
+- *SwarmRegistry (DHT)*: maps skill → capable nodes with TTL; churn handled by
+  refresh, not leave messages. → memnc need not build a DHT in v1: NATS KV is
+  a fine registry (Cotal does exactly this). DHT only if we go trustless.
+- *SwarmRouter (utility scoring)*: `U(v,T)=w1·cap + w2·(1-load) + w3·(1-lat/dmax) + w4·trust`,
+  argmax dispatch, multiple concurrent routers, submitter-signed attribution.
+  → This is the routing upgrade for heterogeneous nodes; implement as a pure
+  scorer on top of the presence KV.
+- *Trust as digital pheromone*: nodes with positive credit get priority; idle
+  nodes lose it. Optional for memnc but naturally an extension of the
+  heartbeat.
+
+**Cotal (on NATS) + Synadia Agent Protocol** — the practical, shipping anchors
+and the closest match to Frank's own harnesses (Cotal ships connectors for
+Claude Code, OpenCode, **Hermes**, and pi):
+- *Shape = configuration*: peers, supervised tree, DAG pipeline are all just a
+  subject/stream/account config, not code.
+- *Three addressing modes* = NATS primitives: multicast = subject fan-out,
+  unicast = per-agent durable inbox, anycast = JetStream work queue. Presence =
+  a KV bucket with TTL + heartbeats; late joiners replay history from
+  JetStream. **Reach for the NATS primitive before building your own.**
+- *Sender identity rides the subject* (`cotal.<space>.inst.<target>.<sender>`)
+  and the server polices it against a JWT; deny-by-default ACLs; fail-closed.
+  → memnc should adopt subject-carried sender identity + token auth, and pin
+  the per-agent durable inbox so nobody can impersonate the target.
+- *Synadia Agent Protocol*: agents register as a NATS micro-service (`agents`),
+  callers ping `$SRV.INFO.agents` for **discovery**, prompt on
+  `agents.prompt.<agent>.<owner>.<name>`, stream typed chunks
+  (response/status/query). → This is the *agent-facing* contract; Cotal is the
+  *team* layer on top. memnc can adopt the same split.
+
+### 0.3 Internet of Agents (IoA) — the open-loop check
+
+IoA (arXiv:2407.07061) argues the three blockers of classic MAS are exactly
+heterogeneity, single-device simulation, and rigid communication — and answers
+with an agent-integration protocol + instant-messaging-shaped discovery and
+dynamic teaming. Our design already removes #1 (NATS speaks to any harness via
+an adapter + the Synadia/Cotal contract) and #2 (NATS is inherently
+multi-machine/clustered). #3 (rigid pipelines) is addressed by Cotal's
+shape-as-config and ormica's anycast + emergent roles, rather than IoA's
+full-blown stateful conversation FSM, which we judge too heavy for v1.
+
+### 0.4 Design decisions (adopted)
+
+- **D1 — Adapter, not rewrite.** Heterogeneous harnesses join via a thin,
+  per-harness **adapter** (a small NATS client that speaks the mesh contract on
+  one side and the harness's native I/O — stdio MCP client, HTTP/SSE, CLI — on
+  the other). No harness is modified. Reflection of Cotal's connectors.
+- **D2 — Capability registry = NATS KV with TTL.** No DHT in v1. Nodes publish
+  `{node, role, skills(MCP tool set), model, load, lat, state}` to a
+  `mesh.registry` KV bucket (TTL ~30 s, refreshed by heartbeat). Any peer/Cotal-
+  style watcher sees who is online and capable. DHT (SwarmHarness) is a later,
+  trustless option.
+- **D3 — Keep the orchestrator, make routing utility-scored.** The FSM +
+  singleton orchestrator is sound and tested (§6). Extend selection: role →
+  candidate nodes (registry) → `max U(v,T)` over load/latency/trust. Multiple
+  orchestrator *routers* can exist later; attribution stays with the submitter.
+- **D4 — Subject-carried sender identity + token auth.** Adopt
+  `mesh.<space>.<mode>.<target>.<sender>` with the server policing identity
+  against a JWT (deny-by-default), not trusting an identity field in the JSON.
+- **D5 — Presence KV is the pheromone field.** Reuse the existing
+  `mesh.node.*.heartbeat` as writes into a TTL KV bucket; the router and
+  `meshctl` read it. Late joiners discover by reading/watching the bucket.
+- **D6 — MCP is the shared skill surface.** Both directions: a worker *exposes*
+  its tools over MCP; a driver/harness *consumes* another agent's MCP/HTTP
+  surface through the adapter. Matches HarnessAPI's "typed skill folder as both
+  HTTP and MCP" and keeps memnc harness-agnostic.
+
+### 0.5 Phased next steps (→ §14 Milestones M7–M9)
+
+- **M7 Heterogeneous adapter + capability registry.** `memnc.agent` adapter
+  that lets an external harness (start with **Hermes**/**pi** via a Cotal-style
+  connector contract, then Claude Code) join the mesh: register capabilities in
+  `mesh.registry` KV, receive anycast work, reply. Registry visible in
+  `meshctl`.
+- **M8 Utility-based routing + presence.** Router scores candidates
+  `U = w1·cap + w2·(1−load) + w3·(1−lat) + w4·trust`; heartbeat→presence KV with
+  TTL; `meshctl` shows live roster + load. Multi-machine diagram in §3.
+- **M9 Subject-carried identity + ACLs.** NATS token → per-agent JWT/users ACLs;
+  sender token policed on the wire; pinned per-agent durable inbox; document in
+  §5.2 and architecture.md.
+
+
+
 ## 1. Goal
 
 A lightweight, horizontally scalable multi-agent system where:
@@ -345,6 +480,9 @@ scripts/
 | M4 | Role prompts + real planner/coder/critic | Real model produces plan, code, verdict; revision loop works |
 | M5 | MCP server/client + tool loop + checkpoints | Coder edits workspace; redelivery does not re-run tools |
 | M6 | Hardening + docs + smoke | Restart/recovery tests pass; README runs start-to-finish; `smoke.sh` green |
+| M7 | Heterogeneous adapter + capability registry (§0.5) | An external harness (Hermes/pi, then Claude Code) joins the mesh via `memnc.agent`, advertises skills in `mesh.registry` KV, receives anycast work, replies; registry visible in `meshctl` |
+| M8 | Utility routing + presence (§0.5) | Router scores `U=w1·cap+w2·(1−load)+w3·(1−lat)+w4·trust` over presence KV (TTL); `meshctl` shows live roster + load; multi-machine topology documented in §3 |
+| M9 | Subject identity + ACLs (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; documented in §5.2 + architecture.md |
 
 Each milestone is independently demoable; M2 is the checkpoint that proves the mesh before any model is involved.
 
@@ -362,7 +500,7 @@ Each milestone is independently demoable; M2 is the checkpoint that proves the m
 
 ## 16. Assumptions
 
-- "Ormica-style" = durable state snapshots + guarded transitions + append-only event log; no specific Ormica library is assumed. Adjust if a concrete reference exists.
+- "Ormica-style" = durable state snapshots + guarded transitions + append-only event log + **stigmergic coordination** (state/intent/progress posted to a shared field others sense). Concrete references reviewed: ormica (pypi), SwarmHarness arXiv:2605.28764, Cotal on NATS, Synadia Agent Protocol, Internet-of-Agents 2407.07061, aden-hive/hive. §0 distills them into decisions D1–D6.
 - Inference endpoints are external to this repo (host-native Ollama using ROCm, LAN nodes, or OpenAI-compatible); no GPU passthrough is configured here.
 - Full shell is intentionally unrestricted inside the worker container.
 - Default models are placeholders; real model names are set per node via env.
