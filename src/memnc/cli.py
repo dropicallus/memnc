@@ -111,7 +111,10 @@ async def cmd_doctor(_: argparse.Namespace, settings: Settings) -> int:
     print(f"NATS       {settings.nats_url}")
     bus = Bus(settings)
     try:
-        await bus.connect(attempts=3)
+        # Wrap so an unresolvable NATS host (e.g. the Docker service name `nats`
+        # from .env used from the host shell) degrades to FAILED instead of
+        # hanging in the reconnect/DNS loop. Plan §9/§12: warn, don't block.
+        await asyncio.wait_for(bus.connect(attempts=3), timeout=8)
         assert bus.js is not None
         info = await bus.js.stream_info(settings.stream_name)
         print(f"stream     {info.config.name}  messages={info.state.messages}")
