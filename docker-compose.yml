@@ -1,41 +1,136 @@
-version: "3.8"
+name: memnc
+
+# Shared by every service. Inference endpoints are external to this stack.
+x-mesh-env: &mesh-env
+  NATS_URL: ${NATS_URL:-nats://nats:4222}
+  NATS_TOKEN: ${NATS_TOKEN:-dev-token}
+  WORKSPACE_ROOT: /workspace
+  INFERENCE_PROVIDER: ${INFERENCE_PROVIDER:-ollama}
+  INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+  INFERENCE_API_KEY: ${INFERENCE_API_KEY:-}
+  INFERENCE_TIMEOUT_S: ${INFERENCE_TIMEOUT_S:-180}
+  INFERENCE_MAX_RETRIES: ${INFERENCE_MAX_RETRIES:-3}
+  NUM_CTX: ${NUM_CTX:-8192}
+  NUM_PREDICT: ${NUM_PREDICT:-4096}
+  MAX_REVISIONS: ${MAX_REVISIONS:-3}
+  MAX_ATTEMPTS: ${MAX_ATTEMPTS:-3}
+  MAX_TOOL_STEPS: ${MAX_TOOL_STEPS:-12}
+  PLANNER_TIMEOUT_S: ${PLANNER_TIMEOUT_S:-180}
+  CODER_TIMEOUT_S: ${CODER_TIMEOUT_S:-600}
+  CRITIC_TIMEOUT_S: ${CRITIC_TIMEOUT_S:-180}
+  ORCHESTRATOR_GRACE_S: ${ORCHESTRATOR_GRACE_S:-30}
+  MCP_ENABLED: ${MCP_ENABLED:-true}
+  ALLOW_SHELL: ${ALLOW_SHELL:-true}
+  SHELL_TIMEOUT_S: ${SHELL_TIMEOUT_S:-120}
+  MAX_OUTPUT_BYTES: ${MAX_OUTPUT_BYTES:-65536}
+  APPLY_ARTIFACTS: ${APPLY_ARTIFACTS:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+x-mesh-service: &mesh-service
+  build:
+    context: .
+    dockerfile: docker/worker.Dockerfile
+  image: memnc:latest
+  restart: unless-stopped
+  # Match the host user so the ./workspace bind mount is writable.
+  user: "${UID:-1000}:${GID:-1000}"
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  volumes:
+    - ./workspace:/workspace
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
 services:
   nats:
     image: nats:2.10-alpine
+    restart: unless-stopped
+    command:
+      - "-js"
+      - "-sd"
+      - "/data"
+      - "--http_port"
+      - "8222"
+      - "--auth"
+      - "${NATS_TOKEN:-dev-token}"
+      - "--max_payload"
+      - "4MB"
     ports:
       - "4222:4222"
       - "8222:8222"
-    command: ["--jetstream", "--store", "/data"]
     volumes:
       - nats-data:/data
-    restart: unless-stopped
-
-  worker-minipc:
-    build: ./workers
-    environment:
-      NATS_URL: nats://nats:4222
-      NODE_ID: minipc
-      OLLAMA_URL: http://192.168.1.10:11434
-      LITELLM_URL: http://192.168.1.10:4000
-    depends_on: [nats]
-    restart: unless-stopped
-
-  worker-gpu:
-    build: ./workers
-    environment:
-      NATS_URL: nats://nats:4222
-      NODE_ID: gpu-pc
-      OLLAMA_URL: http://192.168.1.11:11434
-      LITELLM_URL: http://192.168.1.10:4000
-    depends_on: [nats]
-    restart: unless-stopped
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -qO- http://127.0.0.1:8222/healthz >/dev/null || exit 1"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
 
   orchestrator:
-    build: ./orchestrator
+    <<: *mesh-service
+    command: ["python", "-m", "memnc.orchestrator"]
     environment:
-      NATS_URL: nats://nats:4222
-    depends_on: [nats]
-    restart: unless-stopped
+      <<: *mesh-env
+      NODE_NAME: orchestrator
+    depends_on:
+      nats:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+
+  worker-planner:
+    <<: *mesh-service
+    command: ["python", "-m", "memnc.worker"]
+    environment:
+      <<: *mesh-env
+      ROLE: planner
+      NODE_NAME: ${NODE_NAME:-node-a}-planner
+      MODEL_PLANNER: ${MODEL_PLANNER:-qwen2.5:7b}
+    depends_on:
+      nats:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
+
+  worker-coder:
+    <<: *mesh-service
+    command: ["python", "-m", "memnc.worker"]
+    environment:
+      <<: *mesh-env
+      ROLE: coder
+      NODE_NAME: ${NODE_NAME:-node-a}-coder
+      MODEL_CODER: ${MODEL_CODER:-qwen2.5-coder:7b}
+    depends_on:
+      nats:
+        condition: service_healthy
+    mem_limit: 2g
+    cpus: 4.0
+    pids_limit: 512
+
+  worker-critic:
+    <<: *mesh-service
+    command: ["python", "-m", "memnc.worker"]
+    environment:
+      <<: *mesh-env
+      ROLE: critic
+      NODE_NAME: ${NODE_NAME:-node-a}-critic
+      MODEL_CRITIC: ${MODEL_CRITIC:-llama3.1:8b}
+    depends_on:
+      nats:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
 
 volumes:
   nats-data:
