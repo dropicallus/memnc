@@ -544,3 +544,14 @@ Bei der Umsetzung (M7, 2026-11-01) wird die Arbeit zwischen einem abgegebenen He
 - **Blockiert**: Live-NATS-Test — Testinstanz auf 4223 läuft nicht; dev auf 4222 verlangt dev-Token-Auth (nicht plaintext, nicht an Subagenten).
 
 Regel: Subagent-Selbstberichte sind nie Fakten — jede behauptete Datei/Ausgabe wird vom Parent selbst verifiziert, bevor eine Aufgabe als completed markiert wird. Details im Skill `subagent-orchestration`.
+
+### Was der Subagent übernehmen soll (Zuordnung je Phase, Stand 2026-11-01)
+
+Für die aus den Referenzen abgeleiteten offenen Stücke (§0.5 M7-CLR/M8/M9/M10) gilt dieselbe Rollentrennung. Der Subagent macht die **mechanischen, klar abgegrenzten Implementierungsteile gegen verifizierte APIs**; der Parent behält Credentials, Verifikation, NATS-Live-Lauf und Commit.
+
+- **M7-CLR (meshctl registry-Befehl + Test):** → **Subagent**. Reine CLI-Erweiterung nach dem bestehenden `cmd_tasks`-Muster (Bus intern instanziieren, `list_capabilities()`, finally `close()`), Unit-Test ohne NATS via monkeypatch auf `memnc.cli.Bus`. Kein Credential, kein Live-NATS nötig → ideal delegierbar. **Parent**: Dateien auf Platte verifizieren, `py_compile` + pytest selbst laufen lassen, Commit.
+- **M8 Trust-Ledger + Attribution + Multi-Router:** teilen. **Subagent**: `mesh.trust`-KV-Methoden (credit accrue/decay, Attributions-Eintrag) + Router-Scorer als pure Funktion über presence+trust (NATS-freie Unit-Tests). **Parent**: NATS-Live-Run (Token), Routing-Integration in `meshctl`-Roster, Commit.
+- **M9 Subject-Identity + ACLs + Capability-Gate:** teilen. **Subagent**: definierte Teile der JWT-/ACL-Konfiguration und Gate-Prüflogik (allow/deny reine Funktion + Unit-Tests). **Parent**: Token-Handling/NATS-wire-Konfiguration (Credentials), Orchestrator-Grant-Autorisierung konzipieren, Live-Verifikation, Commit.
+- **M10 Queryable Ledger + Fan-out:** teilen. **Subagent**: `mesh.task.submit`-Fan-out-Methode + Ledger-Read-Helper gegen verifizierte Bus-APIs + Unit-Tests. **Parent**: Ledger-Sicht in `meshctl`-Integration, Orchestrator-seitige Subtask-Decomposition als Design-Entscheidung, Live-NATS-Test, Commit.
+
+Grenze: Subagent bekommt **nie** den NATS dev-Token (nicht plaintext, nicht an Kinder); alle Live-NATS-Anschlusstests macht der Parent, sobald eine Testinstanz verfügbar ist (4223 oder 4222 mit Token).
