@@ -17,7 +17,7 @@ from nats.js.api import (
     RetentionPolicy,
     StreamConfig,
 )
-from nats.js.errors import NotFoundError
+from nats.js.errors import NotFoundError, NoKeysError
 
 from .config import Settings
 from .schema import (
@@ -82,11 +82,27 @@ class Bus:
         await self.js.add_stream(
             StreamConfig(
                 name=self.settings.stream_name,
-                subjects=["mesh.>"],
+                # NOTE: `mesh.task.submit` is intentionally NOT covered here.
+                # It is a synchronous request/reply channel; if it were part of
+                # the JetStream stream, NATS would answer `nc.request()` with the
+                # JS publish-ack ({stream, seq}) instead of the handler's
+                # `message.respond()` result. Everything that actually flows to
+                # the stream (commands, results, auction/bids, task events, dlq)
+                # stays covered.
+                subjects=[
+                    "mesh.agent.>",
+                    "mesh.auction.>",
+                    "mesh.bid.>",
+                    "mesh.task.*.events",
+                    "mesh.dlq",
+                    "mesh.node.>",
+                ],
                 retention=RetentionPolicy.LIMITS,
-                max_age=7 * 24 * 3600 * 1_000_000_000,
+                # nats-py 2.x: max_age / duplicate_window are SECONDS;
+                # the py lib converts to nanoseconds for the server.
+                max_age=7 * 24 * 3600,
                 max_msgs=1_000_000,
-                duplicate_window=120 * 1_000_000_000,
+                duplicate_window=120,
                 storage="file",
             )
         )
@@ -153,8 +169,8 @@ class Bus:
         assert self.kv is not None
         try:
             keys = await self.kv.keys()
-        except Exception:  # noqa: BLE001 - older/newer client API shapes
-            keys = [key async for key in self.kv.keys()]
+        except nats.js.errors.NoKeysError:
+            keys = []
         snapshots = []
         for key in keys:
             if not key.startswith("task."):

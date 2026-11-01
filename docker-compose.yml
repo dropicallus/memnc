@@ -58,8 +58,6 @@ services:
       - "8222"
       - "--auth"
       - "${NATS_TOKEN:-dev-token}"
-      - "--max_payload"
-      - "4MB"
     ports:
       - "4222:4222"
       - "8222:8222"
