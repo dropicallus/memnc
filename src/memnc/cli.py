@@ -106,6 +106,26 @@ async def cmd_tasks(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_registry(_: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        capabilities = await bus.list_capabilities()
+        if not capabilities:
+            print("no capabilities advertised")
+            return 0
+        for cap in sorted(capabilities, key=lambda c: (c.agent_id, c.skill)):
+            print(
+                f"{cap.agent_id}  {cap.skill:<20} node={cap.node or '-'}  "
+                f"load={cap.load:.2f}/{cap.capacity}  model={cap.model or '-'}  "
+                f"contact={cap.contact or '-'}"
+            )
+        print(f"{len(capabilities)} capabilities advertised")
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_doctor(_: argparse.Namespace, settings: Settings) -> int:
     ok = True
     print(f"NATS       {settings.nats_url}")
@@ -174,6 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     tasks = subparsers.add_parser("tasks", help="list tasks")
     tasks.set_defaults(func=cmd_tasks)
+
+    registry = subparsers.add_parser("registry", help="list advertised capability records")
+    registry.set_defaults(func=cmd_registry)
 
     doctor = subparsers.add_parser("doctor", help="check connectivity and models")
     doctor.set_defaults(func=cmd_doctor)
