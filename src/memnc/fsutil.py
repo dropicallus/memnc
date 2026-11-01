@@ -82,11 +82,12 @@ def list_tree(root: Path, depth: int = 2, max_entries: int = 200) -> list[str]:
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
         level = len(current.relative_to(root).parts)
+        dirnames[:] = sorted(d for d in dirnames if d not in ignored)
         if level >= depth:
             dirnames[:] = []
-        dirnames[:] = sorted(d for d in dirnames if d not in ignored)
-        for name in sorted(filenames)[:max_entries]:
-            entries.append(str((current / name).relative_to(root)))
-            if len(entries) >= max_entries:
-                return entries
+        if level + 1 <= depth:
+            for name in sorted(filenames)[:max_entries]:
+                entries.append(str((current / name).relative_to(root)))
+                if len(entries) >= max_entries:
+                    return entries
     return entries
