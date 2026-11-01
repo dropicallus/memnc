@@ -55,6 +55,19 @@ SUBJECT_BID = "mesh.bid.{task_id}.{step_id}"
 SUBJECT_HEARTBEAT = "mesh.node.{node}.heartbeat"
 SUBJECT_DLQ = "mesh.dlq"
 
+# --- M7: heterogeneous capability registry ---
+# External agents (Hermes/pi/Claude Code) advertise what they can do into a
+# TTL KV bucket so the mesh can route by capability instead of fixed role.
+SUBJECT_CAP_REGISTER = "mesh.registry.register"
+SUBJECT_CAP_WITHDRAW = "mesh.registry.withdraw"
+SUBJECT_AGENT_WORK = "mesh.agent.work"
+# Registry KV bucket lives next to the workflow_state bucket (see bus.py).
+REGISTRY_BUCKET = "registry"
+
+# Capability key layout inside the registry KV:
+#   registry.<agent_id>.<skill>  ->  Capability JSON, expires by bucket TTL.
+CAPABILITY_KEY = "registry.{agent_id}.{skill}"
+
 # Which role prompt a worker uses when it wins a step for a given skill.
 SKILL_ROLES: dict[str, Role] = {
     "plan": Role.PLANNER,
@@ -157,6 +170,40 @@ class WorkerProfile(BaseModel):
     load: float = 0.0
     last_seen: float = 0.0
     at: str = Field(default_factory=now_iso)
+
+
+class Capability(BaseModel):
+    """M7: a skill an external agent advertises into the capability registry.
+
+    Unlike ``WorkerProfile`` (native mesh worker bidding in the auction), a
+    ``Capability`` is a static, TTL-expiring declaration of what a
+    heterogeneous agent (Hermes, pi, Claude Code, ...) can do and how to reach
+    it.  The registry routes work to the agent by this record; ``contact`` is
+    whatever the outer harness needs to deliver the task (an MCP endpoint, a
+    subject, a CLI shim, ...).
+    """
+
+    agent_id: str
+    skill: str
+    node: str = ""
+    model: str = ""
+    # How the mesh should hand a task to this agent. Free-form contract the
+    # adapter understands (e.g. "mcp://...", "subject:<s>", "cli:<cmd>").
+    contact: str = ""
+    load: float = 0.0
+    capacity: int = 1
+    ts: float = Field(default_factory=time.time)
+
+    def key(self) -> str:
+        return CAPABILITY_KEY.format(agent_id=self.agent_id, skill=self.skill)
+
+    @classmethod
+    def from_key(cls, key: str) -> tuple[str, str] | None:
+        """Split a registry KV key back into (agent_id, skill)."""
+        parts = key.split(".")
+        if len(parts) != 3 or parts[0] != "registry":
+            return None
+        return parts[1], parts[2]
 
 
 class AuctionRequest(BaseModel):
