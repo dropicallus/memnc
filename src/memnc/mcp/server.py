@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from ..config import Settings
 from .tools_fs import list_dir as _list_dir
@@ -24,10 +24,10 @@ def create_server(
     allow_shell: bool = True,
     shell_timeout_s: int = 120,
     max_output_bytes: int = 65_536,
-) -> FastMCP:
+) -> MCPServer:
     workspace = Path(workspace).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
-    server = FastMCP("memnc-tools")
+    server = MCPServer("memnc-tools")
 
     @server.tool()
     def read_file(path: str, max_bytes: int = 200_000) -> str:

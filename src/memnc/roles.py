@@ -87,6 +87,10 @@ def build_user_prompt(role: Role, payload: dict[str, Any]) -> str:
             f"{payload.get('revisions', 0)}):\n{_dump(critique)}"
         )
 
+    last_error = payload.get("last_error")
+    if last_error and role is Role.CODER:
+        parts.append(f"PREVIOUS ATTEMPT FAILED:\n{last_error}")
+
     workspace = payload.get("workspace_root")
     if workspace:
         parts.append(
