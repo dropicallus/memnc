@@ -80,6 +80,24 @@ SKILL_ROLES: dict[str, Role] = {
 def role_for_skill(skill: str) -> Role:
     return SKILL_ROLES.get(skill, Role.CODER)
 
+# --- M8: trust ledger ---
+TRUST_BUCKET = 'mesh.trust'
+TRUST_DEFAULT = 1.0
+TRUST_MIN = 0.0
+TRUST_MAX = 10.0
+TRUST_ACCRUE = 0.5
+TRUST_DECAY = 0.95
+
+
+class TrustEntry(BaseModel):
+    """M8: A record in the trust ledger for an agent."""
+    subject: str
+    rating: str
+    credit: float = TRUST_DEFAULT
+    ts: float = Field(default_factory=time.time)
+    attribution: list[str] = Field(default_factory=list)
+
+
 
 
 class Envelope(BaseModel):

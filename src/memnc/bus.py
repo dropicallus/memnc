@@ -29,7 +29,14 @@ from .schema import (
     SUBJECT_DLQ,
     SUBJECT_EVENTS,
     SUBJECT_RESULT,
+    TRUST_ACCRUE,
+    TRUST_BUCKET,
+    TRUST_DECAY,
+    TRUST_DEFAULT,
+    TRUST_MAX,
+    TRUST_MIN,
     TaskSnapshot,
+    TrustEntry,
 )
 
 # How long a capability record lives without a refresh. Short TTL = presence:
@@ -48,6 +55,7 @@ class Bus:
         self.js: JetStreamContext | None = None
         self.kv = None
         self._registry = None
+        self._trust = None
 
     # -- lifecycle ---------------------------------------------------------
     async def connect(self, attempts: int = 20) -> None:
@@ -75,6 +83,7 @@ class Bus:
         await self.ensure_stream()
         await self.ensure_kv()
         await self.ensure_registry()
+        await self.ensure_trust()
         log.info("connected to NATS at %s", self.settings.nats_url)
 
     async def close(self) -> None:
@@ -174,6 +183,74 @@ class Bus:
         for key in sorted(keys):
             entry = await self._registry.get(key)
             out.append(Capability.model_validate_json(entry.value))
+        return out
+
+    # -- M8: trust ledger --------------------------------------------------
+    async def ensure_trust(self) -> None:
+        """Ensure the trust-ledger KV bucket exists."""
+        assert self.js is not None
+        try:
+            self._trust = await self.js.key_value(TRUST_BUCKET)
+        except NotFoundError:
+            self._trust = await self.js.create_key_value(
+                KeyValueConfig(bucket=TRUST_BUCKET, history=1)
+            )
+            log.info("created trust KV bucket %s", TRUST_BUCKET)
+
+    async def trust_entry(self, subject: str) -> TrustEntry | None:
+        """Return the current trust entry for an agent, or None if absent."""
+        assert self._trust is not None
+        try:
+            entry = await self._trust.get(f"trust.{subject}")
+        except (KeyError, NotFoundError):
+            return None
+        return TrustEntry.model_validate_json(entry.value)
+
+    async def trust_credit(
+        self, subject: str, rating: str, attribution: list[str] | None = None
+    ) -> TrustEntry:
+        """Accrue TRUST_ACCRUE credit to an agent, clamped to [MIN, MAX]."""
+        assert self._trust is not None
+        current = await self.trust_entry(subject)
+        credit = (current.credit if current else TRUST_DEFAULT) + TRUST_ACCRUE
+        credit = max(TRUST_MIN, min(TRUST_MAX, credit))
+        entry = TrustEntry(
+            subject=subject,
+            rating=rating,
+            credit=credit,
+            attribution=list(attribution or []),
+        )
+        await self._trust.put(f"trust.{subject}", entry.model_dump_json().encode())
+        return entry
+
+    async def trust_decay(self, subject: str) -> TrustEntry:
+        """Multiply an agent's credit by TRUST_DECAY, clamped to [MIN, MAX]."""
+        assert self._trust is not None
+        current = await self.trust_entry(subject)
+        credit = (current.credit if current else TRUST_DEFAULT) * TRUST_DECAY
+        credit = max(TRUST_MIN, min(TRUST_MAX, credit))
+        entry = TrustEntry(
+            subject=subject,
+            rating=current.rating if current else "decay",
+            credit=credit,
+            attribution=list(current.attribution if current else []),
+        )
+        await self._trust.put(f"trust.{subject}", entry.model_dump_json().encode())
+        return entry
+
+    async def list_trust(self) -> list[TrustEntry]:
+        """Return all trust entries, sorted by subject."""
+        assert self._trust is not None
+        out: list[TrustEntry] = []
+        try:
+            keys = await self._trust.keys()
+        except NoKeysError:
+            return out
+        for key in sorted(keys):
+            if not key.startswith("trust."):
+                continue
+            entry = await self._trust.get(key)
+            out.append(TrustEntry.model_validate_json(entry.value))
         return out
 
 
