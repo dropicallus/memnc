@@ -127,13 +127,35 @@ full-blown stateful conversation FSM, which we judge too heavy for v1.
   that lets an external harness (start with **Hermes**/**pi** via a Cotal-style
   connector contract, then Claude Code) join the mesh: register capabilities in
   `mesh.registry` KV, receive anycast work, reply. Registry visible in
-  `meshctl`.
-- **M8 Utility-based routing + presence.** Router scores candidates
+  `meshctl` (→ **M7-CLR**: add a `meshctl registry` command that lists
+  advertised capabilities; currently missing).
+- **M8 Utility-based routing + presence + trust.** Router scores candidates
   `U = w1·cap + w2·(1−load) + w3·(1−lat) + w4·trust`; heartbeat→presence KV with
   TTL; `meshctl` shows live roster + load. Multi-machine diagram in §3.
-- **M9 Subject-carried identity + ACLs.** NATS token → per-agent JWT/users ACLs;
-  sender token policed on the wire; pinned per-agent durable inbox; document in
-  §5.2 and architecture.md.
+  **Add (SwarmHarness 2605.28764):** (a) *trust ledger* — how credit is
+  accrued/lost (successful replies raise the credit of the responder; idle
+  nodes decay; submitter sets `w4`), stored in a `mesh.trust` KV with TTL
+  and read by the router; (b) *submitter-signed attribution* — each routed work
+  records its submitter so multiple concurrent routers can coexist and
+  attribution stays with the submitter (D3), not the one who routed last;
+  (c) *multi-router support* — the scorer is a pure function over the presence
+  + trust KV so >1 router instance can run.
+- **M9 Subject-carried identity + ACLs + capability gate.** NATS token →
+  per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent
+  durable inbox; document in §5.2 and architecture.md. **Add (ormica):** the
+  *capability gate* — a heterogeneous node may only join if it passes a grant
+  from the orchestrator (or a trusted root), not by self-declaring authority;
+  maps the permission-chain (AUTO/CHAIN/ROOT) onto the registry so the
+  `mesh.registry` write is authorized, deny-by-default.
+- **M10 Queryable mesh ledger + fan-out tool-call (hive).** Two hive lessons
+  not yet milestone'd: (a) *tracker* — expose registry + presence + task state
+  as a queryable ledger any agent can read (what `meshctl state`/`registry`
+  show), so coordinating agents sense mesh state instead of ad-hoc messages
+  (weak pheromone field, D5); (b) *fan-out as a tool call* — an orchestrator
+  emits subtasks as events (`mesh.task.submit` fan-out) and returns
+  immediately; any registered worker claims them via the anycast queue (the
+  `run_worker`-shaped split, already scaffolded by M7/M8). Distinct from M8's
+  per-task routing; this is the role->subtask decomposition entry point.
 
 
 
@@ -480,9 +502,10 @@ scripts/
 | M4 | Role prompts + real planner/coder/critic | Real model produces plan, code, verdict; revision loop works |
 | M5 | MCP server/client + tool loop + checkpoints | Coder edits workspace; redelivery does not re-run tools |
 | M6 | Hardening + docs + smoke | Restart/recovery tests pass; README runs start-to-finish; `smoke.sh` green |
-| M7 | Heterogeneous adapter + capability registry (§0.5) | An external harness (Hermes/pi, then Claude Code) joins the mesh via `memnc.agent`, advertises skills in `mesh.registry` KV, receives anycast work, replies; registry visible in `meshctl` |
-| M8 | Utility routing + presence (§0.5) | Router scores `U=w1·cap+w2·(1−load)+w3·(1−lat)+w4·trust` over presence KV (TTL); `meshctl` shows live roster + load; multi-machine topology documented in §3 |
-| M9 | Subject identity + ACLs (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; documented in §5.2 + architecture.md |
+| M7 | Heterogeneous adapter + capability registry (§0.5) | An external harness (Hermes/pi, then Claude Code) joins the mesh via `memnc.agent`, advertises skills in `mesh.registry` KV, receives anycast work, replies; **adapter+registry done (commit 374fa3e); meshctl registry view is the remaining M7-CLR clearance** |
+| M8 | Utility routing + presence + trust (§0.5) | Router scores `U=w1·cap+w2·(1−load)+w3·(1−lat)+w4·trust` over presence KV (TTL); `meshctl` shows live roster + load; **trust ledger, submitter-signed attribution, >1 concurrent router work (SwarmHarness)**; multi-machine topology documented in §3 |
+| M9 | Subject identity + ACLs + capability gate (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; **registry write authorized via orchestrator grant, deny-by-default (ormica permission-chain)**; documented in §5.2 + architecture.md |
+| M10 | Queryable mesh ledger + fan-out tool-call (§0.5) | `meshctl registry` + presence/state readable as a ledger any agent queries; orchestrator emits subtasks as `mesh.task.submit` fan-out and returns immediately, anycast workers claim them (hive run_worker shape) |
 
 Each milestone is independently demoable; M2 is the checkpoint that proves the mesh before any model is involved.
 
