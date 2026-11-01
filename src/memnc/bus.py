@@ -21,13 +21,20 @@ from nats.js.errors import NotFoundError, NoKeysError
 
 from .config import Settings
 from .schema import (
+    CAPABILITY_KEY,
+    Capability,
     Envelope,
+    REGISTRY_BUCKET,
     Role,
     SUBJECT_DLQ,
     SUBJECT_EVENTS,
     SUBJECT_RESULT,
     TaskSnapshot,
 )
+
+# How long a capability record lives without a refresh. Short TTL = presence:
+# dead/hung agents fall out of the registry on their own (plan §0.5, D5).
+REGISTRY_TTL = 120  # seconds
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +47,7 @@ class Bus:
         self.nc: NATSClient | None = None
         self.js: JetStreamContext | None = None
         self.kv = None
+        self._registry = None
 
     # -- lifecycle ---------------------------------------------------------
     async def connect(self, attempts: int = 20) -> None:
@@ -66,6 +74,7 @@ class Bus:
         self.js = self.nc.jetstream()
         await self.ensure_stream()
         await self.ensure_kv()
+        await self.ensure_registry()
         log.info("connected to NATS at %s", self.settings.nats_url)
 
     async def close(self) -> None:
@@ -117,6 +126,56 @@ class Bus:
                 KeyValueConfig(bucket=self.settings.kv_bucket, history=10)
             )
             log.info("created KV bucket %s", self.settings.kv_bucket)
+
+    # -- M7: capability registry -------------------------------------------
+    async def ensure_registry(self) -> None:
+        """Ensure the TTL capability-registry KV bucket exists."""
+        assert self.js is not None
+        try:
+            self._registry = await self.js.key_value(REGISTRY_BUCKET)
+        except NotFoundError:
+            self._registry = await self.js.create_key_value(
+                KeyValueConfig(
+                    bucket=REGISTRY_BUCKET,
+                    history=1,
+                    # TTL = presence: expired capability records vanish.
+                    ttl=REGISTRY_TTL,
+                )
+            )
+            log.info("created registry KV bucket %s (ttl=%ss)", REGISTRY_BUCKET, REGISTRY_TTL)
+
+    async def advertise_capability(self, cap: Capability) -> None:
+        """Write (or refresh) one capability record into the registry KV."""
+        assert self._registry is not None
+        await self._registry.put(cap.key(), cap.model_dump_json().encode())
+        log.debug("advertised capability %s", cap.key())
+
+    async def withdraw_capability(self, agent_id: str, skill: str | None = None) -> None:
+        """Delete one capability record (or all skills for an agent)."""
+        assert self._registry is not None
+        if skill is not None:
+            await self._registry.delete(Capability(agent_id=agent_id, skill=skill).key())
+            return
+        for cap in await self.list_capabilities():
+            if cap.agent_id == agent_id:
+                try:
+                    await self._registry.delete(cap.key())
+                except (KeyError, NotFoundError):  # already gone
+                    pass
+
+    async def list_capabilities(self) -> list[Capability]:
+        """Return all live capability records, sorted by key (agent, skill)."""
+        assert self._registry is not None
+        out: list[Capability] = []
+        try:
+            keys = await self._registry.keys()
+        except NoKeysError:
+            return out
+        for key in sorted(keys):
+            entry = await self._registry.get(key)
+            out.append(Capability.model_validate_json(entry.value))
+        return out
+
 
     # -- publish -----------------------------------------------------------
     async def publish_envelope(self, subject: str, envelope: Envelope) -> None:

@@ -511,3 +511,13 @@ Each milestone is independently demoable; M2 is the checkpoint that proves the m
 - `meshctl submit` on a small coding task produces a plan, edited files in the workspace, a critic verdict, and a terminal state visible via `meshctl tail`.
 - Orchestrator restart mid-task resumes without duplicate side effects; worker crash redelivers without re-running completed tools.
 - `pytest` green; `docs/architecture.md` and `docs/protocol.md` match the implementation; `scripts/smoke.sh` runs end-to-end.
+
+## 18. Role division: Subagent vs. Parent (Orchestrierung)
+
+Bei der Umsetzung (M7, 2026-11-01) wird die Arbeit zwischen einem abgegebenen Hermes-Subagenten und dem Parent-Assistenten geteilt; das Task-Board (`todo_list`, Kategorien SUBAGENT / ICH / BLOCKIERT) hält den laufenden Zustand fest.
+
+- **Subagent** (delegiert via `delegate_task`, lokales Modell `edtorre/gemma4-26b-a4b-it-qat-agent`, 25.2B mit Tools): gut abgegrenzte, mechanische Teilaufgaben gegen verifizierte APIs. Beispiel hier: `tests/test_integration_adapter.py` schreiben.
+- **Parent (ICH)**: alles was auf Nutzer-Kontext, Verifikation, Credentials oder koordinierende Entscheidungen aufbaut — Adapter/Unit-Tests selbst schreiben, Subagent-Ergebnisse auf der Platte gegenprüfen, NATS-Live-Lauf (braucht dev-Token, der nicht an Subagenten weitergegeben wird), Commit.
+- **Blockiert**: Live-NATS-Test — Testinstanz auf 4223 läuft nicht; dev auf 4222 verlangt dev-Token-Auth (nicht plaintext, nicht an Subagenten).
+
+Regel: Subagent-Selbstberichte sind nie Fakten — jede behauptete Datei/Ausgabe wird vom Parent selbst verifiziert, bevor eine Aufgabe als completed markiert wird. Details im Skill `subagent-orchestration`.
