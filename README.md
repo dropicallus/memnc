@@ -97,16 +97,50 @@ More capacity on one host:
 docker compose up -d --scale worker-coder=3
 ```
 
-Additional hosts (workers only; NATS and the orchestrator run on the first
-node):
+### Two-machine mesh (gated)
+
+Machine A owns NATS + orchestrator; machine B joins with workers and an
+adapter agent. The capability gate is on, and machine B's agents are granted
+automatically via heartbeat bootstrap (`MESH_GRANT_NODES` on machine A).
+
+**Machine A** (starts broker, orchestrator, workers; allows `node-b-*` to
+join):
 
 ```bash
-NATS_URL=nats://192.168.1.10:4222 NODE_NAME=node-b \
+MESH_GATE=true MESH_GRANT_NODES='node-b-*' docker compose up --build -d
+```
+
+**Machine B** (workers use B's own local Ollama via `host.docker.internal`;
+set `AGENT_MODEL` to a model Ollama on B actually has):
+
+```bash
+NATS_URL=nats://<host-a-ip>:4222 NODE_NAME=node-b MESH_GATE=true \
   docker compose -f docker-compose.node.yml up --build -d
 ```
 
+Verify (from machine A, with `NATS_URL`/`NATS_TOKEN` exported or `.env`):
+
+```bash
+meshctl grants        # node-b-planner / -coder / -critic / -agent appear
+                      # within ~5 s of node B starting (heartbeat bootstrap)
+meshctl registry      # node-b-agent's capability record is listed
+meshctl submit "write a hello world in python" --watch
+meshctl tail <task_id>   # events carry node=<node-a|node-b-…> per dispatch
+```
+
 Workers of the same role share a JetStream durable pull consumer, so each
-command is delivered to exactly one worker in the group.
+command is delivered to exactly one worker in the group — a task may execute
+on either machine. Which node ran a stage shows up in `meshctl tail <id>` /
+`meshctl submit --watch` as a `result.executed_on` event (the executing
+worker's node name), and in the worker's own logs on machine B
+(`docker compose -f docker-compose.node.yml logs -f worker-coder`).
+
+Revoking stays sticky: `meshctl revoke node-b-coder` blocks that agent even
+though heartbeats keep arriving (bootstrap never overwrites an existing grant
+record — delete is respected until manually re-granted).
+
+Without the gate (`MESH_GATE=false`, the default), both machines still work —
+the gate only guards registry writes, not queue-group work delivery.
 
 ## Configuration
 

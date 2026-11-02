@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Default off so local dev/test meshes stay friction-free; compose
     # and any multi-node deployment set MESH_GATE=1.
     mesh_gate: bool = False
+    # M9 grant bootstrap: comma-separated glob patterns of node names whose
+    # heartbeat automatically earns their agents a CHAIN grant (e.g.
+    # "node-b-*"). Empty = no auto-grant; manual `meshctl grant` only.
+    grant_nodes: str = ""
 
     # workspace / tools
     workspace_root: Path = Path("/workspace")

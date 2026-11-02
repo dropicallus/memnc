@@ -6,7 +6,7 @@ NATS mesh by capability rather than by fixed role.  The adapter
   * advertises one :class:`~memnc.schema.Capability` record per skill into the
     TTL registry KV bucket (presence: records expire if the adapter dies),
   * heartbeats on its node subject so the mesh sees it as live,
-  * subscribes for work on ``mesh.agent.work`` and ``mesh.agent.<agent_id>.work``
+  * subscribes for work on ``mem.agent.<agent_id>.work`` (pinned inbox)
     and replies synchronously (request/reply) via ``msg.respond``.
 
 The external agent's real behaviour is behind the ``handler`` callable, so a
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import socket
 from typing import Any, Awaitable, Callable
@@ -134,7 +135,14 @@ class AgentAdapter:
 
     # -- loops -------------------------------------------------------------
     async def _heartbeat_loop(self) -> None:
+        # Every beat also refreshes the TTL registry records, so presence
+        # (record expiry) tracks liveness — REGISTRY_TTL (120 s) > interval.
         while not self._stop.is_set():
+            for skill in self.skills:
+                try:
+                    await self.advertise(skill)
+                except Exception:  # noqa: BLE001 - refresh is best effort
+                    log.debug("capability refresh failed", exc_info=True)
             envelope = Envelope(
                 task_id="heartbeat",
                 trace_id="heartbeat",
@@ -167,7 +175,7 @@ class AgentAdapter:
                 await msg.respond(b'{"ok": false, "error": "adapter stopping"}')
                 break
             try:
-                payload = msg.json()
+                payload = json.loads(msg.data)
                 if not isinstance(payload, dict):
                     raise ValueError(f"expected dict payload, got {type(payload).__name__}")
                 out = self.handler(payload)
@@ -178,6 +186,8 @@ class AgentAdapter:
                 log.exception("work handling failed on %s", subject)
                 result = {"ok": False, "error": f"adapter error: {exc}"}
             try:
+                if isinstance(result, (dict, list)):
+                    result = json.dumps(result).encode()
                 await msg.respond(result)
             except Exception:  # noqa: BLE001
                 log.debug("respond failed on %s", subject)
