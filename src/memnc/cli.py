@@ -15,6 +15,7 @@ from .bus import Bus
 from .config import Settings, get_settings
 from .schema import (
     SUBJECT_EVENTS,
+    SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
     TERMINAL_STATES,
     GrantLevel,
@@ -35,7 +36,9 @@ async def _connect(settings: Settings):
 async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
     try:
-        submission = TaskSubmission(task=args.task, context=args.context or "")
+        submission = TaskSubmission(
+            task=args.task, context=args.context or "", fanout=args.fanout
+        )
         response = await client.request(
             SUBJECT_SUBMIT, submission.model_dump_json().encode(), timeout=10
         )
@@ -163,6 +166,31 @@ async def cmd_registry(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_ledger(args: argparse.Namespace, settings: Settings) -> int:
+    """M10: read the queryable mesh ledger.
+
+    Preferred path is the agent-facing request/reply on mesh.ledger (any
+    granted agent can do this); if no orchestrator answers, fall back to
+    direct KV reads via the Bus.
+    """
+    client = await _connect(settings)
+    try:
+        try:
+            response = await client.request(SUBJECT_LEDGER, b"{}", timeout=5)
+            data = json.loads(response.data)
+        except Exception:
+            bus = Bus(settings)
+            await bus.connect()
+            try:
+                data = await bus.read_ledger()
+            finally:
+                await bus.close()
+        print(json.dumps(data, indent=2))
+        return 0
+    finally:
+        await client.close()
+
+
 async def cmd_grant(args: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
@@ -268,6 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--context", default="")
     submit.add_argument("--watch", action="store_true",
                         help="follow the task's events until it finishes")
+    submit.add_argument("--fanout", action="store_true",
+                        help="M10: split the plan into independent subtasks")
     submit.set_defaults(func=cmd_submit)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
@@ -284,6 +314,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     registry = subparsers.add_parser("registry", help="list advertised capability records")
     registry.set_defaults(func=cmd_registry)
+
+    ledger = subparsers.add_parser("ledger", help="M10: query the mesh ledger (registry+grants+trust+tasks)")
+    ledger.set_defaults(func=cmd_ledger)
 
     grant = subparsers.add_parser("grant", help="issue a capability grant (M9 permission chain)")
     grant.add_argument("agent_id")

@@ -54,6 +54,13 @@ SUBJECT_AUCTION = "mesh.auction.{task_id}.{step_id}"
 SUBJECT_BID = "mesh.bid.{task_id}.{step_id}"
 SUBJECT_HEARTBEAT = "mesh.node.{node}.heartbeat"
 SUBJECT_DLQ = "mesh.dlq"
+# --- M10: queryable mesh ledger (hive tracker, plan §0.5 D5) ---
+# Core-NATS request/reply, intentionally NOT covered by the JetStream stream
+# (same reason as mesh.task.submit: a stream-covered request would be answered
+# with the JS PubAck instead of the handler's reply). Any granted agent can
+# request the consolidated ledger here; meshctl falls back to direct KV reads
+# when no orchestrator is answering.
+SUBJECT_LEDGER = "mesh.ledger"
 
 # --- M7: heterogeneous capability registry ---
 # External agents (Hermes/pi/Claude Code) advertise what they can do into a
@@ -331,6 +338,9 @@ class TaskSubmission(BaseModel):
     task: str
     context: str = ""
     max_revisions: int | None = None
+    # M10 fan-out: the orchestrator decomposes the planner's multi-step plan
+    # into independent subtasks on mesh.task.submit and returns immediately.
+    fanout: bool = False
 
     @field_validator("task")
     @classmethod
@@ -359,6 +369,10 @@ class TaskSnapshot(BaseModel):
     revisions: int = 0
     max_revisions: int = 3
     self_assign: bool = False
+    # M10 fan-out: parent task that spawned subtasks and aggregates them.
+    fanout: bool = False
+    subtasks: dict[str, str] = Field(default_factory=dict)  # subtask_id -> step id
+    parent_task_id: str = ""
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None
