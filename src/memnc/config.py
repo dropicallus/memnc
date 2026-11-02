@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     apply_artifacts: bool = True
     max_artifact_bytes: int = 200_000
 
+    # M11: agents as submitters + ledger-based self-claiming
+    # max_submit_depth = how deep agent-initiated resubmissions may nest
+    # (depth 0 = top task; a submission is rejected when depth >= limit).
+    max_submit_depth: int = 2
+    # When set, workers poll the ledger and CAS-claim claimable RECEIVED
+    # tasks themselves instead of waiting for orchestrator dispatch.
+    mesh_claim: bool = False
+    claim_poll_s: float = 5.0
+
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"
     inference_base_url: str = "http://localhost:11434"

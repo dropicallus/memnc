@@ -37,7 +37,10 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
     try:
         submission = TaskSubmission(
-            task=args.task, context=args.context or "", fanout=args.fanout
+            task=args.task,
+            context=args.context or "",
+            fanout=args.fanout,
+            claimable=getattr(args, "claimable", False),
         )
         response = await client.request(
             SUBJECT_SUBMIT, submission.model_dump_json().encode(), timeout=10
@@ -298,6 +301,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="follow the task's events until it finishes")
     submit.add_argument("--fanout", action="store_true",
                         help="M10: split the plan into independent subtasks")
+    submit.add_argument("--claimable", action="store_true",
+                        help="M11: leave in RECEIVED for agents to self-claim")
     submit.set_defaults(func=cmd_submit)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
