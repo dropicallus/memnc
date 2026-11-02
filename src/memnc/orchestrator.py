@@ -17,11 +17,13 @@ from .schema import (
     CoderOutput,
     CriticOutput,
     Envelope,
+    Kind,
     PlannerOutput,
     ResultPayload,
     Role,
     SUBJECT_CMD,
     SUBJECT_HEARTBEAT,
+    SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
     TaskSnapshot,
     TaskState,
@@ -51,6 +53,10 @@ class Orchestrator:
         self._submit_sub = await self.bus.nc.subscribe(
             SUBJECT_SUBMIT, cb=self._on_submit
         )
+        # M10: queryable ledger — any granted agent can read the mesh state.
+        self._ledger_sub = await self.bus.nc.subscribe(
+            SUBJECT_LEDGER, cb=self._on_ledger
+        )
         self._heartbeat_sub = await self.bus.nc.subscribe(
             SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
         )
@@ -78,6 +84,7 @@ class Orchestrator:
                 max_revisions=submission.max_revisions
                 if submission.max_revisions is not None
                 else self.settings.max_revisions,
+                fanout=submission.fanout,
                 state=TaskState.RECEIVED,
             )
             await self.bus.put_snapshot(snapshot)
@@ -94,6 +101,20 @@ class Orchestrator:
             log.exception("submission failed")
             try:
                 await message.respond(json.dumps({"error": str(exc)}).encode())
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -- M10: queryable ledger ----------------------------------------------
+    async def _on_ledger(self, message) -> None:
+        """Answer mesh.ledger requests with the consolidated mesh state."""
+        try:
+            await message.respond(
+                json.dumps(await self.bus.read_ledger()).encode()
+            )
+        except Exception:  # noqa: BLE001 - ledger read is best effort
+            log.exception("ledger read failed")
+            try:
+                await message.respond(json.dumps({"error": "ledger read failed"}).encode())
             except Exception:  # noqa: BLE001
                 pass
 
@@ -200,6 +221,17 @@ class Orchestrator:
                     ok=True,
                     approved=snapshot.critique.approved,
                 )
+            # M10 hive fan-out: a multi-step plan on a fanout task is split
+            # into independent subtasks; the parent waits and aggregates.
+            if (
+                event.ok
+                and envelope.role is Role.PLANNER
+                and snapshot.fanout
+                and snapshot.plan is not None
+                and len(snapshot.plan.plan) >= 2
+            ):
+                await self._fanout(snapshot)
+                return
 
         log.info(
             "result received",
@@ -351,12 +383,98 @@ class Orchestrator:
             snapshot, "dispatch", f"{role.value} command {command.id}"
         )
 
+    # -- M10: fan-out (hive run_worker shape) -------------------------------
+    async def _fanout(self, snapshot: TaskSnapshot) -> None:
+        """Emit each plan step as an independent subtask on mesh.task.submit.
+
+        Returns immediately after emission: subtasks run their own full
+        pipeline (planner->coder->critic) on whichever node's workers claim
+        them; the parent aggregates in ``_check_fanouts``.
+        """
+        assert self.bus.nc is not None
+        assert snapshot.plan is not None  # caller guarantees this
+        for step in snapshot.plan.plan:
+            submission = TaskSubmission(
+                task=step.description or f"step {step.id}",
+                context=f"fanout parent={snapshot.task_id} step={step.id}: "
+                f"{snapshot.task[:120]}",
+            )
+            try:
+                response = await self.bus.nc.request(
+                    SUBJECT_SUBMIT, submission.model_dump_json().encode(), timeout=10
+                )
+                sub_id = (json.loads(response.data) or {}).get("task_id")
+            except Exception:  # noqa: BLE001 - skip this step, keep fanning out
+                log.exception("fanout submit failed for step %s", step.id)
+                continue
+            if not sub_id:
+                continue
+            snapshot.subtasks[sub_id] = step.id
+            sub = await self.bus.get_snapshot(sub_id)
+            if sub is not None:
+                sub.parent_task_id = snapshot.task_id
+                await self.bus.put_snapshot(sub)
+        if not snapshot.subtasks:
+            # nothing was fanned out — continue the normal single pipeline
+            await self._apply(snapshot, Event("result", ok=True))
+            return
+        snapshot.self_assign = True  # parent parks in CODING, waits for subtasks
+        # No at_epoch key: the timeout reaper skips fanout-wait parents; the
+        # aggregation runs in _check_fanouts instead.
+        snapshot.last_action = {"role": "fanout-wait"}
+        snapshot.record("task.fanout", f"{len(snapshot.subtasks)} subtasks")
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(
+            snapshot, "task.fanout", f"{len(snapshot.subtasks)} subtasks emitted"
+        )
+        log.info(
+            "fanout",
+            extra={"task_id": snapshot.task_id, "subtasks": len(snapshot.subtasks)},
+        )
+
+    async def _check_fanouts(self) -> None:
+        """Aggregate fan-out parents whose subtasks have all gone terminal."""
+        for snapshot in await self.bus.list_tasks():
+            if snapshot.state in TERMINAL_STATES or not snapshot.subtasks:
+                continue
+            states: list[TaskState] = []
+            for sub_id in snapshot.subtasks:
+                sub = await self.bus.get_snapshot(sub_id)
+                states.append(sub.state if sub is not None else TaskState.FAILED)
+            if not all(s in TERMINAL_STATES for s in states):
+                continue
+            if any(s in (TaskState.FAILED, TaskState.CANCELLED) for s in states):
+                reason = "fanout: a subtask failed or was cancelled"
+                snapshot.state = TaskState.FAILED
+                snapshot.error = reason
+                snapshot.record("task.failed", reason)
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(snapshot, "task.failed", reason)
+                await self.bus.dead_letter(
+                    Envelope(
+                        task_id=snapshot.task_id,
+                        trace_id=snapshot.trace_id,
+                        kind=Kind.EVENT,
+                        node=self.settings.node_name,
+                        payload={"reason": reason, "task": snapshot.task},
+                    ),
+                    reason,
+                )
+                log.warning("fanout failed", extra={"task_id": snapshot.task_id})
+            else:
+                snapshot.state = TaskState.DONE
+                snapshot.record("task.done", "fanout complete")
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(snapshot, "task.done", "fanout complete")
+                log.info("fanout done", extra={"task_id": snapshot.task_id})
+
     # -- timers / recovery -------------------------------------------------
     async def _timeout_loop(self) -> None:
         while not self._stop.is_set():
             await asyncio.sleep(5)
             try:
                 await self._reap_timeouts()
+                await self._check_fanouts()
             except Exception:  # noqa: BLE001
                 log.exception("timeout reaper failed")
 

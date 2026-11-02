@@ -326,6 +326,37 @@ class Bus:
             out.append(TrustEntry.model_validate_json(entry.value))
         return out
 
+    # -- M10: queryable mesh ledger (hive tracker) -------------------------
+    async def read_ledger(self) -> dict:
+        """Consolidated mesh state: registry + grants + trust + task states.
+
+        The "weak pheromone field" (plan §0.5, D5): any coordinating agent can
+        read this instead of exchanging ad-hoc state messages. Task entries are
+        kept light (no plan/code/critique payloads).
+        """
+        tasks = []
+        for snapshot in await self.list_tasks():
+            tasks.append(
+                {
+                    "task_id": snapshot.task_id,
+                    "state": snapshot.state.value,
+                    "fanout": snapshot.fanout,
+                    "parent_task_id": snapshot.parent_task_id,
+                    "subtasks": snapshot.subtasks,
+                    "task": snapshot.task[:200],
+                    "created_at": snapshot.created_at,
+                    "updated_at": snapshot.updated_at,
+                    "error": snapshot.error,
+                }
+            )
+        return {
+            "node": self.settings.node_name,
+            "registry": [cap.model_dump() for cap in await self.list_capabilities()],
+            "grants": [grant.model_dump() for grant in await self.list_grants()],
+            "trust": [entry.model_dump() for entry in await self.list_trust()],
+            "tasks": sorted(tasks, key=lambda t: t["created_at"]),
+        }
+
 
     # -- publish -----------------------------------------------------------
     async def publish_envelope(self, subject: str, envelope: Envelope) -> None:
