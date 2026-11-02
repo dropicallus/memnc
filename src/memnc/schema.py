@@ -341,6 +341,14 @@ class TaskSubmission(BaseModel):
     # M10 fan-out: the orchestrator decomposes the planner's multi-step plan
     # into independent subtasks on mesh.task.submit and returns immediately.
     fanout: bool = False
+    # M11: agents-as-submitters recursion depth. depth 0 = human/meshctl top
+    # task; an agent re-submitting from inside a task passes depth+1, and the
+    # orchestrator rejects anything at or above Settings.max_submit_depth.
+    depth: int = 0
+    # M11 ledger-based self-claiming: claimable tasks are NOT dispatched by
+    # the orchestrator. They sit in RECEIVED until an agent CAS-claims them
+    # (bus.try_claim); the orchestrator only referees the claim.
+    claimable: bool = False
 
     @field_validator("task")
     @classmethod
@@ -373,6 +381,10 @@ class TaskSnapshot(BaseModel):
     fanout: bool = False
     subtasks: dict[str, str] = Field(default_factory=dict)  # subtask_id -> step id
     parent_task_id: str = ""
+    # M11: recursion depth (mirrors TaskSubmission.depth) + self-claiming.
+    depth: int = 0
+    claimable: bool = False
+    claimed_by: str = ""  # agent that CAS-claimed this task ("" = unclaimed)
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None

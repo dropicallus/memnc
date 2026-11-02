@@ -23,7 +23,10 @@ from .schema import (
     Role,
     SUBJECT_HEARTBEAT,
     SUBJECT_RESULT,
+    SUBJECT_SUBMIT,
     TaskSnapshot,
+    TaskSubmission,
+    TaskState,
 )
 
 log = logging.getLogger(__name__)
@@ -31,6 +34,40 @@ log = logging.getLogger(__name__)
 MAX_TOOL_RESULT_CHARS = 8_000
 MAX_CHECKPOINTS = 32
 HEARTBEAT_INTERVAL_S = 5
+
+# M11: mesh_submit — the agent-facing tool that throws a task back into the
+# mesh. This is the core of self-orchestration: a coder inside task X can
+# submit an independent sub-task itself instead of the orchestrator doing it.
+MESH_SUBMIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mesh_submit",
+        "description": (
+            "Submit an independent task into the mesh. The mesh runs it on its "
+            "own pipeline (planner->coder->critic) and returns the new task_id. "
+            "Use for sub-goals that are independent of your current deliverable. "
+            "Only one level of re-submission is allowed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Full task description for the mesh.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional context for the submitted task.",
+                },
+                "fanout": {
+                    "type": "boolean",
+                    "description": "Let the orchestrator split the plan into independent subtasks.",
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
 
 
 def tool_key(command_id: str, name: str, arguments: dict) -> str:
@@ -81,7 +118,13 @@ class Worker:
                 "mcp": bool(self.tools and getattr(self.tools, "available", False)),
             },
         )
-        await asyncio.gather(self._command_loop(), self._heartbeat_loop())
+        await asyncio.gather(
+            self._command_loop(),
+            self._heartbeat_loop(),
+            *(
+                (self._claim_loop(),) if self.settings.mesh_claim else ()
+            ),
+        )
 
     async def stop(self) -> None:
         self._stop.set()
@@ -215,6 +258,9 @@ class Worker:
             if self.tools is not None and getattr(self.tools, "available", False)
             else []
         )
+        # M11: agents as submitters — every role may throw sub-tasks back
+        # into the mesh (bounded by max_submit_depth in the orchestrator).
+        tools.append(MESH_SUBMIT_TOOL)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPTS[role]},
             {
@@ -286,6 +332,10 @@ class Worker:
     async def _execute_tool(
         self, envelope: Envelope, name: str, arguments: dict
     ) -> str:
+        # M11: mesh_submit is a built-in (no MCP needed) — intercept first.
+        if name == "mesh_submit":
+            return await self._mesh_submit(envelope, arguments)
+
         if self.tools is None or not getattr(self.tools, "available", False):
             raise RuntimeError("no MCP tools available")
 
@@ -311,6 +361,70 @@ class Worker:
                 snapshot.tool_results.pop(next(iter(snapshot.tool_results)))
             await self.bus.put_snapshot(snapshot)
         return output
+
+    # -- M11: agents as submitters ------------------------------------------
+    async def _mesh_submit(self, envelope: Envelope, arguments: dict) -> str:
+        """Throw an independent task back into the mesh (one nesting level)."""
+        assert self.bus.nc is not None
+        snapshot = await self.bus.get_snapshot(envelope.task_id)
+        depth = (snapshot.depth + 1) if snapshot is not None else 1
+        if depth >= self.settings.max_submit_depth:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": f"max_submit_depth ({self.settings.max_submit_depth}) "
+                    "reached: no further re-submission from inside this task",
+                }
+            )
+        submission = TaskSubmission(
+            task=str(arguments.get("task") or "").strip(),
+            context=str(arguments.get("context") or "")[:2_000],
+            fanout=bool(arguments.get("fanout")),
+            depth=depth,
+            claimable=self.settings.mesh_claim,
+        )
+        if not submission.task:
+            return json.dumps({"ok": False, "error": "task is required"})
+        response = await self.bus.nc.request(
+            SUBJECT_SUBMIT,
+            submission.model_dump_json().encode(),
+            timeout=10,
+        )
+        data = json.loads(response.data) or {}
+        return json.dumps(
+            {"ok": True, "task_id": data.get("task_id"), "depth": depth}
+        )
+
+    # -- M11: ledger-based self-claiming -------------------------------------
+    async def _claim_loop(self) -> None:
+        """Poll the ledger and CAS-claim unclaimed claimable RECEIVED tasks.
+
+        Claim = CAS update of task snapshot (bus.try_claim); on conflict
+        (someone was faster) we simply move on. The orchestrator's referee
+        loop (_dispatch_claimed) starts claimed tasks.
+        """
+        worker_id = f"{self.settings.node_name}:{self.role.value}"
+        while not self._stop.is_set():
+            await asyncio.sleep(self.settings.claim_poll_s)
+            try:
+                for snapshot in await self.bus.list_tasks():
+                    if snapshot.state is not TaskState.RECEIVED:
+                        continue
+                    if not snapshot.claimable or snapshot.claimed_by:
+                        continue
+                    claimed = await self.bus.try_claim(
+                        snapshot.task_id, worker_id
+                    )
+                    if claimed is not None:
+                        log.info(
+                            "task claimed",
+                            extra={
+                                "task_id": claimed.task_id,
+                                "worker": worker_id,
+                            },
+                        )
+            except Exception:  # noqa: BLE001
+                log.exception("claim loop failed")
 
 
 async def _main() -> None:

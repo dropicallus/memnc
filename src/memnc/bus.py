@@ -34,6 +34,7 @@ from .schema import (
     SUBJECT_DLQ,
     SUBJECT_EVENTS,
     SUBJECT_RESULT,
+    TaskState,
     TRUST_ACCRUE,
     TRUST_BUCKET,
     TRUST_DECAY,
@@ -404,6 +405,36 @@ class Bus:
         await self.kv.put(
             f"task.{snapshot.task_id}", snapshot.model_dump_json().encode()
         )
+
+    async def try_claim(self, task_id: str, worker_id: str) -> TaskSnapshot | None:
+        """M11: CAS-claim a claimable RECEIVED task. Conflict => None.
+
+        Reads the raw KV entry (revision included), mutates only if the task
+        is still unclaimed, then PUTs with last=revision. Two agents racing
+        on the same task: exactly one update wins, the loser gets None.
+        """
+        assert self.kv is not None
+        try:
+            entry = await self.kv.get(f"task.{task_id}")
+        except (KeyError, NotFoundError):
+            return None
+        snapshot = TaskSnapshot.model_validate_json(entry.value)
+        if (
+            snapshot.state is not TaskState.RECEIVED
+            or not snapshot.claimable
+            or snapshot.claimed_by
+        ):
+            return None
+        snapshot.claimed_by = worker_id
+        try:
+            await self.kv.update(
+                f"task.{task_id}",
+                snapshot.model_dump_json().encode(),
+                last=entry.revision,
+            )
+        except Exception:  # noqa: BLE001 - CAS conflict: someone else was faster
+            return None
+        return snapshot
 
     async def list_tasks(self) -> list[TaskSnapshot]:
         assert self.kv is not None

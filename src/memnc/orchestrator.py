@@ -76,6 +76,12 @@ class Orchestrator:
     async def _on_submit(self, message) -> None:
         try:
             submission = TaskSubmission.model_validate_json(message.data)
+            # M11: recursion limit for agents-as-submitters.
+            if submission.depth >= self.settings.max_submit_depth:
+                raise ValueError(
+                    f"submission depth {submission.depth} >= "
+                    f"max_submit_depth {self.settings.max_submit_depth}"
+                )
             snapshot = TaskSnapshot(
                 task_id=new_id(),
                 trace_id=new_id(),
@@ -85,6 +91,8 @@ class Orchestrator:
                 if submission.max_revisions is not None
                 else self.settings.max_revisions,
                 fanout=submission.fanout,
+                depth=submission.depth,
+                claimable=submission.claimable,
                 state=TaskState.RECEIVED,
             )
             await self.bus.put_snapshot(snapshot)
@@ -96,7 +104,13 @@ class Orchestrator:
                 "task submitted",
                 extra={"task_id": snapshot.task_id, "task": submission.task[:200]},
             )
-            await self._apply(snapshot, Event("start"))
+            if submission.claimable:
+                # M11: referee mode — the orchestrator does NOT dispatch.
+                # The task waits in RECEIVED until an agent CAS-claims it
+                # (bus.try_claim); _timeout_loop then dispatches claimed ones.
+                await self.bus.emit_event(snapshot, "task.claimable", "waiting for claim")
+            else:
+                await self._apply(snapshot, Event("start"))
         except Exception as exc:  # noqa: BLE001
             log.exception("submission failed")
             try:
@@ -398,6 +412,8 @@ class Orchestrator:
                 task=step.description or f"step {step.id}",
                 context=f"fanout parent={snapshot.task_id} step={step.id}: "
                 f"{snapshot.task[:120]}",
+                depth=snapshot.depth + 1,
+                claimable=snapshot.claimable,
             )
             try:
                 response = await self.bus.nc.request(
@@ -475,6 +491,7 @@ class Orchestrator:
             try:
                 await self._reap_timeouts()
                 await self._check_fanouts()
+                await self._dispatch_claimed()
             except Exception:  # noqa: BLE001
                 log.exception("timeout reaper failed")
 
@@ -506,13 +523,41 @@ class Orchestrator:
                     ),
                 )
 
+    async def _dispatch_claimed(self) -> None:
+        """M11 referee: dispatch claimable tasks that have been CAS-claimed.
+
+        Agents claim via bus.try_claim (CAS on the KV entry). The orchestrator
+        does not assign — it only validates a claim and starts the pipeline.
+        """
+        for snapshot in await self.bus.list_tasks():
+            if (
+                snapshot.state is TaskState.RECEIVED
+                and snapshot.claimable
+                and snapshot.claimed_by
+                and not snapshot.last_action
+            ):
+                log.info(
+                    "claim accepted",
+                    extra={
+                        "task_id": snapshot.task_id,
+                        "claimed_by": snapshot.claimed_by,
+                    },
+                )
+                snapshot.record("task.claimed", snapshot.claimed_by)
+                await self.bus.put_snapshot(snapshot)
+                await self._apply(snapshot, Event("start"))
+
     async def _recover(self) -> None:
         for snapshot in await self.bus.list_tasks():
             if snapshot.state in TERMINAL_STATES:
                 continue
             if snapshot.state is TaskState.REVISE:
                 await self._apply(snapshot, Event("start"))
-            elif snapshot.state is TaskState.RECEIVED and not snapshot.last_action:
+            elif (
+                snapshot.state is TaskState.RECEIVED
+                and not snapshot.last_action
+                and not (snapshot.claimable and not snapshot.claimed_by)
+            ):
                 await self._apply(snapshot, Event("start"))
             else:
                 log.info(
