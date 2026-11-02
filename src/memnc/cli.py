@@ -6,13 +6,20 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 
 import nats
 
 from .backends import make_backend
 from .bus import Bus
 from .config import Settings, get_settings
-from .schema import SUBJECT_EVENTS, SUBJECT_SUBMIT, TERMINAL_STATES, TaskSubmission
+from .schema import (
+    SUBJECT_EVENTS,
+    SUBJECT_SUBMIT,
+    TERMINAL_STATES,
+    GrantLevel,
+    TaskSubmission,
+)
 
 
 async def _connect(settings: Settings):
@@ -126,6 +133,54 @@ async def cmd_registry(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_grant(args: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        level = GrantLevel(args.level)
+        grant = await bus.issue_grant(
+            args.agent_id, level=level, granted_by=args.granted_by, ttl_s=args.ttl_s
+        )
+        print(f"granted {grant.level.value} to {grant.agent_id} (by {grant.granted_by},"
+              f" ttl={args.ttl_s or 'never'} s)")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_grants(_: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        grants = await bus.list_grants()
+        if not grants:
+            print("no grants issued")
+            return 0
+        now = time.time()
+        for grant in sorted(grants, key=lambda g: g.agent_id):
+            expiry = (
+                f"expires in {grant.expires_at - now:.0f}s"
+                if grant.expires_at > 0
+                else "never expires"
+            )
+            print(f"{grant.agent_id}  {grant.level.value:<5}  by={grant.granted_by}  {expiry}")
+        print(f"{len(grants)} grants on file")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_revoke(args: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        await bus.revoke_grant(args.agent_id)
+        print(f"revoked grant for {args.agent_id}")
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_doctor(_: argparse.Namespace, settings: Settings) -> int:
     ok = True
     print(f"NATS       {settings.nats_url}")
@@ -197,6 +252,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     registry = subparsers.add_parser("registry", help="list advertised capability records")
     registry.set_defaults(func=cmd_registry)
+
+    grant = subparsers.add_parser("grant", help="issue a capability grant (M9 permission chain)")
+    grant.add_argument("agent_id")
+    grant.add_argument("--level", default="chain", choices=[lv.value for lv in GrantLevel])
+    grant.add_argument("--granted-by", default="orchestrator")
+    grant.add_argument("--ttl-s", type=float, default=0, help="expiry in seconds (0 = never)")
+    grant.set_defaults(func=cmd_grant)
+
+    grants = subparsers.add_parser("grants", help="list issued capability grants")
+    grants.set_defaults(func=cmd_grants)
+
+    revoke = subparsers.add_parser("revoke", help="revoke an agent's capability grant")
+    revoke.add_argument("agent_id")
+    revoke.set_defaults(func=cmd_revoke)
 
     doctor = subparsers.add_parser("doctor", help="check connectivity and models")
     doctor.set_defaults(func=cmd_doctor)

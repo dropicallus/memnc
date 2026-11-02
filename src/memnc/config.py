@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     kv_bucket: str = "workflow_state"
     nats_name: str | None = None
 
+    # M9: capability gate. When enabled, registry writes require an
+    # orchestrator-issued grant (deny-by-default, see memnc/acl.py).
+    # Default off so local dev/test meshes stay friction-free; compose
+    # and any multi-node deployment set MESH_GATE=1.
+    mesh_gate: bool = False
+
     # workspace / tools
     workspace_root: Path = Path("/workspace")
     mcp_enabled: bool = True

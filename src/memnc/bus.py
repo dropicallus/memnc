@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import nats
 from nats.aio.client import Client as NATSClient
@@ -19,10 +20,14 @@ from nats.js.api import (
 )
 from nats.js.errors import NotFoundError, NoKeysError
 
+from . import acl
 from .config import Settings
 from .schema import (
     CAPABILITY_KEY,
+    GRANT_BUCKET,
     Capability,
+    GrantLevel,
+    GrantRecord,
     Envelope,
     REGISTRY_BUCKET,
     Role,
@@ -56,6 +61,7 @@ class Bus:
         self.kv = None
         self._registry = None
         self._trust = None
+        self._grants = None
 
     # -- lifecycle ---------------------------------------------------------
     async def connect(self, attempts: int = 20) -> None:
@@ -84,6 +90,7 @@ class Bus:
         await self.ensure_kv()
         await self.ensure_registry()
         await self.ensure_trust()
+        await self.ensure_grants()
         log.info("connected to NATS at %s", self.settings.nats_url)
 
     async def close(self) -> None:
@@ -154,8 +161,19 @@ class Bus:
             log.info("created registry KV bucket %s (ttl=%ss)", REGISTRY_BUCKET, REGISTRY_TTL)
 
     async def advertise_capability(self, cap: Capability) -> None:
-        """Write (or refresh) one capability record into the registry KV."""
+        """Write (or refresh) one capability record into the registry KV.
+
+        With ``MESH_GATE=1`` the write is authorized against the grant ledger
+        (deny-by-default): only ROOT/CHAIN-granted agents pass, AUTO and
+        grantless writes raise ``PermissionError``.
+        """
         assert self._registry is not None
+        if self.settings.mesh_gate:
+            decision = acl.check_registry_write(
+                await self.grant_read(cap.agent_id), cap.agent_id
+            )
+            if not decision:
+                raise PermissionError(f"registry write denied for {cap.agent_id}: {decision.reason}")
         await self._registry.put(cap.key(), cap.model_dump_json().encode())
         log.debug("advertised capability %s", cap.key())
 
@@ -183,6 +201,61 @@ class Bus:
         for key in sorted(keys):
             entry = await self._registry.get(key)
             out.append(Capability.model_validate_json(entry.value))
+        return out
+
+    # -- M9: capability grants (permission chain) --------------------------
+    async def ensure_grants(self) -> None:
+        """Ensure the grant-ledger KV bucket exists."""
+        assert self.js is not None
+        try:
+            self._grants = await self.js.key_value(GRANT_BUCKET)
+        except NotFoundError:
+            self._grants = await self.js.create_key_value(
+                KeyValueConfig(bucket=GRANT_BUCKET, history=10)
+            )
+            log.info("created grant KV bucket %s", GRANT_BUCKET)
+
+    async def issue_grant(
+        self,
+        agent_id: str,
+        level: GrantLevel = GrantLevel.CHAIN,
+        granted_by: str = "orchestrator",
+        ttl_s: float = 0,
+    ) -> GrantRecord:
+        """Mint and store a grant for ``agent_id`` (ROOT only does this)."""
+        assert self._grants is not None
+        grant = GrantRecord(
+            agent_id=agent_id,
+            level=level,
+            granted_by=granted_by,
+            expires_at=(time.time() + ttl_s) if ttl_s > 0 else 0,
+        )
+        await self._grants.put(grant.key(), grant.model_dump_json().encode())
+        log.info("issued %s grant to %s (by %s)", level.value, agent_id, granted_by)
+        return grant
+
+    async def revoke_grant(self, agent_id: str) -> None:
+        assert self._grants is not None
+        await self._grants.delete(GrantRecord(agent_id=agent_id).key())
+
+    async def grant_read(self, agent_id: str) -> GrantRecord | None:
+        assert self._grants is not None
+        try:
+            entry = await self._grants.get(GrantRecord(agent_id=agent_id).key())
+        except (KeyError, NotFoundError):
+            return None
+        return GrantRecord.model_validate_json(entry.value)
+
+    async def list_grants(self) -> list[GrantRecord]:
+        assert self._grants is not None
+        out: list[GrantRecord] = []
+        try:
+            keys = await self._grants.keys()
+        except NoKeysError:
+            return out
+        for key in sorted(keys):
+            entry = await self._grants.get(key)
+            out.append(GrantRecord.model_validate_json(entry.value))
         return out
 
     # -- M8: trust ledger --------------------------------------------------
