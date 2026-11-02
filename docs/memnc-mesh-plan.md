@@ -509,6 +509,20 @@ scripts/
 
 Each milestone is independently demoable; M2 is the checkpoint that proves the mesh before any model is involved.
 
+### 14.1 Roadmap: symmetrisches 2-Modell-Self-Orchestration (2026-11-02)
+
+Ziel: Beide Nodes sind **architektonisch identisch** — jeder Node kann submit, planen, claimen, codeen, kritisieren und fan-out. Keine feste Rolle, kein "Controller-Node". Der Orchestrator wird schrittweise von Dispatcher zu optionalen Schiedsrichter degradiert (M11 Richtung, fertiggestellt in M14).
+
+| Step | Inhalt | Done-Kriterium |
+|---|---|---|
+| **M12 — M11 live, beide Nodes** | Node A mit M11-Code rebuilden; Node B (maco) auf aktuellen Stand heben (`docker-compose.node.yml`); `mesh_claim=true` auf Node-B-Workern; Live-Test: `meshctl submit --claimable` → Node-B-Worker claimt via CAS und läuft die Pipeline | Task submitted auf A, geclaimt+DONE von B; zweiter Run umgekehrt (B submitted → A claimt) |
+| **M13 — Agent als Submitter live** | Coder/Planner-Agent ruft `mesh_submit` aus einem laufenden Task heraus; Subtask landet im Mesh und wird von der *anderen* Node geclaimt | Nachweis: Task auf A erzeugt Subtask, B modelarbeitet ihn ab (und umgekehrt); `meshctl ledger` zeigt beide Nodes als Submitter+Claimer |
+| **M14 — Orchestrator-los dispatchen** | Worker startet nach Claim die Pipeline **selbst** (CAS RECEIVED→PLANNING im KV, Planner-Prompt lokal), Orchestrator bleibt nur Monitor/Aggregator; `_dispatch_claimed` optional | Submit mit gestopptem Orchestrator: Task wird trotzdem geclaimt und ausgeführt; Orchestrator-Neustart aggregiert nur noch |
+| **M15 — Symmetrische Topologie** | Node B betreibt eigenen Orchestrator (nur für eigene Submissions/Fan-out zuständig); ein Broker (NATS A) oder Leaf-Nodes; beide Nodes konfig-identisch außer Modellen | Beide Nodes submitted Fan-out-Tasks gleichzeitig ohne Kollision (CAS/KV schützt); Doku §3 aktualisiert |
+| **M16 — Demo: echtes Peer-Orchestration** | Ein Task wird auf B gestellt, B plant, fan-out landet symmetrisch auf A+B, beide Modelle (unterschiedliche Ollamas) arbeiten gegenseitig ab, Cross-Node-Critique | End-to-end-Run mit Wechselricht ×2 (A→B und B→A Anteile), `task.done` mit beidseitiger Attribution im Ledger |
+
+Nicht-Blocker (optional danach): Broker-JWT/ACL-Hardening (M9-Rest), `MAX_TOOL_STEPS` für den 3B-Coder erhöhen, Trust-Utility in die Claim-Entscheidung (M8-Score beim Claim-Poll).
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
