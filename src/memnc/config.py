@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # tasks themselves instead of waiting for orchestrator dispatch.
     mesh_claim: bool = False
     claim_poll_s: float = 5.0
+    # M14: claimed tasks run their pipeline worker-driven — the finishing
+    # worker advances the snapshot itself; the orchestrator is a spectator.
+    self_pipeline: bool = True
 
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"

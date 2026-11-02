@@ -93,6 +93,8 @@ class Orchestrator:
                 fanout=submission.fanout,
                 depth=submission.depth,
                 claimable=submission.claimable,
+                # M14: worker-driven pipeline for claimable tasks
+                next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
                 state=TaskState.RECEIVED,
             )
             await self.bus.put_snapshot(snapshot)
@@ -189,6 +191,10 @@ class Orchestrator:
             log.info("ignoring result for terminal task", extra={"task_id": snapshot.task_id})
             return
         if envelope.id in snapshot.seen_result_ids:
+            return
+        # M14: worker-driven pipeline — the claiming worker advances the
+        # snapshot itself; do not double-handle its results.
+        if snapshot.next_role:
             return
 
         last_action = snapshot.last_action or {}
@@ -535,6 +541,7 @@ class Orchestrator:
                 and snapshot.claimable
                 and snapshot.claimed_by
                 and not snapshot.last_action
+                and not snapshot.next_role  # M14: worker-driven, not ours
             ):
                 log.info(
                     "claim accepted",
