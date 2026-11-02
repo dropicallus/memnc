@@ -1,10 +1,11 @@
 # memnc
 
 A lightweight, distributed multi-agent mesh. NATS is the only backbone; a
-durable state-machine orchestrator assigns `planner`, `coder` and `critic`
-roles to worker nodes; each worker runs a local MCP tool server (filesystem +
-shell) and talks to a local inference endpoint (Ollama or any OpenAI-compatible
-API).
+durable state machine drives `planner`, `coder` and `critic` stages across
+worker nodes; each worker runs a local MCP tool server (filesystem + shell)
+and talks to a local inference endpoint (Ollama or any OpenAI-compatible API).
+Claimable tasks run **worker-driven** (M14): the claiming worker advances the
+pipeline itself via CAS role-gated handoffs — the orchestrator is a spectator.
 
 No agent framework, no cloud dependencies, no model serving code.
 
@@ -142,6 +143,24 @@ record — delete is respected until manually re-granted).
 Without the gate (`MESH_GATE=false`, the default), both machines still work —
 the gate only guards registry writes, not queue-group work delivery.
 
+### Worker-driven pipeline (M14)
+
+Submit with `--claimable` and the pipeline runs without any orchestrator
+dispatch: the snapshot carries `next_role`; only that role can claim it
+(CAS role gate), the claiming worker runs its stage and re-publishes the
+snapshot with the next `next_role` — `RECEIVED→PLANNING→CODING→CRITIQUE→DONE`
+across any nodes, with every stage attributed in the ledger
+(`meshctl ledger`). The orchestrator skips worker-driven tasks entirely;
+you can even stop it mid-run and the pipeline keeps going.
+
+### Roadmap status
+
+M11 (CAS claim), M12 (cross-node claim live, A→B and B→A), M13 (agent
+`mesh_submit` sub-tasks cross-node live) and M14 (worker-driven pipeline,
+unit-green, live test pending) are done on `mesh/architecture`; next: M15
+(symmetric orchestrator-less topology) and M16 (peer-orchestration demo).
+See `docs/memnc-mesh-plan.md` §14.1.
+
 ## Configuration
 
 Everything is environment-driven; see `.env.example` for the full list.
@@ -161,6 +180,8 @@ Everything is environment-driven; see `.env.example` for the full list.
 | `ALLOW_SHELL` | `true` | enable the `run_shell` MCP tool |
 | `SHELL_TIMEOUT_S` | `120` | per-command timeout |
 | `APPLY_ARTIFACTS` | `true` | write coder output files to the workspace |
+| `MESH_CLAIM` | `false` | workers CAS-claim submitted tasks themselves (M11) |
+| `SELF_PIPELINE` | `true` | claiming worker advances claimable tasks itself, no orchestrator dispatch (M14) |
 
 ## Security model
 
