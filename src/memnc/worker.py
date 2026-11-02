@@ -14,6 +14,7 @@ from .agent import parse_role_output, run_agent
 from .backends import make_backend
 from .bus import Bus
 from .config import Settings, get_settings
+from .fsm import Event, transition
 from .fsutil import apply_artifacts
 from .mcp.client import MCPClient
 from .roles import PROMPT_VERSION, SYSTEM_PROMPTS, build_user_prompt
@@ -21,12 +22,15 @@ from .schema import (
     Envelope,
     ResultPayload,
     Role,
+    SUBJECT_CMD,
     SUBJECT_HEARTBEAT,
     SUBJECT_RESULT,
     SUBJECT_SUBMIT,
     TaskSnapshot,
     TaskSubmission,
     TaskState,
+    TERMINAL_STATES,
+    ROLE_OUTPUT as _OUTPUT_SCHEMA,
 )
 
 log = logging.getLogger(__name__)
@@ -397,38 +401,228 @@ class Worker:
 
     # -- M11: ledger-based self-claiming -------------------------------------
     async def _claim_loop(self) -> None:
-        """Poll the ledger and CAS-claim unclaimed claimable RECEIVED tasks.
+        """Poll the ledger and CAS-claim tasks matching our next role.
 
-        Claim = CAS update of task snapshot (bus.try_claim); on conflict
-        (someone was faster) we simply move on. The orchestrator's referee
-        loop (_dispatch_claimed) starts claimed tasks.
+        M11: claim = CAS update of task snapshot (bus.try_claim); on conflict
+        (someone was faster) we simply move on.
+        M13: a busy worker must not swallow its own sub-tasks — leaving them
+        to the other node is the point of the mesh.
+        M14: when the task carries a next_role, only that role may claim it
+        and the claiming worker runs the whole pipeline itself (self_pipeline).
         """
         worker_id = f"{self.settings.node_name}:{self.role.value}"
         while not self._stop.is_set():
             await asyncio.sleep(self.settings.claim_poll_s)
             try:
                 for snapshot in await self.bus.list_tasks():
-                    if snapshot.state is not TaskState.RECEIVED:
+                    if snapshot.state in TERMINAL_STATES:
                         continue
                     if not snapshot.claimable or snapshot.claimed_by:
                         continue
-                    # M13: a busy worker must not swallow its own sub-tasks —
-                    # leaving them to the other node is the point of the mesh.
                     if self._busy:
                         continue
+                    # M14: role gate — only the scheduled next role claims.
+                    if snapshot.next_role and snapshot.next_role != self.role.value:
+                        continue
                     claimed = await self.bus.try_claim(
-                        snapshot.task_id, worker_id
+                        snapshot.task_id, worker_id, role=self.role.value
                     )
-                    if claimed is not None:
-                        log.info(
-                            "task claimed",
-                            extra={
-                                "task_id": claimed.task_id,
-                                "worker": worker_id,
-                            },
-                        )
+                    if claimed is None:
+                        continue
+                    log.info(
+                        "task claimed",
+                        extra={
+                            "task_id": claimed.task_id,
+                            "worker": worker_id,
+                        },
+                    )
+                    if (
+                        self.settings.self_pipeline
+                        and self.settings.mesh_claim
+                        and claimed.next_role
+                    ):
+                        await self._self_pipeline(claimed)
             except Exception:  # noqa: BLE001
                 log.exception("claim loop failed")
+
+    # -- M14: worker-driven pipeline ---------------------------------------
+    async def _self_pipeline(self, snapshot: TaskSnapshot) -> None:
+        """Run our own role on a claimed task, then advance the pipeline.
+
+        Reuses the pure FSM (fsm.transition) for state changes, but replaces
+        the orchestrator's command dispatch with a ledger handoff: the next
+        role is made claimable and any matching worker may claim it.
+        """
+        self._busy = True
+        self._current_task = snapshot.task_id
+        try:
+            # RECEIVED -> PLANNING without a dispatch action: we ARE the
+            # dispatcher now (M14 worker-driven pipeline).
+            if snapshot.state is TaskState.RECEIVED:
+                start = transition(snapshot.state, Event("start"))
+                snapshot.state = start.state
+                snapshot.record("start")
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(snapshot, "state.planning", "claimed")
+            role = Role(snapshot.next_role or self.role.value)
+            envelope = Envelope(
+                task_id=snapshot.task_id,
+                trace_id=snapshot.trace_id,
+                kind="command",
+                role=role,
+                node=self.settings.node_name,
+                state=snapshot.state,
+                attempt=snapshot.attempt,
+                payload={
+                    "task": snapshot.task,
+                    "context": snapshot.context,
+                    "plan": snapshot.plan.model_dump() if snapshot.plan else None,
+                    "code": snapshot.code.model_dump() if snapshot.code else None,
+                    "critique": snapshot.critique.model_dump()
+                    if snapshot.critique
+                    else None,
+                    "revisions": snapshot.revisions,
+                    "workspace_root": str(self.settings.workspace_root),
+                    "role": role.value,
+                },
+            )
+            try:
+                timeout_s = float(self.settings.timeout_for(role))
+                result = await asyncio.wait_for(
+                    self._run(envelope, snapshot), timeout=timeout_s + 5
+                )
+            except asyncio.TimeoutError:
+                result = ResultPayload(ok=False, error="worker timed out")
+            except Exception as exc:  # noqa: BLE001
+                log.exception("self pipeline run failed")
+                result = ResultPayload(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+            result_envelope = Envelope(
+                task_id=envelope.task_id,
+                trace_id=envelope.trace_id,
+                correlation_id=envelope.id,
+                kind="result",
+                role=role,
+                node=self.settings.node_name,
+                state=snapshot.state,
+                attempt=snapshot.attempt,
+                payload=result.model_dump(),
+            )
+            # publish for meshctl tail / a running orchestrator (which will
+            # skip it: we already recorded the id in seen_result_ids)
+            await self.bus.publish_envelope(
+                SUBJECT_RESULT.format(role=role.value), result_envelope
+            )
+            snapshot = await self.bus.get_snapshot(snapshot.task_id) or snapshot
+            await self._advance(snapshot, result_envelope, result)
+        finally:
+            self._busy = False
+            self._current_task = None
+
+    async def _advance(
+        self, snapshot: TaskSnapshot, envelope: Envelope, result: ResultPayload
+    ) -> None:
+        """Worker-side mirror of the orchestrator result handling (M14)."""
+        if snapshot.state in {TaskState.DONE, TaskState.FAILED, TaskState.CANCELLED}:
+            return
+        if envelope.id not in snapshot.seen_result_ids:
+            snapshot.seen_result_ids.append(envelope.id)
+            snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]
+
+        event = Event("result", ok=result.ok, reason=result.error or "")
+        if result.ok and envelope.role is not None:
+            try:
+                output_model = _OUTPUT_SCHEMA[envelope.role]
+                output = output_model.model_validate(result.output)
+                self._store_output(snapshot, envelope.role, output)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("bad output in self pipeline: %s", exc)
+                event = Event("result", ok=False, reason=f"invalid output: {exc}")
+            if (
+                envelope.role is Role.CRITIC
+                and snapshot.critique is not None
+            ):
+                event = Event(
+                    "result", ok=True, approved=snapshot.critique.approved
+                )
+        if envelope.node:
+            await self.bus.emit_event(
+                snapshot, "result.executed_on", envelope.node
+            )
+        await self._apply_local(snapshot, event)
+
+    def _store_output(
+        self, snapshot: TaskSnapshot, role: Role, output
+    ) -> None:
+        if role is Role.PLANNER:
+            snapshot.plan = output
+        elif role is Role.CODER:
+            snapshot.code = output
+            if self.settings.apply_artifacts:
+                apply_artifacts(
+                    self.settings.workspace_root,
+                    snapshot.code.files,
+                    self.settings.max_artifact_bytes,
+                )
+        elif role is Role.CRITIC:
+            snapshot.critique = output
+
+    async def _apply_local(
+        self, snapshot: TaskSnapshot, event: Event
+    ) -> None:
+        result = transition(
+            snapshot.state,
+            event,
+            attempt=snapshot.attempt,
+            revisions=snapshot.revisions,
+            max_attempts=self.settings.max_attempts,
+            max_revisions=snapshot.max_revisions,
+        )
+        snapshot.state = result.state
+        snapshot.attempt = (
+            0 if result.attempt_reset else snapshot.attempt + result.attempt_delta
+        )
+        snapshot.revisions += result.revision_delta
+        snapshot.record(event.type, event.reason)
+        if event.reason and result.state is TaskState.FAILED:
+            snapshot.error = event.reason
+
+        for action in result.actions:
+            if action.type == "dispatch" and action.role is not None:
+                # M14 handoff: instead of a command, the next role becomes
+                # claimable — any matching worker on any node can pick it up.
+                snapshot.next_role = action.role.value
+                snapshot.claimed_by = ""
+                snapshot.claimable = True
+            elif action.type == "finish":
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.done")
+            elif action.type == "escalate":
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.failed", action.reason)
+                snapshot.error = action.reason
+            elif action.type == "cancel":
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.cancelled", action.reason)
+
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(
+            snapshot, f"state.{result.state.value.lower()}", event.reason
+        )
+        log.info(
+            "self pipeline transition",
+            extra={
+                "task_id": snapshot.task_id,
+                "state": result.state.value,
+                "next_role": snapshot.next_role,
+                "revisions": snapshot.revisions,
+            },
+        )
+        if result.state is TaskState.REVISE:
+            await self._apply_local(snapshot, Event("start"))
 
 
 async def _main() -> None:
