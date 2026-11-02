@@ -24,6 +24,10 @@ x-mesh-env: &mesh-env
   SHELL_TIMEOUT_S: ${SHELL_TIMEOUT_S:-120}
   MAX_OUTPUT_BYTES: ${MAX_OUTPUT_BYTES:-65536}
   APPLY_ARTIFACTS: ${APPLY_ARTIFACTS:-true}
+  # M9 capability gate: enable for multi-node deployments; the orchestrator
+  # auto-grants agents whose node matches MESH_GRANT_NODES (glob patterns).
+  MESH_GATE: ${MESH_GATE:-false}
+  MESH_GRANT_NODES: ${MESH_GRANT_NODES:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-mesh-service: &mesh-service

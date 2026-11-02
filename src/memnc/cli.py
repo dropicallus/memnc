@@ -44,9 +44,39 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             print(f"error: {data['error']}", file=sys.stderr)
             return 1
         print(data["task_id"])
+        if args.watch:
+            await _watch(client, data["task_id"])
         return 0
     finally:
         await client.close()
+
+
+_TERMINAL_EVENTS = {"task.done", "task.failed", "task.cancelled"}
+
+
+async def _watch(client, task_id: str) -> None:
+    """Follow one task's event stream until a terminal event (submit --watch)."""
+    subject = SUBJECT_EVENTS.format(task_id=task_id)
+    subscription = await client.subscribe(subject)
+    print(f"watching {subject} (ctrl-c to stop)", file=sys.stderr)
+    try:
+        while True:
+            try:
+                message = await subscription.next_msg(timeout=1.0)
+            except Exception:
+                continue
+            try:
+                envelope = json.loads(message.data)
+            except json.JSONDecodeError:
+                continue
+            payload = envelope.get("payload") or {}
+            event = payload.get("event", "")
+            detail = payload.get("detail", "")
+            print(f"{envelope.get('ts','')} {event:<24} {detail}".rstrip())
+            if event in _TERMINAL_EVENTS:
+                return
+    except KeyboardInterrupt:
+        pass
 
 
 async def cmd_tail(args: argparse.Namespace, settings: Settings) -> int:
@@ -236,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     submit = subparsers.add_parser("submit", help="submit a task")
     submit.add_argument("task")
     submit.add_argument("--context", default="")
+    submit.add_argument("--watch", action="store_true",
+                        help="follow the task's events until it finishes")
     submit.set_defaults(func=cmd_submit)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")

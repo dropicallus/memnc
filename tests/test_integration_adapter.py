@@ -31,7 +31,7 @@ async def test_agent_adapter_lifecycle():
     node = f"test-node-{suffix}"
     
     # Construct subjects as defined in adapter.py
-    work_subject = f"mesh.agent.{agent_id}.work"
+    work_subject = f"mem.agent.{agent_id}.work"
     
     # 2. Initialize Settings
     settings = Settings(

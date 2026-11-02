@@ -8,6 +8,7 @@ import logging
 import time
 from pathlib import Path
 
+from . import acl
 from .bus import Bus
 from .config import Settings, get_settings
 from .fsutil import apply_artifacts
@@ -20,11 +21,13 @@ from .schema import (
     ResultPayload,
     Role,
     SUBJECT_CMD,
+    SUBJECT_HEARTBEAT,
     SUBJECT_SUBMIT,
     TaskSnapshot,
     TaskState,
     TERMINAL_STATES,
     TaskSubmission,
+    GrantLevel,
     new_id,
     now_iso,
 )
@@ -39,6 +42,7 @@ class Orchestrator:
         self._stop = asyncio.Event()
         self._results = None
         self._submit_sub = None
+        self._heartbeat_sub = None
 
     async def start(self) -> None:
         await self.bus.connect()
@@ -46,6 +50,9 @@ class Orchestrator:
         assert self.bus.nc is not None
         self._submit_sub = await self.bus.nc.subscribe(
             SUBJECT_SUBMIT, cb=self._on_submit
+        )
+        self._heartbeat_sub = await self.bus.nc.subscribe(
+            SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
         )
         self._results = await self.bus.pull_results()
         await self._recover()
@@ -89,6 +96,31 @@ class Orchestrator:
                 await message.respond(json.dumps({"error": str(exc)}).encode())
             except Exception:  # noqa: BLE001
                 pass
+
+    # -- M9 grant bootstrap --------------------------------------------------
+    async def _on_heartbeat(self, message) -> None:
+        """Issue CHAIN grants for agents of allowed joining nodes.
+
+        Bootstrap for multi-machine meshes: a node listed in
+        ``MESH_GRANT_NODES`` gets its agents granted on first heartbeat, so a
+        new machine can join without a manual ``meshctl grant``. Revoked
+        agents stay revoked — an existing grant record is never overwritten.
+        """
+        try:
+            payload = Envelope.model_validate_json(message.data).payload or {}
+            patterns = [
+                p for p in self.settings.grant_nodes.split(",") if p.strip()
+            ]
+            for agent_id in acl.auto_grant_agents(payload, patterns):
+                if await self.bus.grant_read(agent_id) is not None:
+                    continue
+                await self.bus.issue_grant(
+                    agent_id, level=GrantLevel.CHAIN,
+                    granted_by=f"bootstrap:{self.settings.node_name}",
+                )
+                log.info("auto-granted %s (heartbeat bootstrap)", agent_id)
+        except Exception:  # noqa: BLE001 - bootstrap is best effort
+            log.debug("heartbeat bootstrap failed", exc_info=True)
 
     # -- results -----------------------------------------------------------
     async def _result_loop(self) -> None:
@@ -176,9 +208,15 @@ class Orchestrator:
                 "role": envelope.role.value if envelope.role else None,
                 "ok": event.ok,
                 "approved": event.approved,
+                "executed_on": envelope.node,
             },
         )
         await self._apply(snapshot, event)
+        if envelope.node:
+            # visibility for meshctl tail: which node executed this stage
+            await self.bus.emit_event(
+                snapshot, "result.executed_on", envelope.node
+            )
 
     def _store_output(
         self, snapshot: TaskSnapshot, role: Role, output: dict

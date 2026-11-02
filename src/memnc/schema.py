@@ -109,7 +109,7 @@ GRANT_KEY = "grant.{agent_id}"
 
 # Per-agent pinned durable inbox: the only work subject bound to one agent
 # (the adapter already subscribes to this shape).
-SUBJECT_AGENT_INBOX = "mesh.agent.{agent_id}.work"
+SUBJECT_AGENT_INBOX = "mem.agent.{agent_id}.work"  # mem.*: outside MESH-stream coverage — core request/reply on stream-covered subjects is answered by the JetStream PubAck, never by the adapter
 
 
 class GrantLevel(str, Enum):
