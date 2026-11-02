@@ -134,7 +134,7 @@ Three layers, following Cotal/Synadia (sender identity on the wire) and ormica
   Grants follow the ormica chain — `root` (the orchestrator) may issue grants,
   `chain` lets an agent write only its own records, `auto` (self-declared) is
   never sufficient. Issuance/check logic is pure and NATS-free (`memnc/acl.py`).
-- **Pinned inbox**: each agent answers work on `mesh.agent.<agent_id>.work`
+- **Pinned inbox**: each agent answers work on `mem.agent.<agent_id>.work` (kept outside the MESH stream: JetStream PubAck would win request/reply)
   (its own inbox) plus the anycast `mesh.agent.work`; sender-carried subjects
   (`mesh.<space>.<mode>.<target>.<sender>`) embed the identity in the subject
   itself so a mismatched claim is detectable (`acl.check_sender`).

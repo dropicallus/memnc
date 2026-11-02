@@ -82,9 +82,36 @@ class TestSenderSubject:
         assert not acl.check_sender("mesh.dm.inst.planner.a1", "")
 
 
+class TestAutoGrantBootstrap:
+    """M9 heartbeat bootstrap: which agents a joining node's heartbeat grants."""
+
+    def test_empty_patterns_grant_nothing(self):
+        assert acl.auto_grant_agents({"node": "node-b", "role": "coder"}, []) == []
+
+    def test_worker_heartbeat_matches_node_role(self):
+        p = {"node": "node-b", "role": "coder"}
+        assert acl.auto_grant_agents(p, ["node-b-*"]) == ["node-b-coder"]
+
+    def test_adapter_heartbeat_matches_agent_id(self):
+        p = {"node": "node-b", "agent_id": "node-b-agent", "skills": ["code"]}
+        assert acl.auto_grant_agents(p, ["node-b-*"]) == ["node-b-agent"]
+
+    def test_non_matching_node_denied(self):
+        p = {"node": "node-c", "role": "coder"}
+        assert acl.auto_grant_agents(p, ["node-b-*"]) == []
+
+    def test_pattern_list_with_spaces(self):
+        p = {"node": "node-b", "role": "critic"}
+        assert acl.auto_grant_agents(p, ["node-a-*", " node-b-* "]) == ["node-b-critic"]
+
+    def test_exact_pattern(self):
+        p = {"node": "node-b", "role": "coder"}
+        assert acl.auto_grant_agents(p, ["node-b-coder"]) == ["node-b-coder"]
+
+
 class TestPinnedInbox:
     def test_pinned_inbox_shape(self):
-        assert acl.pinned_inbox("a1") == "mesh.agent.a1.work"
+        assert acl.pinned_inbox("a1") == "mem.agent.a1.work"
 
     def test_dotted_agent_id_rejected(self):
         with pytest.raises(ValueError):

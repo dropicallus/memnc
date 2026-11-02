@@ -12,7 +12,7 @@ they are unit-testable without a broker (plan §0.5 M9):
   a ROOT-granted issuer (CHAIN).  Self-declared authority (AUTO) and *no
   grant* are denied — deny-by-default.
 * **Pinned per-agent durable inbox**: the only work subject an agent may
-  answer is ``mesh.agent.<agent_id>.work`` (plus the anycast ``mesh.agent.work``
+  answer is ``mem.agent.<agent_id>.work`` (plus the anycast ``mem.agent.work``
   for anonymous pickup).  Nobody else's inbox is addressable for it.
 
 Gate decisions are :class:`GateDecision` objects (allowed + machine-readable
@@ -20,6 +20,8 @@ reason) — never bare booleans, so denials are loggable/auditable.
 """
 
 from __future__ import annotations
+
+import fnmatch
 
 import time
 from dataclasses import dataclass
@@ -29,8 +31,8 @@ from .schema import GrantLevel, GrantRecord
 
 # Subject an agent may subscribe for direct (pinned) work delivery. The
 # anycast subject stays open for anonymous pickup (plan §5.2).
-PINNED_INBOX = "mesh.agent.{agent_id}.work"
-ANYPAST_INBOX = "mesh.agent.work"
+PINNED_INBOX = "mem.agent.{agent_id}.work"
+ANYPAST_INBOX = "mem.agent.work"
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,34 @@ def check_sender(subject: str, claimed_sender: str) -> GateDecision:
         False,
         f"subject ends in {trailing!r} but claims sender {claimed_sender!r}",
     )
+
+
+def matches_any(name: str, patterns: list[str]) -> bool:
+    """True if ``name`` matches any glob ``pattern`` (``node-b-*`` style)."""
+    return any(fnmatch.fnmatchcase(name, p.strip()) for p in patterns if p.strip())
+
+
+def auto_grant_agents(payload: dict, patterns: list[str]) -> list[str]:
+    """Agent ids a heartbeat authorizes for a CHAIN grant (M9 bootstrap).
+
+    The orchestrator (ROOT) listens to ``mesh.node.*.heartbeat`` and issues
+    grants only for nodes matching ``MESH_GRANT_NODES`` patterns — this is how
+    a joining machine (node-b) gets write access without a manual
+    ``meshctl grant`` on the orchestrator host. Worker heartbeats carry
+    ``{role, node}`` (agent id ``<node>-<role>``); adapter heartbeats carry
+    ``{agent_id, ...}``. Returns [] when nothing matches.
+    """
+    if not patterns:
+        return []
+    node = str(payload.get("node", ""))
+    agent_id = str(payload.get("agent_id", ""))
+    role = str(payload.get("role", ""))
+    out: list[str] = []
+    if agent_id and (matches_any(agent_id, patterns) or matches_any(node, patterns)):
+        out.append(agent_id)
+    elif node and role and matches_any(f"{node}-{role}", patterns):
+        out.append(f"{node}-{role}")
+    return out
 
 
 def pinned_inbox(agent_id: str) -> str:
