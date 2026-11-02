@@ -412,6 +412,10 @@ class Worker:
                         continue
                     if not snapshot.claimable or snapshot.claimed_by:
                         continue
+                    # M13: a busy worker must not swallow its own sub-tasks —
+                    # leaving them to the other node is the point of the mesh.
+                    if self._busy:
+                        continue
                     claimed = await self.bus.try_claim(
                         snapshot.task_id, worker_id
                     )
