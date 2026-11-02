@@ -37,6 +37,7 @@ from .schema import (
     TaskState,
     TRUST_ACCRUE,
     TRUST_BUCKET,
+    TERMINAL_STATES,
     TRUST_DECAY,
     TRUST_DEFAULT,
     TRUST_MAX,
@@ -406,7 +407,9 @@ class Bus:
             f"task.{snapshot.task_id}", snapshot.model_dump_json().encode()
         )
 
-    async def try_claim(self, task_id: str, worker_id: str) -> TaskSnapshot | None:
+    async def try_claim(
+        self, task_id: str, worker_id: str, role: str | None = None
+    ) -> TaskSnapshot | None:
         """M11: CAS-claim a claimable RECEIVED task. Conflict => None.
 
         Reads the raw KV entry (revision included), mutates only if the task
@@ -419,11 +422,17 @@ class Bus:
         except (KeyError, NotFoundError):
             return None
         snapshot = TaskSnapshot.model_validate_json(entry.value)
+        # M14: an intermediate state may be claimable ONLY as a worker-driven
+        # role handoff (next_role set); legacy tasks must be in RECEIVED.
         if (
-            snapshot.state is not TaskState.RECEIVED
+            snapshot.state in TERMINAL_STATES
             or not snapshot.claimable
             or snapshot.claimed_by
+            or (snapshot.state is not TaskState.RECEIVED and not snapshot.next_role)
         ):
+            return None
+        # M14: worker-driven pipeline — only the next scheduled role may claim.
+        if role is not None and snapshot.next_role and snapshot.next_role != role:
             return None
         snapshot.claimed_by = worker_id
         try:

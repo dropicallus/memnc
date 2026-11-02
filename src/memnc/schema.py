@@ -385,6 +385,9 @@ class TaskSnapshot(BaseModel):
     depth: int = 0
     claimable: bool = False
     claimed_by: str = ""  # agent that CAS-claimed this task ("" = unclaimed)
+    # M14: when set, the task pipeline is worker-driven — only this role may
+    # claim it and the finishing worker advances the snapshot itself.
+    next_role: str = ""
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None
