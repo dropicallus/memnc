@@ -28,6 +28,8 @@ x-mesh-env: &mesh-env
   # auto-grants agents whose node matches MESH_GRANT_NODES (glob patterns).
   MESH_GATE: ${MESH_GATE:-false}
   MESH_GRANT_NODES: ${MESH_GRANT_NODES:-}
+  # M11: ledger-based self-claiming of claimable tasks (worker-side CAS)
+  MESH_CLAIM: ${MESH_CLAIM:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-mesh-service: &mesh-service
