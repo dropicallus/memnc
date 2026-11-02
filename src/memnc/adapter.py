@@ -30,6 +30,7 @@ from typing import Any, Awaitable, Callable
 from .bus import Bus
 from .config import Settings, get_settings
 from .schema import (
+    SUBJECT_AGENT_INBOX,
     Capability,
     Envelope,
     Kind,
@@ -101,7 +102,7 @@ class AgentAdapter:
         await asyncio.gather(
             self._heartbeat_loop(),
             self._work_loop(SUBJECT_AGENT_WORK),
-            self._work_loop(f"mesh.agent.{self.agent_id}.work"),
+            self._work_loop(SUBJECT_AGENT_INBOX.format(agent_id=self.agent_id)),
         )
 
     async def stop(self) -> None:

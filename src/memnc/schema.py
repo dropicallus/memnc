@@ -81,7 +81,7 @@ def role_for_skill(skill: str) -> Role:
     return SKILL_ROLES.get(skill, Role.CODER)
 
 # --- M8: trust ledger ---
-TRUST_BUCKET = 'mesh.trust'
+TRUST_BUCKET = 'mesh_trust'
 TRUST_DEFAULT = 1.0
 TRUST_MIN = 0.0
 TRUST_MAX = 10.0
@@ -98,6 +98,40 @@ class TrustEntry(BaseModel):
     attribution: list[str] = Field(default_factory=list)
 
 
+
+
+# --- M9: identity, ACLs, capability gate ---
+# Grants live in their own KV bucket (no TTL entry per record: expiry is a
+# field on the record, checked by acl.check_registry_write, so revocation is
+# a write, not a TTL race).
+GRANT_BUCKET = "mesh_grants"
+GRANT_KEY = "grant.{agent_id}"
+
+# Per-agent pinned durable inbox: the only work subject bound to one agent
+# (the adapter already subscribes to this shape).
+SUBJECT_AGENT_INBOX = "mesh.agent.{agent_id}.work"
+
+
+class GrantLevel(str, Enum):
+    """ormica permission chain: ROOT issues, CHAIN writes own records, AUTO = self-declared (never sufficient)."""
+
+    ROOT = "root"
+    CHAIN = "chain"
+    AUTO = "auto"
+
+
+class GrantRecord(BaseModel):
+    """M9: an orchestrator-issued capability grant for one agent."""
+
+    agent_id: str
+    level: GrantLevel = GrantLevel.CHAIN
+    granted_by: str = "orchestrator"
+    issued_at: float = Field(default_factory=time.time)
+    # Epoch seconds at which the grant stops being valid; 0 = no expiry.
+    expires_at: float = 0
+
+    def key(self) -> str:
+        return GRANT_KEY.format(agent_id=self.agent_id)
 
 
 class Envelope(BaseModel):
