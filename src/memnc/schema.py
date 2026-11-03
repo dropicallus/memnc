@@ -46,6 +46,9 @@ class TaskState(str, Enum):
 TERMINAL_STATES = {TaskState.DONE, TaskState.FAILED, TaskState.CANCELLED}
 
 SUBJECT_SUBMIT = "mesh.task.submit"
+# M15: owner-routed submissions — each orchestrator only handles submissions
+# addressed to its own node, so two symmetric orchestrators never double-handle.
+SUBJECT_SUBMIT_NODE = "mesh.task.submit.{node}"
 SUBJECT_EVENTS = "mesh.task.{task_id}.events"
 SUBJECT_CMD = "mesh.agent.{role}.cmd"
 SUBJECT_RESULT = "mesh.agent.{role}.result"
@@ -388,6 +391,8 @@ class TaskSnapshot(BaseModel):
     # M14: when set, the task pipeline is worker-driven — only this role may
     # claim it and the finishing worker advances the snapshot itself.
     next_role: str = ""
+    # M15: node whose orchestrator owns this task (submit routing + reaping).
+    origin_node: str = ""
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None

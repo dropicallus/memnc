@@ -17,6 +17,7 @@ from .schema import (
     SUBJECT_EVENTS,
     SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
+    SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
     GrantLevel,
     TaskSubmission,
@@ -43,7 +44,13 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             claimable=getattr(args, "claimable", False),
         )
         response = await client.request(
-            SUBJECT_SUBMIT, submission.model_dump_json().encode(), timeout=10
+            # M15: owner-routed submission — default to this machine's node
+            # name so any node's meshctl submits to its own orchestrator.
+            SUBJECT_SUBMIT_NODE.format(
+                node=getattr(args, "node", None) or settings.node_name
+            ),
+            submission.model_dump_json().encode(),
+            timeout=10,
         )
         data = json.loads(response.data)
         if "error" in data:
@@ -303,6 +310,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="M10: split the plan into independent subtasks")
     submit.add_argument("--claimable", action="store_true",
                         help="M11: leave in RECEIVED for agents to self-claim")
+    submit.add_argument("--node", default=None,
+                        help="M15: target orchestrator node (default: local node)")
     submit.set_defaults(func=cmd_submit)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")

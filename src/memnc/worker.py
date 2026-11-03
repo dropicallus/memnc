@@ -26,6 +26,7 @@ from .schema import (
     SUBJECT_HEARTBEAT,
     SUBJECT_RESULT,
     SUBJECT_SUBMIT,
+    SUBJECT_SUBMIT_NODE,
     TaskSnapshot,
     TaskSubmission,
     TaskState,
@@ -390,7 +391,8 @@ class Worker:
         if not submission.task:
             return json.dumps({"ok": False, "error": "task is required"})
         response = await self.bus.nc.request(
-            SUBJECT_SUBMIT,
+            # M15: submit to the owning orchestrator (this worker's node).
+            SUBJECT_SUBMIT_NODE.format(node=self.settings.node_name),
             submission.model_dump_json().encode(),
             timeout=10,
         )
@@ -567,6 +569,61 @@ class Worker:
         elif role is Role.CRITIC:
             snapshot.critique = output
 
+    async def _fanout_local(self, snapshot: TaskSnapshot) -> None:
+        """M16: split a multi-step plan into claimable subtasks (worker-side).
+
+        Mirrors the orchestrator's ``_fanout`` but runs inside the claiming
+        planner worker. Subtasks go to the parent's origin node; the owner
+        orchestrator aggregates via its fanout check.
+        """
+        assert self.bus.nc is not None
+        assert snapshot.plan is not None  # caller guarantees this
+        for step in snapshot.plan.plan:
+            submission = TaskSubmission(
+                task=step.description or f"step {step.id}",
+                context=f"fanout parent={snapshot.task_id} step={step.id}: "
+                f"{snapshot.task[:120]}",
+                depth=snapshot.depth + 1,
+                claimable=True,
+            )
+            try:
+                response = await self.bus.nc.request(
+                    SUBJECT_SUBMIT_NODE.format(
+                        node=snapshot.origin_node or self.settings.node_name
+                    ),
+                    submission.model_dump_json().encode(),
+                    timeout=10,
+                )
+                sub_id = (json.loads(response.data) or {}).get("task_id")
+            except Exception:  # noqa: BLE001 - skip this step, keep fanning out
+                log.exception("fanout submit failed for step %s", step.id)
+                continue
+            if not sub_id:
+                continue
+            snapshot.subtasks[sub_id] = step.id
+            sub = await self.bus.get_snapshot(sub_id)
+            if sub is not None:
+                sub.parent_task_id = snapshot.task_id
+                await self.bus.put_snapshot(sub)
+        if not snapshot.subtasks:
+            # nothing was fanned out — continue the normal single pipeline
+            snapshot.next_role = "coder"
+            snapshot.claimable = True
+            snapshot.record("task.fanout.empty", "no subtasks; single pipeline")
+            await self.bus.put_snapshot(snapshot)
+            return
+        snapshot.self_assign = True  # parent parks in CODING, waits for subtasks
+        snapshot.claimable = False
+        snapshot.next_role = ""
+        # No at_epoch key: the timeout reaper skips fanout-wait parents; the
+        # aggregation runs in the owner orchestrator's fanout check instead.
+        snapshot.last_action = {"role": "fanout-wait"}
+        snapshot.record("task.fanout", f"{len(snapshot.subtasks)} subtasks")
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(
+            snapshot, "state.coding", f"fanout: {len(snapshot.subtasks)} subtasks"
+        )
+
     async def _apply_local(
         self, snapshot: TaskSnapshot, event: Event
     ) -> None:
@@ -607,6 +664,18 @@ class Worker:
                 snapshot.next_role = ""
                 snapshot.claimable = False
                 snapshot.record("task.cancelled", action.reason)
+
+        # M16 worker-driven fan-out: the planning worker splits the plan into
+        # claimable subtasks itself instead of handing the parent back to an
+        # orchestrator. Aggregation stays with the owner orchestrator.
+        if (
+            result.state is TaskState.CODING
+            and snapshot.fanout
+            and snapshot.plan is not None
+            and len(snapshot.plan.plan) > 1
+        ):
+            await self._fanout_local(snapshot)
+            return
 
         await self.bus.put_snapshot(snapshot)
         await self.bus.emit_event(

@@ -74,3 +74,19 @@ services:
       INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
     # the shared NATS lives on the first node, not in this project
     depends_on: !reset []
+
+  # M15: symmetric topology — Node B runs its own orchestrator so any node
+  # can submit and orchestrate without a fixed controller. It owns tasks
+  # submitted to mesh.task.submit.node-b (origin_node routing).
+  orchestrator:
+    extends:
+      file: docker-compose.yml
+      service: worker-coder
+    command: ["python", "-m", "memnc.orchestrator"]
+    environment:
+      NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NATS_TOKEN: ${NATS_TOKEN:-dev-token}
+      NODE_NAME: node-b
+      MESH_GATE: ${MESH_GATE:-false}
+      MESH_CLAIM: ${MESH_CLAIM:-false}
+    depends_on: !reset []
