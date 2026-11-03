@@ -157,9 +157,13 @@ you can even stop it mid-run and the pipeline keeps going.
 
 M11 (CAS claim), M12 (cross-node claim live, A→B and B→A), M13 (agent
 `mesh_submit` sub-tasks cross-node live) and M14 (worker-driven pipeline,
-unit-green, live test pending) are done on `mesh/architecture`; next: M15
-(symmetric orchestrator-less topology) and M16 (peer-orchestration demo).
-See `docs/memnc-mesh-plan.md` §14.1.
+unit-green, live test pending) are done on `mesh/architecture`; M15
+(symmetric topology: owner-routed subjects, origin_node, Node-B
+orchestrator, wildcard+durable-name fixes — commits 86fc593/928e2ed) is
+code-done, live test pending. Next: M14/M15 live tests, then M16
+(peer-orchestration demo), then the Ausbau-Stufe (§14.2: smoke gate,
+Swift default backend, mesh console UI, human-in-the-loop steering).
+See `docs/memnc-mesh-plan.md` §14.1–§14.2.
 
 ## Configuration
 
