@@ -8,6 +8,7 @@ import json
 from memnc.config import Settings
 from memnc.orchestrator import Orchestrator
 from memnc.schema import (
+    SUBJECT_SUBMIT_NODE,
     Envelope,
     Kind,
     Role,
@@ -80,6 +81,8 @@ def _orchestrator(**settings_kwargs) -> Orchestrator:
 def _submit_message(submission: TaskSubmission):
     class _Msg:
         data = submission.model_dump_json().encode()
+        # M15: _on_submit routes on the subject's node token
+        subject = SUBJECT_SUBMIT_NODE.format(node=Settings().node_name)
 
         async def respond(self, payload):
             self.replied = json.loads(payload)

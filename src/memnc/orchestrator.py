@@ -52,7 +52,9 @@ class Orchestrator:
         Path(self.settings.workspace_root).mkdir(parents=True, exist_ok=True)
         assert self.bus.nc is not None
         self._submit_sub = await self.bus.nc.subscribe(
-            SUBJECT_SUBMIT_NODE.format(node=self.settings.node_name),
+            # M15: wildcard — every orchestrator sees all submissions but only
+            # handles those addressed to its own node (target = last token).
+            SUBJECT_SUBMIT_NODE.format(node="*"),
             cb=self._on_submit,
         )
         # M10: queryable ledger — any granted agent can read the mesh state.
@@ -63,7 +65,7 @@ class Orchestrator:
             SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
         )
         self._results = await self.bus.pull_results(
-            durable=f"orchestrator-results.{self.settings.node_name}"
+            durable=f"orchestrator-results-{self.settings.node_name}"
         )
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
@@ -90,6 +92,16 @@ class Orchestrator:
 
     async def _on_submit(self, message) -> None:
         try:
+            # M15: only the addressed node's orchestrator handles a
+            # submission; the others stay silent (no double task creation).
+            # Legacy: the default orchestrator (node_name "orchestrator")
+            # also accepts "node-a" (the default NODE_NAME in .env).
+            target_node = message.subject.split(".")[-1]
+            accepted = {self.settings.node_name}
+            if self.settings.node_name == "orchestrator":
+                accepted.add("node-a")
+            if target_node not in accepted:
+                return
             submission = TaskSubmission.model_validate_json(message.data)
             # M11: recursion limit for agents-as-submitters.
             if submission.depth >= self.settings.max_submit_depth:
