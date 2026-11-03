@@ -9,6 +9,8 @@ from memnc.schema import TaskSnapshot, TaskState, TaskSubmission
 
 from test_m11 import FakeBus
 
+from memnc.schema import SUBJECT_SUBMIT_NODE
+
 
 def _orch(node: str) -> Orchestrator:
     settings = Settings()
@@ -50,7 +52,8 @@ def test_submit_stamps_origin_node():
         return _FakeMsg()
 
     a.bus.nc.request = fake_submit  # type: ignore[method-assign]
-    msg = type("M", (), {"data": TaskSubmission(task="hello").model_dump_json().encode()})()
+    msg = type("M", (), {"data": TaskSubmission(task="hello").model_dump_json().encode(),
+                         "subject": SUBJECT_SUBMIT_NODE.format(node="node-a")})()
     asyncio.run(a._on_submit(msg))
     task_id = next(iter(a.bus.snapshots))
     assert a.bus.snapshots[task_id].origin_node == "node-a"
