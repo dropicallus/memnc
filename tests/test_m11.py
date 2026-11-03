@@ -49,7 +49,7 @@ class ClaimNats:
         self.max_submit_depth = 2
 
     async def request(self, subject, data, timeout=10):
-        assert subject == SUBJECT_SUBMIT
+        assert subject.startswith("mesh.task.submit")
         submission = json.loads(data)
         if submission.get("depth", 0) >= self.max_submit_depth:
             raise _RejectError("depth limit")

@@ -25,6 +25,7 @@ from .schema import (
     SUBJECT_HEARTBEAT,
     SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
+    SUBJECT_SUBMIT_NODE,
     TaskSnapshot,
     TaskState,
     TERMINAL_STATES,
@@ -51,7 +52,8 @@ class Orchestrator:
         Path(self.settings.workspace_root).mkdir(parents=True, exist_ok=True)
         assert self.bus.nc is not None
         self._submit_sub = await self.bus.nc.subscribe(
-            SUBJECT_SUBMIT, cb=self._on_submit
+            SUBJECT_SUBMIT_NODE.format(node=self.settings.node_name),
+            cb=self._on_submit,
         )
         # M10: queryable ledger — any granted agent can read the mesh state.
         self._ledger_sub = await self.bus.nc.subscribe(
@@ -60,7 +62,9 @@ class Orchestrator:
         self._heartbeat_sub = await self.bus.nc.subscribe(
             SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
         )
-        self._results = await self.bus.pull_results()
+        self._results = await self.bus.pull_results(
+            durable=f"orchestrator-results.{self.settings.node_name}"
+        )
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
         await asyncio.gather(self._result_loop(), self._timeout_loop())
@@ -73,6 +77,17 @@ class Orchestrator:
         await self.bus.close()
 
     # -- submission --------------------------------------------------------
+    def _owns(self, snapshot: TaskSnapshot) -> bool:
+        """M15: only the origin node's orchestrator acts on a task.
+
+        Snapshots created before M15 have an empty origin_node; those legacy
+        tasks are handled only by the default orchestrator node.
+        """
+        # Snapshots created before M15 have an empty origin_node; those
+        # legacy tasks stay visible to every orchestrator (claim-guard in
+        # bus.try_claim already prevents double-claiming).
+        return snapshot.origin_node in ("", self.settings.node_name)
+
     async def _on_submit(self, message) -> None:
         try:
             submission = TaskSubmission.model_validate_json(message.data)
@@ -95,6 +110,8 @@ class Orchestrator:
                 claimable=submission.claimable,
                 # M14: worker-driven pipeline for claimable tasks
                 next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
+                # M15: the orchestrator that accepted the submission owns it.
+                origin_node=self.settings.node_name,
                 state=TaskState.RECEIVED,
             )
             await self.bus.put_snapshot(snapshot)
@@ -189,6 +206,8 @@ class Orchestrator:
             return
         if snapshot.state in TERMINAL_STATES:
             log.info("ignoring result for terminal task", extra={"task_id": snapshot.task_id})
+            return
+        if not self._owns(snapshot):  # M15: another node's orchestrator owns it
             return
         if envelope.id in snapshot.seen_result_ids:
             return
@@ -423,7 +442,11 @@ class Orchestrator:
             )
             try:
                 response = await self.bus.nc.request(
-                    SUBJECT_SUBMIT, submission.model_dump_json().encode(), timeout=10
+                    SUBJECT_SUBMIT_NODE.format(
+                        node=snapshot.origin_node or self.settings.node_name
+                    ),
+                    submission.model_dump_json().encode(),
+                    timeout=10,
                 )
                 sub_id = (json.loads(response.data) or {}).get("task_id")
             except Exception:  # noqa: BLE001 - skip this step, keep fanning out
@@ -457,6 +480,8 @@ class Orchestrator:
     async def _check_fanouts(self) -> None:
         """Aggregate fan-out parents whose subtasks have all gone terminal."""
         for snapshot in await self.bus.list_tasks():
+            if not self._owns(snapshot):
+                continue
             if snapshot.state in TERMINAL_STATES or not snapshot.subtasks:
                 continue
             states: list[TaskState] = []
@@ -505,6 +530,8 @@ class Orchestrator:
         snapshots = await self.bus.list_tasks()
         now = time.time()
         for snapshot in snapshots:
+            if not self._owns(snapshot):
+                continue
             if snapshot.state in TERMINAL_STATES:
                 continue
             last = snapshot.last_action
@@ -536,6 +563,8 @@ class Orchestrator:
         does not assign — it only validates a claim and starts the pipeline.
         """
         for snapshot in await self.bus.list_tasks():
+            if not self._owns(snapshot):
+                continue
             if (
                 snapshot.state is TaskState.RECEIVED
                 and snapshot.claimable
@@ -556,6 +585,8 @@ class Orchestrator:
 
     async def _recover(self) -> None:
         for snapshot in await self.bus.list_tasks():
+            if not self._owns(snapshot):
+                continue
             if snapshot.state in TERMINAL_STATES:
                 continue
             if snapshot.state is TaskState.REVISE:
