@@ -536,6 +536,21 @@ Diese Stufe kommt **nach** M16 (echtes Peer-Orchestration live) und macht aus de
 
 Abgrenzung: S4 ersetzt keine M9-ACLs (Maschinen-Ebene) und keine Trust-Scores (statistische Ebene) — das Human-Veto ist die dritte Ebene darüber.
 
+### 14.3 Ausblick: Selbstorganisation & soziale Kompetenz (2026-11-03)
+
+Zwei Kernelemente tragen das Mesh-Konzept über DeepSeeds dsh-superagent hinaus (deren Panel zeigt nur „what needs a person" — der Mensch im Loop; unsere Agenten organisieren sich zusätzlich *untereinander*):
+
+**Selbstorganisation** — der Mesh verteilt sich selbst, kein zentraler Dispatcher:
+- *schon real:* CAS-Claiming cross-node (M11/M12), Agent-Subtasks über Hierarchie-Ebenen (M13), Owner-Routing + Fanout (M15)
+- *Ausbau:* **dynamische Rollen** — die Diskussion (disc_20261103_230643) kam zum Schluss, dass feste Leader-Follower-Rollen bei async Latenz Deadlocks erzeugen; zustandsbasierte Koordination + Capability-Hierarchie stattdessen. **Trust-Score in die Claim-Entscheidung** (M8-Score beim Claim-Poll): zuverlässige Nodes erben attraktivere Tasks automatisch — Reputations-getriebene Selbstorganisation.
+
+**Soziale Kompetenz** — Verhandlung statt Befehlsausführung:
+- *Modell↔Modell:* Peer-Diskussion mit fachlichem Widerspruch und Selbstbeendigung ([DONE], disc_20261103_230643) als nachweisbares Verhandlungsmuster; Critique-Schritt als institutionalisiertes Peer-Review; Registry/Capabilities als soziales Protokoll („wer kann was")
+- *Modell↔Mensch:* Trust-Ledger als soziales Gedächtnis, Grants als Autoritätsinstanz (M9), Approval-Gate (S4) als Human-Veto
+- *Ausbau:* Task-gesteuerte Konsensfindung — kritische Tasks dürfen vor Ausführung eine Modell-Debatte anstoßen (die Diskussions-Harness wird zum Mesh-Primitiv); Verdict-Empfehlung fließt in den Trust-Score ein.
+
+**Design-Konsequenz für S3:** Die Console ist Beobachtungsfenster der Selbstorganisation, nicht Dashboard: sie zeigt *wer sich wie organisiert* (Claims, Rollen, Node-Roster) und *wie die Verhandlung steht* (Critique-Verdicts, Trust, Grants) — nicht nur eine Task-Liste.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
