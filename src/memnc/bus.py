@@ -473,11 +473,11 @@ class Bus:
             max_deliver=max_deliver,
         )
 
-    async def pull_results(self):
+    async def pull_results(self, durable: str = "orchestrator-results"):
         assert self.js is not None
         return await self._pull(
             SUBJECT_RESULT.format(role="*"),
-            "orchestrator-results",
+            durable,
             ack_wait_s=60,
             max_deliver=5,
         )

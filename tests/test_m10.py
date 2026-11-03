@@ -31,7 +31,7 @@ class FakeNats:
         self._next_id = 1000
 
     async def request(self, subject, data, timeout=10):
-        assert subject == SUBJECT_SUBMIT
+        assert subject.startswith("mesh.task.submit")
         submission = json.loads(data)
         self._next_id += 1
         task_id = f"sub-{self._next_id}"
