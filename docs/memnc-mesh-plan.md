@@ -573,6 +573,18 @@ Zwei Kernelemente tragen das Mesh-Konzept über DeepSeeds dsh-superagent hinaus 
 **Rollen-Finetuning (LoRA):**
 - Modelle mit LoRA auf sozialer Interaktion und Rollenverhalten finetunen (Planner/Coder/Critic als Verhaltensstile, nicht nur Prompt-Rollen) — passt zur Memory-Vision (Growing-LoRA, Fisher-Merge): die Mesh-Rollen werden trainierbare Model-Zustände; der Critic lernt aus S1-artigen Läufen, wann Strictness gerechtfertigt ist (siehe Critic-Laxheit im ersten S1-Lauf).
 
+### 14.5 Ausblick: AutoSwarm — heterogene Agent-Harnesses unter einem Dach (2026-11-04)
+
+Referenz: [HKUDS/AutoSwarm](https://github.com/HKUDS/AutoSwarm) (arXiv 2610.33048, MIT) — keine Ablösung unseres Mesh-Designs, aber mehrere Konzepte, die sich gut für den weiteren Ausbau eignen:
+
+- **Capability-basierte Agent-Auswahl statt fester Rollen:** AutoSwarm wählt Agents nach Capability-Profil (coding, research, browsing, ...), nicht nach Konfigurations-Rolle. Für memnc denkbar: das Roster enthält nicht nur `(node, model)`, sondern Capability-Tags; der Router matched Task-Anforderungen gegen Capabilities statt gegen statische Rollen.
+- **Shared Context/Memory über Harness-Grenzen:** Kern-These von AutoSwarm ist „Unify your context" — Agents haben isolierte Kontexte; die Koordinationsschicht teilt Kontext/Memory. Unser Pendant: der NATS-Ledger als Kontext-Bus. Ausblick: Task-Kontext (Plan, Workspace-State, relevante Graph-Ausschnitte) nicht als ein großer Prompt, sondern als queried Ressource (Anschluss an §14.4 Evidenz-Metriken).
+- **Collaboration Formation mit Acceptance-Criteria:** vor der Verteilung werden Responsibility-Boundaries und explizite Akzeptanzkriterien pro Subtask definiert. Passt direkt auf unseren Critique-Loop: DONE-Definition maschinell prüfbar machen statt wohlwollender Critic.
+- **Execution Coordination als geteilter State:** Dependencies, Supervisory-Beziehungen und Review-Feedback aktualisieren einen gemeinsamen State statt Nachrichten-Ping-Pong — unser Ledger ist bereits so gebaut; ausbauen zu expliziten Abhängigkeits-Edges zwischen Subtasks.
+- **Adapter-Gedanke:** AutoSwarm orchestriert fremde Harnesses (Codex, Claude Code, Hermes, ...) über deren native CLIs. Unser Mesh ist aktuell homogen (eigener Harness auf beiden Nodes). Später denkbar: fremde Harnesses als Worker-Adapter andocken — dafür muss die Ledger-/Claim-API als Adapter-Interface genügen.
+
+Status: alles Ausblick, nichts davon implementiert.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
