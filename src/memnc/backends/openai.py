@@ -97,4 +97,15 @@ class OpenAIBackend:
             timeout=min(self.timeout, 15),
             retries=1,
         )
-        return [model.get("id", "") for model in data.get("data", [])]
+        # OpenAI shape: {"data": [{"id": ...}]}. Some compatible servers
+        # (llama.cpp builds, gateways) return an Ollama-like {"models": [...]}.
+        entries = data.get("data") or data.get("models") or []
+        models: list[str] = []
+        for entry in entries:
+            if isinstance(entry, str):
+                models.append(entry)
+                continue
+            name = entry.get("id") or entry.get("name") or entry.get("model")
+            if name:
+                models.append(name)
+        return models

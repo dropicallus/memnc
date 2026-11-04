@@ -3,8 +3,13 @@ from pathlib import Path
 import pytest
 
 from memnc.config import Settings
-from memnc.schema import Envelope, TaskSnapshot, TaskState
-from memnc.worker import Worker, tool_key
+from memnc.schema import CoderOutput, Envelope, TaskSnapshot, TaskState
+from memnc.worker import (
+    Worker,
+    merge_written_files,
+    python_syntax_errors,
+    tool_key,
+)
 
 
 class FakeBus:
@@ -48,6 +53,38 @@ def test_tool_key_is_stable_and_sensitive():
     assert tool_key("c1", "read", {"a": 1}) == tool_key("c1", "read", {"a": 1})
     assert tool_key("c1", "read", {"a": 1}) != tool_key("c2", "read", {"a": 1})
     assert tool_key("c1", "read", {"a": 1}) != tool_key("c1", "read", {"a": 2})
+
+
+def test_python_syntax_errors_reports_only_broken_python():
+    errors = python_syntax_errors(
+        {"good.py": "x = 1\n", "bad.py": "if __name__ == $1):\n", "notes.txt": "x"}
+    )
+    assert len(errors) == 1
+    assert errors[0].startswith("bad.py:")
+
+
+def test_merge_written_files_prefers_json_artifacts():
+    output = CoderOutput.model_validate(
+        {
+            "summary": "",
+            "files": [{"path": "a.py", "content": "new"}],
+            "commands": [],
+        }
+    )
+    merged = merge_written_files(output, {"a.py": "old", "b.py": "tool"})
+    assert merged == {"a.py": "new", "b.py": "tool"}
+
+
+def test_note_written_tracks_only_successful_writes(tmp_path):
+    worker = make_worker(tmp_path, FakeBus())
+    worker._note_written(
+        "write_file", {"path": "a.py", "content": "x = 1"}, '{"ok": true}'
+    )
+    worker._note_written(
+        "write_file", {"path": "b.py", "content": "y"}, '{"ok": false}'
+    )
+    worker._note_written("read_file", {"path": "c.py"}, '{"ok": true}')
+    assert worker._written_files == {"a.py": "x = 1"}
 
 
 @pytest.mark.asyncio
