@@ -525,6 +525,8 @@ Nicht-Blocker (optional danach): Broker-JWT/ACL-Hardening (M9-Rest), `MAX_TOOL_S
 
 ### 14.2 Ausbau-Stufe: Smoke-Gate, UI, Human-Steering (2026-11-03)
 
+*Status: S1 ist implementiert und grün (`39be633`). S2–S4 sind reine Planung — nichts davon ist gebaut. Auch die Ausblicks-Abschnitte 14.3/14.4 sind Vision, nicht Roadmap mit Termin.*
+
 Diese Stufe kommt **nach** M16 (echtes Peer-Orchestration live) und macht aus dem Mesh ein täglich benutzbares Werkzeug. Reihenfolge bewusst so: erst das Gate (S1), dann die Modelle (S2), dann Sichtbarkeit (S3), dann Kontrolle (S4).
 
 | Step | Inhalt | Done-Kriterium |
