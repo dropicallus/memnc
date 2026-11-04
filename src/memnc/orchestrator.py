@@ -346,6 +346,10 @@ class Orchestrator:
         snapshot.attempt = 0 if result.attempt_reset else snapshot.attempt + result.attempt_delta
         snapshot.revisions += result.revision_delta
         snapshot.record(event.type, event.reason)
+        if event.type in ("result", "failure", "timeout") and not event.ok:
+            snapshot.error = event.reason or snapshot.error
+        elif event.type == "result" and event.ok:
+            snapshot.error = None
         if event.reason and result.state is TaskState.FAILED:
             snapshot.error = event.reason
 
@@ -415,6 +419,7 @@ class Orchestrator:
                 if snapshot.critique
                 else None,
                 "revisions": snapshot.revisions,
+                "last_error": snapshot.error,
                 "workspace_root": str(self.settings.workspace_root),
                 "role": role.value,
             },
