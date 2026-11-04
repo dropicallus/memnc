@@ -141,6 +141,18 @@ async def test_openai_base_url_with_v1_suffix():
 
 
 @pytest.mark.asyncio
+async def test_openai_list_models_accepts_ollama_shape():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "tev-27b-q4"}, {"model": "other"}]},
+        )
+
+    backend = OpenAIBackend("http://box:8000", client=mock_client(handler))
+    assert await backend.list_models() == ["tev-27b-q4", "other"]
+
+
+@pytest.mark.asyncio
 async def test_retries_on_transient_status():
     calls = {"n": 0}
 
