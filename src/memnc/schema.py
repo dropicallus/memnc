@@ -95,6 +95,7 @@ class NodeInfo(BaseModel):
     node_id: str
     roles: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=list)
+    disk_models: list[str] = Field(default_factory=list)  # T7.5: loadable, not loaded
     vram_gb: float = 0.0
     gpu: str = ""
     load: float = 0.0
@@ -109,6 +110,7 @@ class NodeInfo(BaseModel):
             node_id=self.node_id,
             roles=sorted(set(self.roles) | set(other.roles)),
             models=sorted(set(self.models) | set(other.models)),
+            disk_models=sorted(set(self.disk_models) | set(other.disk_models)),
             vram_gb=self.vram_gb or other.vram_gb,
             gpu=self.gpu or other.gpu,
             load=max(self.load, other.load),

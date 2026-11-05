@@ -182,6 +182,7 @@ async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
             print(
                 f"{node.node_id}  roles={','.join(node.roles) or '-'}  "
                 f"models={','.join(node.models) or '-'}  "
+                f"disk={','.join(node.disk_models) or '-'}  "
                 f"vram={node.vram_gb or 0:g}GB  gpu={node.gpu or '-'}  "
                 f"updated={node.updated_at}"
             )
