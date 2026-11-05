@@ -606,6 +606,26 @@ Deliberately left out: no cloud dependency (the bot runs locally, only the Teleg
 
 *Note from the AgentLance reading (T7 design principle):* the authors themselves concede the main weakness of their market — agents often misestimate their bids (private costs) and bid suboptimally; the paper's fixes (reputation update, strategy notes) mitigate this but do not remove it. For memnc this means: our claim weighting must never be blindly guessed from model context — bids/reputation draw only on hard numbers kept in the ledger (measured task runtimes, critic-score history, verify-gate results). No self-declared capabilities in the roster; capabilities are measured, not claimed.
 
+*Status (2026-11-05):* T0, T1 and T6 shipped (T6 incl. the semantic fix: `needs` VRAM/model constraints gate the executing coder claim only; the roles constraint applies to every claim). Telegram commands improved: compact `/tasks` summary (state counts + active tasks + recent, with task titles), `/tasks <state>` filter, `/roster`. T2–T5, T7 open.
+
+### 14.7 Outlook: model demand planning & LAN model sharing (2026-11-05)
+
+*Trigger:* Frank's idea — shuttle models back and forth between nodes so a model does not have to be loaded multiple times.
+
+*Analysis:* two very different problems hide in this idea.
+
+1. **Making model demand visible** (cheap, builds directly on T6): the roster already advertises which model each node has *loaded*. What is missing is what a node *could* load — models present on its local disk (Ollama blob store).
+2. **Moving model bytes instead of re-downloading** (the interesting part): live VRAM migration is not feasible — llama.cpp/GGUF has no snapshot mechanism, a model must always be freshly loaded at the destination. The real saving is the download, not the load. With 20 GB GGUFs, a LAN transfer from a peer node beats an internet pull by orders of magnitude.
+
+The practical win is therefore not shuttling but **demand-driven loading**: one model per node on disk, load/unload in VRAM on demand, coordinated through the roster.
+
+| Step | Content | Done criterion |
+|---|---|---|
+| **T7.5 — Model demand planning** | The roster (T6) advertises `loaded_models` + `disk_models` per node. When a task's `needs.model` is unmet everywhere (no node has it loaded), the orchestrator checks disk_models: if a node has the model on disk, it emits a `model_request` event proposing *loading* (not pulling) — reusing the T7 approval gate: Frank approves from Telegram → node loads the model → roster updates → claim market serves the task. If no node has it on disk either, the request falls back to a `pull` proposal (T7 path) | A task needing model X, held on disk by node B but loaded nowhere, triggers one Telegram approval; after approve, node B loads X from disk and claims the task — zero network download |
+| **T8 — LAN model sharing (optional, later)** | Node-to-node GGUF transfer for models not present on disk anywhere: an HTTP file server (or shared blob mount/rsync) lets a node fetch the Ollama blob from a peer over LAN before registering it. Only worth building once several nodes permanently hold different model sets | A model existing only on node A can be provisioned onto node B over LAN with human approval, without touching the internet |
+
+Context: node-a currently holds three edge models (Gemma-4-31B-Humanlike-Chat as critic, Apex-35B-V1.0, ripple) — role assignment for Apex and ripple is still open and deliberately deferred until this stage is discussed.
+
 
 ## 15. Risks & mitigations
 
