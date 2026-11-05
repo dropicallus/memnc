@@ -136,5 +136,22 @@ services:
     cpus: 2.0
     pids_limit: 256
 
+  telegram:
+    <<: *mesh-service
+    command: ["python", "-m", "memnc.telegram"]
+    environment:
+      <<: *mesh-env
+      NODE_NAME: ${NODE_NAME:-node-a}-telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOW: ${TELEGRAM_ALLOW:-}
+      TELEGRAM_POLL_S: ${TELEGRAM_POLL_S:-25}
+    volumes: []   # read-only mirror: no workspace access
+    depends_on:
+      nats:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+
 volumes:
   nats-data:
