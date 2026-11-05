@@ -24,6 +24,7 @@ dev = [
 
 [project.scripts]
 meshctl = "memnc.cli:main"
+memnc-telegram = "memnc.telegram:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
