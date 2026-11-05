@@ -112,7 +112,12 @@ def build_user_prompt(role: Role, payload: dict[str, Any]) -> str:
     if role is Role.CRITIC:
         parts.append(
             "Decide whether the implementation satisfies the task and plan. "
-            "Return the JSON verdict only."
+            "Verify claims against the actual files before judging: read the "
+            "changed files with read_file and, when the task is runnable code, "
+            "execute it with run_shell (e.g. `python <file>`). Only issue a "
+            "REVISE verdict for defects you observed yourself in tool output "
+            "or file contents — never from assumption. If verification shows "
+            "the task is fulfilled, return state DONE. Return the JSON verdict only."
         )
     elif role is Role.CODER:
         parts.append(
