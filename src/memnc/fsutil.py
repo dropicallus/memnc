@@ -20,6 +20,17 @@ def safe_path(root: Path, relative: str) -> Path:
 
     root = Path(root).resolve()
     candidate = Path(relative)
+    # Small models often redundantly repeat the workspace directory name in
+    # the path ("write workspace/m14_claim.py" while root IS /workspace),
+    # which nests files under root/workspace/... Strip the redundant prefix
+    # so the file lands where the task text means it to.
+    root_name = root.name
+    while (
+        root_name
+        and len(candidate.parts) > 1
+        and candidate.parts[0] == root_name
+    ):
+        candidate = Path(*candidate.parts[1:])
     if candidate.is_absolute():
         resolved = candidate.resolve()
     else:
