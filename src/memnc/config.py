@@ -85,6 +85,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # T1: read-only Telegram observer. Empty TELEGRAM_ALLOW = mirror to nobody
+    # (the observer refuses to start, so a leaked token alone does nothing).
+    telegram_bot_token: str | None = None
+    telegram_allow: str = ""
+    telegram_poll_s: int = 25
+
     def model_for(self, role: Role) -> str:
         return {
             Role.PLANNER: self.model_planner,
