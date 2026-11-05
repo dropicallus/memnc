@@ -1,9 +1,12 @@
 # Additional worker node: join an existing NATS server.
 #
-#   NATS_URL=nats://192.168.1.10:4222 NODE_NAME=node-b \
+#   NATS_URL=nats://<host-a-ip>:4222 NODE_NAME=node-b MESH_GATE=true \
 #     docker compose -f docker-compose.node.yml up --build -d
 #
 # Do not run the `nats` or `orchestrator` service here; the first node owns them.
+# With MESH_GATE=true the orchestrator on the first node auto-grants agents
+# whose node matches MESH_GRANT_NODES (set e.g. MESH_GRANT_NODES=node-b-*
+# there). The adapter below joins as a memnc.agent (M7 capability registry).
 
 services:
   worker-planner:
@@ -12,8 +15,13 @@ services:
       service: worker-planner
     environment:
       NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}-planner
+      MESH_GATE: ${MESH_GATE:-false}
+      MESH_CLAIM: ${MESH_CLAIM:-false}
       INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+    # the shared NATS lives on the first node, not in this project
+    depends_on: !reset []
 
   worker-coder:
     extends:
@@ -21,8 +29,13 @@ services:
       service: worker-coder
     environment:
       NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}-coder
+      MESH_GATE: ${MESH_GATE:-false}
+      MESH_CLAIM: ${MESH_CLAIM:-false}
       INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+    # the shared NATS lives on the first node, not in this project
+    depends_on: !reset []
 
   worker-critic:
     extends:
@@ -30,5 +43,50 @@ services:
       service: worker-critic
     environment:
       NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}-critic
+      MESH_GATE: ${MESH_GATE:-false}
+      MESH_CLAIM: ${MESH_CLAIM:-false}
       INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+    # the shared NATS lives on the first node, not in this project
+    depends_on: !reset []
+
+  # Heterogeneous agent (M7/M9): advertises its skills into mesh.registry and
+  # answers work on its pinned inbox. Needs a grant when MESH_GATE=true —
+  # granted automatically if NODE_NAME matches MESH_GRANT_NODES on the
+  # orchestrator host, otherwise: meshctl grant <agent_id>
+  agent:
+    extends:
+      file: docker-compose.yml
+      service: worker-coder
+    command: ["python", "-m", "memnc.adapter",
+              "--name", "${NODE_NAME:-node-b}-agent",
+              "--node", "${NODE_NAME:-node-b}",
+              "--model", "${AGENT_MODEL:-qwen2.5-coder:7b}",
+              "--contact", "mcp://memnc-agent",
+              "--skill", "code"]
+    environment:
+      NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NATS_TOKEN: ${NATS_TOKEN:-dev-token}
+      NODE_NAME: ${NODE_NAME:-node-b}
+      MESH_GATE: ${MESH_GATE:-false}
+      MESH_CLAIM: ${MESH_CLAIM:-false}
+      INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
+    # the shared NATS lives on the first node, not in this project
+    depends_on: !reset []
+
+  # M15: symmetric topology — Node B runs its own orchestrator so any node
+  # can submit and orchestrate without a fixed controller. It owns tasks
+  # submitted to mesh.task.submit.node-b (origin_node routing).
+  orchestrator:
+    extends:
+      file: docker-compose.yml
+      service: worker-coder
+    command: ["python", "-m", "memnc.orchestrator"]
+    environment:
+      NATS_URL: ${NATS_URL:?set NATS_URL to the shared NATS server}
+      NATS_TOKEN: ${NATS_TOKEN:-dev-token}
+      NODE_NAME: node-b
+      MESH_GATE: ${MESH_GATE:-false}
+      MESH_CLAIM: ${MESH_CLAIM:-false}
+    depends_on: !reset []

@@ -15,22 +15,12 @@ from memnc.worker import (
 class FakeBus:
     def __init__(self):
         self.snapshots = {}
-        self.tool_caches = {}
 
     async def get_snapshot(self, task_id):
         return self.snapshots.get(task_id)
 
     async def put_snapshot(self, snapshot):
         self.snapshots[snapshot.task_id] = snapshot.model_copy(deep=True)
-
-    async def get_tool_cache(self, task_id, command_id):
-        return dict(self.tool_caches.get((task_id, command_id), {}))
-
-    async def put_tool_cache(self, task_id, command_id, results):
-        self.tool_caches[(task_id, command_id)] = dict(results)
-
-    async def delete_tool_cache(self, task_id, command_id):
-        self.tool_caches.pop((task_id, command_id), None)
 
     async def connect(self):
         return None
@@ -112,8 +102,8 @@ async def test_tool_results_are_replayed_not_reexecuted(tmp_path):
 
     assert first == second == "result"
     assert len(worker.tools.calls) == 1
-    cache = bus.tool_caches[("t1", "cmd1")]
-    assert len(cache) == 1
+    stored = bus.snapshots["t1"]
+    assert len(stored.completed_tool_calls) == 1
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,17 @@ def safe_path(root: Path, relative: str) -> Path:
 
     root = Path(root).resolve()
     candidate = Path(relative)
+    # Small models often redundantly repeat the workspace directory name in
+    # the path ("write workspace/m14_claim.py" while root IS /workspace),
+    # which nests files under root/workspace/... Strip the redundant prefix
+    # so the file lands where the task text means it to.
+    root_name = root.name
+    while (
+        root_name
+        and len(candidate.parts) > 1
+        and candidate.parts[0] == root_name
+    ):
+        candidate = Path(*candidate.parts[1:])
     if candidate.is_absolute():
         resolved = candidate.resolve()
     else:
@@ -82,11 +93,12 @@ def list_tree(root: Path, depth: int = 2, max_entries: int = 200) -> list[str]:
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
         level = len(current.relative_to(root).parts)
-        if level >= max(depth - 1, 0):
-            dirnames[:] = []
         dirnames[:] = sorted(d for d in dirnames if d not in ignored)
-        for name in sorted(filenames)[:max_entries]:
-            entries.append(str((current / name).relative_to(root)))
-            if len(entries) >= max_entries:
-                return entries
+        if level >= depth:
+            dirnames[:] = []
+        if level + 1 <= depth:
+            for name in sorted(filenames)[:max_entries]:
+                entries.append(str((current / name).relative_to(root)))
+                if len(entries) >= max_entries:
+                    return entries
     return entries

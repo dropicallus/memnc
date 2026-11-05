@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import sys
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -14,18 +15,27 @@ from .agent import parse_role_output, run_agent
 from .backends import make_backend
 from .bus import Bus
 from .config import Settings, get_settings
+from .fsm import Event, transition
 from .fsutil import apply_artifacts
 from .mcp.client import MCPClient
 from .roles import PROMPT_VERSION, SYSTEM_PROMPTS, build_user_prompt
 from .schema import (
     CoderOutput,
+    CriticIssue,
     Envelope,
     FileArtifact,
     ResultPayload,
     Role,
+    SUBJECT_CMD,
     SUBJECT_HEARTBEAT,
     SUBJECT_RESULT,
+    SUBJECT_SUBMIT,
+    SUBJECT_SUBMIT_NODE,
     TaskSnapshot,
+    TaskSubmission,
+    TaskState,
+    TERMINAL_STATES,
+    ROLE_OUTPUT as _OUTPUT_SCHEMA,
 )
 
 log = logging.getLogger(__name__)
@@ -33,6 +43,40 @@ log = logging.getLogger(__name__)
 MAX_TOOL_RESULT_CHARS = 8_000
 MAX_CHECKPOINTS = 32
 HEARTBEAT_INTERVAL_S = 5
+
+# M11: mesh_submit — the agent-facing tool that throws a task back into the
+# mesh. This is the core of self-orchestration: a coder inside task X can
+# submit an independent sub-task itself instead of the orchestrator doing it.
+MESH_SUBMIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mesh_submit",
+        "description": (
+            "Submit an independent task into the mesh. The mesh runs it on its "
+            "own pipeline (planner->coder->critic) and returns the new task_id. "
+            "Use for sub-goals that are independent of your current deliverable. "
+            "Only one level of re-submission is allowed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Full task description for the mesh.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional context for the submitted task.",
+                },
+                "fanout": {
+                    "type": "boolean",
+                    "description": "Let the orchestrator split the plan into independent subtasks.",
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
 
 
 def tool_key(command_id: str, name: str, arguments: dict) -> str:
@@ -112,7 +156,13 @@ class Worker:
                 "mcp": bool(self.tools and getattr(self.tools, "available", False)),
             },
         )
-        await asyncio.gather(self._command_loop(), self._heartbeat_loop())
+        await asyncio.gather(
+            self._command_loop(),
+            self._heartbeat_loop(),
+            *(
+                (self._claim_loop(),) if self.settings.mesh_claim else ()
+            ),
+        )
 
     async def stop(self) -> None:
         self._stop.set()
@@ -225,7 +275,6 @@ class Worker:
                 SUBJECT_RESULT.format(role=self.role.value), result_envelope
             )
             await message.ack()
-            await self.bus.delete_tool_cache(envelope.task_id, envelope.id)
             log.info(
                 "result published",
                 extra={
@@ -248,6 +297,9 @@ class Worker:
             if self.tools is not None and getattr(self.tools, "available", False)
             else []
         )
+        # M11: agents as submitters — every role may throw sub-tasks back
+        # into the mesh (bounded by max_submit_depth in the orchestrator).
+        tools.append(MESH_SUBMIT_TOOL)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPTS[role]},
             {
@@ -344,35 +396,452 @@ class Worker:
     async def _execute_tool(
         self, envelope: Envelope, name: str, arguments: dict
     ) -> str:
+        # M11: mesh_submit is a built-in (no MCP needed) — intercept first.
+        if name == "mesh_submit":
+            return await self._mesh_submit(envelope, arguments)
+
         if self.tools is None or not getattr(self.tools, "available", False):
             raise RuntimeError("no MCP tools available")
 
         key = tool_key(envelope.id, name, arguments)
-        cache = await self.bus.get_tool_cache(
-            envelope.task_id, envelope.id
-        )
-        if key in cache:
+        snapshot = await self.bus.get_snapshot(envelope.task_id)
+        if snapshot is not None and key in snapshot.tool_results:
             log.info(
                 "tool replay skipped",
                 extra={"task_id": envelope.task_id, "tool": name},
             )
-            self._note_written(name, arguments, cache[key])
-            return cache[key]
+            replayed = snapshot.tool_results[key]
+            self._note_written(name, arguments, replayed)
+            return replayed
 
         output = await self.tools.call(name, arguments)
         output = output[:MAX_TOOL_RESULT_CHARS]
         self._note_written(name, arguments, output)
 
-        cache = await self.bus.get_tool_cache(
-            envelope.task_id, envelope.id
-        )
-        cache[key] = output
-        while len(cache) > MAX_CHECKPOINTS:
-            cache.pop(next(iter(cache)))
-        await self.bus.put_tool_cache(
-            envelope.task_id, envelope.id, cache
-        )
+        snapshot = await self.bus.get_snapshot(envelope.task_id) or snapshot
+        if snapshot is not None:
+            snapshot.completed_tool_calls.append(key)
+            snapshot.tool_results[key] = output
+            while len(snapshot.completed_tool_calls) > MAX_CHECKPOINTS:
+                snapshot.completed_tool_calls.pop(0)
+            while len(snapshot.tool_results) > MAX_CHECKPOINTS:
+                snapshot.tool_results.pop(next(iter(snapshot.tool_results)))
+            await self.bus.put_snapshot(snapshot)
         return output
+
+    # -- M11: agents as submitters ------------------------------------------
+    async def _mesh_submit(self, envelope: Envelope, arguments: dict) -> str:
+        """Throw an independent task back into the mesh (one nesting level)."""
+        assert self.bus.nc is not None
+        snapshot = await self.bus.get_snapshot(envelope.task_id)
+        depth = (snapshot.depth + 1) if snapshot is not None else 1
+        if depth >= self.settings.max_submit_depth:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": f"max_submit_depth ({self.settings.max_submit_depth}) "
+                    "reached: no further re-submission from inside this task",
+                }
+            )
+        submission = TaskSubmission(
+            task=str(arguments.get("task") or "").strip(),
+            context=str(arguments.get("context") or "")[:2_000],
+            fanout=bool(arguments.get("fanout")),
+            depth=depth,
+            claimable=self.settings.mesh_claim,
+        )
+        if not submission.task:
+            return json.dumps({"ok": False, "error": "task is required"})
+        response = await self.bus.nc.request(
+            # M15: submit to the owning orchestrator (this worker's node).
+            SUBJECT_SUBMIT_NODE.format(node=self.settings.node_name),
+            submission.model_dump_json().encode(),
+            timeout=10,
+        )
+        data = json.loads(response.data) or {}
+        return json.dumps(
+            {"ok": True, "task_id": data.get("task_id"), "depth": depth}
+        )
+
+    # -- M11: ledger-based self-claiming -------------------------------------
+    async def _claim_loop(self) -> None:
+        """Poll the ledger and CAS-claim tasks matching our next role.
+
+        M11: claim = CAS update of task snapshot (bus.try_claim); on conflict
+        (someone was faster) we simply move on.
+        M13: a busy worker must not swallow its own sub-tasks — leaving them
+        to the other node is the point of the mesh.
+        M14: when the task carries a next_role, only that role may claim it
+        and the claiming worker runs the whole pipeline itself (self_pipeline).
+        """
+        worker_id = f"{self.settings.node_name}:{self.role.value}"
+        while not self._stop.is_set():
+            await asyncio.sleep(self.settings.claim_poll_s)
+            try:
+                for snapshot in await self.bus.list_tasks():
+                    if snapshot.state in TERMINAL_STATES:
+                        continue
+                    if not snapshot.claimable or snapshot.claimed_by:
+                        continue
+                    if self._busy:
+                        continue
+                    # M14: role gate — only the scheduled next role claims.
+                    if snapshot.next_role and snapshot.next_role != self.role.value:
+                        continue
+                    claimed = await self.bus.try_claim(
+                        snapshot.task_id, worker_id, role=self.role.value
+                    )
+                    if claimed is None:
+                        continue
+                    log.info(
+                        "task claimed",
+                        extra={
+                            "task_id": claimed.task_id,
+                            "worker": worker_id,
+                        },
+                    )
+                    if (
+                        self.settings.self_pipeline
+                        and self.settings.mesh_claim
+                        and claimed.next_role
+                    ):
+                        await self._self_pipeline(claimed)
+            except Exception:  # noqa: BLE001
+                log.exception("claim loop failed")
+
+    # -- M14: worker-driven pipeline ---------------------------------------
+    async def _self_pipeline(self, snapshot: TaskSnapshot) -> None:
+        """Run our own role on a claimed task, then advance the pipeline.
+
+        Reuses the pure FSM (fsm.transition) for state changes, but replaces
+        the orchestrator's command dispatch with a ledger handoff: the next
+        role is made claimable and any matching worker may claim it.
+        """
+        self._busy = True
+        self._current_task = snapshot.task_id
+        try:
+            # RECEIVED -> PLANNING without a dispatch action: we ARE the
+            # dispatcher now (M14 worker-driven pipeline).
+            if snapshot.state is TaskState.RECEIVED:
+                start = transition(snapshot.state, Event("start"))
+                snapshot.state = start.state
+                snapshot.record("start")
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(snapshot, "state.planning", "claimed")
+            role = Role(snapshot.next_role or self.role.value)
+            envelope = Envelope(
+                task_id=snapshot.task_id,
+                trace_id=snapshot.trace_id,
+                kind="command",
+                role=role,
+                node=self.settings.node_name,
+                state=snapshot.state,
+                attempt=snapshot.attempt,
+                payload={
+                    "task": snapshot.task,
+                    "context": snapshot.context,
+                    "plan": snapshot.plan.model_dump() if snapshot.plan else None,
+                    "code": snapshot.code.model_dump() if snapshot.code else None,
+                    "critique": snapshot.critique.model_dump()
+                    if snapshot.critique
+                    else None,
+                    "revisions": snapshot.revisions,
+                    "workspace_root": str(self.settings.workspace_root),
+                    "role": role.value,
+                },
+            )
+            try:
+                timeout_s = float(self.settings.timeout_for(role))
+                result = await asyncio.wait_for(
+                    self._run(envelope, snapshot), timeout=timeout_s + 5
+                )
+            except asyncio.TimeoutError:
+                result = ResultPayload(ok=False, error="worker timed out")
+            except Exception as exc:  # noqa: BLE001
+                log.exception("self pipeline run failed")
+                result = ResultPayload(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+            result_envelope = Envelope(
+                task_id=envelope.task_id,
+                trace_id=envelope.trace_id,
+                correlation_id=envelope.id,
+                kind="result",
+                role=role,
+                node=self.settings.node_name,
+                state=snapshot.state,
+                attempt=snapshot.attempt,
+                payload=result.model_dump(),
+            )
+            # publish for meshctl tail / a running orchestrator (which will
+            # skip it: we already recorded the id in seen_result_ids)
+            await self.bus.publish_envelope(
+                SUBJECT_RESULT.format(role=role.value), result_envelope
+            )
+            snapshot = await self.bus.get_snapshot(snapshot.task_id) or snapshot
+            await self._advance(snapshot, result_envelope, result)
+        finally:
+            self._busy = False
+            self._current_task = None
+
+    async def _advance(
+        self, snapshot: TaskSnapshot, envelope: Envelope, result: ResultPayload
+    ) -> None:
+        """Worker-side mirror of the orchestrator result handling (M14)."""
+        if snapshot.state in {TaskState.DONE, TaskState.FAILED, TaskState.CANCELLED}:
+            return
+        if envelope.id not in snapshot.seen_result_ids:
+            snapshot.seen_result_ids.append(envelope.id)
+            snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]
+
+        event = Event("result", ok=result.ok, reason=result.error or "")
+        if result.ok and envelope.role is not None:
+            try:
+                output_model = _OUTPUT_SCHEMA[envelope.role]
+                output = output_model.model_validate(result.output)
+                self._store_output(snapshot, envelope.role, output)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("bad output in self pipeline: %s", exc)
+                event = Event("result", ok=False, reason=f"invalid output: {exc}")
+            if (
+                envelope.role is Role.CRITIC
+                and snapshot.critique is not None
+            ):
+                await self._verify_gate(snapshot)
+                event = Event(
+                    "result", ok=True, approved=snapshot.critique.approved
+                )
+        if envelope.node:
+            await self.bus.emit_event(
+                snapshot, "result.executed_on", envelope.node
+            )
+        await self._apply_local(snapshot, event)
+
+    async def _verify_gate(self, snapshot: TaskSnapshot) -> None:
+        """M14 deterministic verification gate.
+
+        Small-model critics hallucinate blockers on correct code. This gate
+        runs mechanical checks on the written artifacts: py_compile every
+        Python file and, if there is exactly one, execute it. Evidence beats
+        the LLM verdict in both directions:
+        - checks pass and the critic rejected -> override to approved
+        - checks fail -> replace the critic's issues with the real errors
+        """
+        critique = snapshot.critique
+        if critique is None:
+            return
+        if critique.approved:
+            return
+        files = snapshot.code.files if snapshot.code else []
+        py_files = [f for f in files if f.path.endswith(".py")]
+        if not py_files:
+            return
+        root = Path(self.settings.workspace_root)
+        evidence: list[str] = []
+        passed = True
+        for f in py_files:
+            path = root / f.path
+            if not path.is_file():
+                evidence.append(f"py_compile {f.path}: MISSING FILE")
+                passed = False
+                continue
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "py_compile", str(path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                evidence.append(f"py_compile {f.path}: TIMEOUT")
+                passed = False
+                continue
+            text = out.decode(errors="replace").strip()
+            evidence.append(
+                f"py_compile {f.path}: exit={proc.returncode}"
+                + (f" {text[:200]}" if text else "")
+            )
+            if proc.returncode != 0:
+                passed = False
+        if passed and len(py_files) == 1:
+            path = root / py_files[0].path
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, str(path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                evidence.append(f"run {py_files[0].path}: TIMEOUT")
+                passed = False
+            else:
+                text = out.decode(errors="replace").strip()
+                evidence.append(
+                    f"run {py_files[0].path}: exit={proc.returncode}"
+                    + (f" output: {text[:300]}" if text else "")
+                )
+                if proc.returncode != 0:
+                    passed = False
+        joined = "\n".join(evidence)
+        log.info("verify gate: passed=%s evidence=%s", passed, joined)
+        if passed:
+            critique.approved = True
+            critique.summary = (
+                "[verify-gate] deterministic checks passed; "
+                "LLM critique overridden.\n" + joined
+            )
+            critique.issues = []
+        else:
+            critique.issues = [
+                CriticIssue(
+                    severity="blocker",
+                    issue=f"[verify-gate] deterministic verification "
+                    f"failed:\n{joined}",
+                    fix="fix the reported runtime/compile errors",
+                )
+            ]
+
+    def _store_output(
+        self, snapshot: TaskSnapshot, role: Role, output
+    ) -> None:
+        if role is Role.PLANNER:
+            snapshot.plan = output
+        elif role is Role.CODER:
+            snapshot.code = output
+            if self.settings.apply_artifacts:
+                apply_artifacts(
+                    self.settings.workspace_root,
+                    snapshot.code.files,
+                    self.settings.max_artifact_bytes,
+                )
+        elif role is Role.CRITIC:
+            snapshot.critique = output
+
+    async def _fanout_local(self, snapshot: TaskSnapshot) -> None:
+        """M16: split a multi-step plan into claimable subtasks (worker-side).
+
+        Mirrors the orchestrator's ``_fanout`` but runs inside the claiming
+        planner worker. Subtasks go to the parent's origin node; the owner
+        orchestrator aggregates via its fanout check.
+        """
+        assert self.bus.nc is not None
+        assert snapshot.plan is not None  # caller guarantees this
+        for step in snapshot.plan.plan:
+            submission = TaskSubmission(
+                task=step.description or f"step {step.id}",
+                context=f"fanout parent={snapshot.task_id} step={step.id}: "
+                f"{snapshot.task[:120]}",
+                depth=snapshot.depth + 1,
+                claimable=True,
+            )
+            try:
+                response = await self.bus.nc.request(
+                    SUBJECT_SUBMIT_NODE.format(
+                        node=snapshot.origin_node or self.settings.node_name
+                    ),
+                    submission.model_dump_json().encode(),
+                    timeout=10,
+                )
+                sub_id = (json.loads(response.data) or {}).get("task_id")
+            except Exception:  # noqa: BLE001 - skip this step, keep fanning out
+                log.exception("fanout submit failed for step %s", step.id)
+                continue
+            if not sub_id:
+                continue
+            snapshot.subtasks[sub_id] = step.id
+            sub = await self.bus.get_snapshot(sub_id)
+            if sub is not None:
+                sub.parent_task_id = snapshot.task_id
+                await self.bus.put_snapshot(sub)
+        if not snapshot.subtasks:
+            # nothing was fanned out — continue the normal single pipeline
+            snapshot.next_role = "coder"
+            snapshot.claimable = True
+            snapshot.record("task.fanout.empty", "no subtasks; single pipeline")
+            await self.bus.put_snapshot(snapshot)
+            return
+        snapshot.self_assign = True  # parent parks in CODING, waits for subtasks
+        snapshot.claimable = False
+        snapshot.next_role = ""
+        # No at_epoch key: the timeout reaper skips fanout-wait parents; the
+        # aggregation runs in the owner orchestrator's fanout check instead.
+        snapshot.last_action = {"role": "fanout-wait"}
+        snapshot.record("task.fanout", f"{len(snapshot.subtasks)} subtasks")
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(
+            snapshot, "state.coding", f"fanout: {len(snapshot.subtasks)} subtasks"
+        )
+
+    async def _apply_local(
+        self, snapshot: TaskSnapshot, event: Event
+    ) -> None:
+        result = transition(
+            snapshot.state,
+            event,
+            attempt=snapshot.attempt,
+            revisions=snapshot.revisions,
+            max_attempts=self.settings.max_attempts,
+            max_revisions=snapshot.max_revisions,
+        )
+        snapshot.state = result.state
+        snapshot.attempt = (
+            0 if result.attempt_reset else snapshot.attempt + result.attempt_delta
+        )
+        snapshot.revisions += result.revision_delta
+        snapshot.record(event.type, event.reason)
+        if event.reason and result.state is TaskState.FAILED:
+            snapshot.error = event.reason
+
+        for action in result.actions:
+            if action.type == "dispatch" and action.role is not None:
+                # M14 handoff: instead of a command, the next role becomes
+                # claimable — any matching worker on any node can pick it up.
+                snapshot.next_role = action.role.value
+                snapshot.claimed_by = ""
+                snapshot.claimable = True
+            elif action.type == "finish":
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.done")
+            elif action.type == "escalate":
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.failed", action.reason)
+                snapshot.error = action.reason
+            elif action.type == "cancel":
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.cancelled", action.reason)
+
+        # M16 worker-driven fan-out: the planning worker splits the plan into
+        # claimable subtasks itself instead of handing the parent back to an
+        # orchestrator. Aggregation stays with the owner orchestrator.
+        if (
+            result.state is TaskState.CODING
+            and snapshot.fanout
+            and snapshot.plan is not None
+            and len(snapshot.plan.plan) > 1
+        ):
+            await self._fanout_local(snapshot)
+            return
+
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(
+            snapshot, f"state.{result.state.value.lower()}", event.reason
+        )
+        log.info(
+            "self pipeline transition",
+            extra={
+                "task_id": snapshot.task_id,
+                "state": result.state.value,
+                "next_role": snapshot.next_role,
+                "revisions": snapshot.revisions,
+            },
+        )
+        if result.state is TaskState.REVISE:
+            await self._apply_local(snapshot, Event("start"))
 
 
 async def _main() -> None:
