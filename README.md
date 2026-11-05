@@ -1,10 +1,11 @@
 # memnc
 
 A lightweight, distributed multi-agent mesh. NATS is the only backbone; a
-durable state-machine orchestrator assigns `planner`, `coder` and `critic`
-roles to worker nodes; each worker runs a local MCP tool server (filesystem +
-shell) and talks to a local inference endpoint (Ollama or any OpenAI-compatible
-API).
+durable state machine drives `planner`, `coder` and `critic` stages across
+worker nodes; each worker runs a local MCP tool server (filesystem + shell)
+and talks to a local inference endpoint (Ollama or any OpenAI-compatible API).
+Claimable tasks run **worker-driven** (M14): the claiming worker advances the
+pipeline itself via CAS role-gated handoffs — the orchestrator is a spectator.
 
 No agent framework, no cloud dependencies, no model serving code.
 
@@ -97,16 +98,72 @@ More capacity on one host:
 docker compose up -d --scale worker-coder=3
 ```
 
-Additional hosts (workers only; NATS and the orchestrator run on the first
-node):
+### Two-machine mesh (gated)
+
+Machine A owns NATS + orchestrator; machine B joins with workers and an
+adapter agent. The capability gate is on, and machine B's agents are granted
+automatically via heartbeat bootstrap (`MESH_GRANT_NODES` on machine A).
+
+**Machine A** (starts broker, orchestrator, workers; allows `node-b-*` to
+join):
 
 ```bash
-NATS_URL=nats://192.168.1.10:4222 NODE_NAME=node-b \
+MESH_GATE=true MESH_GRANT_NODES='node-b-*' docker compose up --build -d
+```
+
+**Machine B** (workers use B's own local Ollama via `host.docker.internal`;
+set `AGENT_MODEL` to a model Ollama on B actually has):
+
+```bash
+NATS_URL=nats://<host-a-ip>:4222 NODE_NAME=node-b MESH_GATE=true \
   docker compose -f docker-compose.node.yml up --build -d
 ```
 
+Verify (from machine A, with `NATS_URL`/`NATS_TOKEN` exported or `.env`):
+
+```bash
+meshctl grants        # node-b-planner / -coder / -critic / -agent appear
+                      # within ~5 s of node B starting (heartbeat bootstrap)
+meshctl registry      # node-b-agent's capability record is listed
+meshctl submit "write a hello world in python" --watch
+meshctl tail <task_id>   # events carry node=<node-a|node-b-…> per dispatch
+```
+
 Workers of the same role share a JetStream durable pull consumer, so each
-command is delivered to exactly one worker in the group.
+command is delivered to exactly one worker in the group — a task may execute
+on either machine. Which node ran a stage shows up in `meshctl tail <id>` /
+`meshctl submit --watch` as a `result.executed_on` event (the executing
+worker's node name), and in the worker's own logs on machine B
+(`docker compose -f docker-compose.node.yml logs -f worker-coder`).
+
+Revoking stays sticky: `meshctl revoke node-b-coder` blocks that agent even
+though heartbeats keep arriving (bootstrap never overwrites an existing grant
+record — delete is respected until manually re-granted).
+
+Without the gate (`MESH_GATE=false`, the default), both machines still work —
+the gate only guards registry writes, not queue-group work delivery.
+
+### Worker-driven pipeline (M14)
+
+Submit with `--claimable` and the pipeline runs without any orchestrator
+dispatch: the snapshot carries `next_role`; only that role can claim it
+(CAS role gate), the claiming worker runs its stage and re-publishes the
+snapshot with the next `next_role` — `RECEIVED→PLANNING→CODING→CRITIQUE→DONE`
+across any nodes, with every stage attributed in the ledger
+(`meshctl ledger`). The orchestrator skips worker-driven tasks entirely;
+you can even stop it mid-run and the pipeline keeps going.
+
+### Roadmap status
+
+M11 (CAS claim), M12 (cross-node claim live, A→B and B→A), M13 (agent
+`mesh_submit` sub-tasks cross-node live) and M14 (worker-driven pipeline,
+unit-green, live test pending) are done on `mesh/architecture`; M15
+(symmetric topology: owner-routed subjects, origin_node, Node-B
+orchestrator, wildcard+durable-name fixes — commits 86fc593/928e2ed) is
+code-done, live test pending. Next: M14/M15 live tests, then M16
+(peer-orchestration demo), then the Ausbau-Stufe (§14.2: smoke gate,
+Swift default backend, mesh console UI, human-in-the-loop steering).
+See `docs/memnc-mesh-plan.md` §14.1–§14.2.
 
 ## Configuration
 
@@ -127,6 +184,8 @@ Everything is environment-driven; see `.env.example` for the full list.
 | `ALLOW_SHELL` | `true` | enable the `run_shell` MCP tool |
 | `SHELL_TIMEOUT_S` | `120` | per-command timeout |
 | `APPLY_ARTIFACTS` | `true` | write coder output files to the workspace |
+| `MESH_CLAIM` | `false` | workers CAS-claim submitted tasks themselves (M11) |
+| `SELF_PIPELINE` | `true` | claiming worker advances claimable tasks itself, no orchestrator dispatch (M14) |
 
 ## Security model
 

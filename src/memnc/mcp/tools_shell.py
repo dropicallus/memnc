@@ -34,7 +34,9 @@ async def run_shell(
             workdir = Path(root).resolve()
         timeout = min(timeout_s if timeout_s > 0 else 120, 3600)
 
-        process = await asyncio.create_subprocess_shell(
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-c",
             cmd,
             cwd=str(workdir),
             stdout=asyncio.subprocess.PIPE,

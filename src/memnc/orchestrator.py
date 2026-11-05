@@ -8,6 +8,7 @@ import logging
 import time
 from pathlib import Path
 
+from . import acl
 from .bus import Bus
 from .config import Settings, get_settings
 from .fsutil import apply_artifacts
@@ -16,15 +17,20 @@ from .schema import (
     CoderOutput,
     CriticOutput,
     Envelope,
+    Kind,
     PlannerOutput,
     ResultPayload,
     Role,
     SUBJECT_CMD,
+    SUBJECT_HEARTBEAT,
+    SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
+    SUBJECT_SUBMIT_NODE,
     TaskSnapshot,
     TaskState,
     TERMINAL_STATES,
     TaskSubmission,
+    GrantLevel,
     new_id,
     now_iso,
 )
@@ -39,16 +45,28 @@ class Orchestrator:
         self._stop = asyncio.Event()
         self._results = None
         self._submit_sub = None
-        self._state_lock = asyncio.Lock()
+        self._heartbeat_sub = None
 
     async def start(self) -> None:
         await self.bus.connect()
         Path(self.settings.workspace_root).mkdir(parents=True, exist_ok=True)
         assert self.bus.nc is not None
         self._submit_sub = await self.bus.nc.subscribe(
-            SUBJECT_SUBMIT, cb=self._on_submit
+            # M15: wildcard — every orchestrator sees all submissions but only
+            # handles those addressed to its own node (target = last token).
+            SUBJECT_SUBMIT_NODE.format(node="*"),
+            cb=self._on_submit,
         )
-        self._results = await self.bus.pull_results()
+        # M10: queryable ledger — any granted agent can read the mesh state.
+        self._ledger_sub = await self.bus.nc.subscribe(
+            SUBJECT_LEDGER, cb=self._on_ledger
+        )
+        self._heartbeat_sub = await self.bus.nc.subscribe(
+            SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
+        )
+        self._results = await self.bus.pull_results(
+            durable=f"orchestrator-results-{self.settings.node_name}"
+        )
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
         await asyncio.gather(self._result_loop(), self._timeout_loop())
@@ -61,9 +79,36 @@ class Orchestrator:
         await self.bus.close()
 
     # -- submission --------------------------------------------------------
+    def _owns(self, snapshot: TaskSnapshot) -> bool:
+        """M15: only the origin node's orchestrator acts on a task.
+
+        Snapshots created before M15 have an empty origin_node; those legacy
+        tasks are handled only by the default orchestrator node.
+        """
+        # Snapshots created before M15 have an empty origin_node; those
+        # legacy tasks stay visible to every orchestrator (claim-guard in
+        # bus.try_claim already prevents double-claiming).
+        return snapshot.origin_node in ("", self.settings.node_name)
+
     async def _on_submit(self, message) -> None:
         try:
+            # M15: only the addressed node's orchestrator handles a
+            # submission; the others stay silent (no double task creation).
+            # Legacy: the default orchestrator (node_name "orchestrator")
+            # also accepts "node-a" (the default NODE_NAME in .env).
+            target_node = message.subject.split(".")[-1]
+            accepted = {self.settings.node_name}
+            if self.settings.node_name == "orchestrator":
+                accepted.add("node-a")
+            if target_node not in accepted:
+                return
             submission = TaskSubmission.model_validate_json(message.data)
+            # M11: recursion limit for agents-as-submitters.
+            if submission.depth >= self.settings.max_submit_depth:
+                raise ValueError(
+                    f"submission depth {submission.depth} >= "
+                    f"max_submit_depth {self.settings.max_submit_depth}"
+                )
             snapshot = TaskSnapshot(
                 task_id=new_id(),
                 trace_id=new_id(),
@@ -72,6 +117,13 @@ class Orchestrator:
                 max_revisions=submission.max_revisions
                 if submission.max_revisions is not None
                 else self.settings.max_revisions,
+                fanout=submission.fanout,
+                depth=submission.depth,
+                claimable=submission.claimable,
+                # M14: worker-driven pipeline for claimable tasks
+                next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
+                # M15: the orchestrator that accepted the submission owns it.
+                origin_node=self.settings.node_name,
                 state=TaskState.RECEIVED,
             )
             await self.bus.put_snapshot(snapshot)
@@ -83,7 +135,12 @@ class Orchestrator:
                 "task submitted",
                 extra={"task_id": snapshot.task_id, "task": submission.task[:200]},
             )
-            async with self._state_lock:
+            if submission.claimable:
+                # M11: referee mode — the orchestrator does NOT dispatch.
+                # The task waits in RECEIVED until an agent CAS-claims it
+                # (bus.try_claim); _timeout_loop then dispatches claimed ones.
+                await self.bus.emit_event(snapshot, "task.claimable", "waiting for claim")
+            else:
                 await self._apply(snapshot, Event("start"))
         except Exception as exc:  # noqa: BLE001
             log.exception("submission failed")
@@ -91,6 +148,45 @@ class Orchestrator:
                 await message.respond(json.dumps({"error": str(exc)}).encode())
             except Exception:  # noqa: BLE001
                 pass
+
+    # -- M10: queryable ledger ----------------------------------------------
+    async def _on_ledger(self, message) -> None:
+        """Answer mesh.ledger requests with the consolidated mesh state."""
+        try:
+            await message.respond(
+                json.dumps(await self.bus.read_ledger()).encode()
+            )
+        except Exception:  # noqa: BLE001 - ledger read is best effort
+            log.exception("ledger read failed")
+            try:
+                await message.respond(json.dumps({"error": "ledger read failed"}).encode())
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -- M9 grant bootstrap --------------------------------------------------
+    async def _on_heartbeat(self, message) -> None:
+        """Issue CHAIN grants for agents of allowed joining nodes.
+
+        Bootstrap for multi-machine meshes: a node listed in
+        ``MESH_GRANT_NODES`` gets its agents granted on first heartbeat, so a
+        new machine can join without a manual ``meshctl grant``. Revoked
+        agents stay revoked — an existing grant record is never overwritten.
+        """
+        try:
+            payload = Envelope.model_validate_json(message.data).payload or {}
+            patterns = [
+                p for p in self.settings.grant_nodes.split(",") if p.strip()
+            ]
+            for agent_id in acl.auto_grant_agents(payload, patterns):
+                if await self.bus.grant_read(agent_id) is not None:
+                    continue
+                await self.bus.issue_grant(
+                    agent_id, level=GrantLevel.CHAIN,
+                    granted_by=f"bootstrap:{self.settings.node_name}",
+                )
+                log.info("auto-granted %s (heartbeat bootstrap)", agent_id)
+        except Exception:  # noqa: BLE001 - bootstrap is best effort
+            log.debug("heartbeat bootstrap failed", exc_info=True)
 
     # -- results -----------------------------------------------------------
     async def _result_loop(self) -> None:
@@ -123,7 +219,13 @@ class Orchestrator:
         if snapshot.state in TERMINAL_STATES:
             log.info("ignoring result for terminal task", extra={"task_id": snapshot.task_id})
             return
+        if not self._owns(snapshot):  # M15: another node's orchestrator owns it
+            return
         if envelope.id in snapshot.seen_result_ids:
+            return
+        # M14: worker-driven pipeline — the claiming worker advances the
+        # snapshot itself; do not double-handle its results.
+        if snapshot.next_role:
             return
 
         last_action = snapshot.last_action or {}
@@ -170,6 +272,17 @@ class Orchestrator:
                     ok=True,
                     approved=snapshot.critique.approved,
                 )
+            # M10 hive fan-out: a multi-step plan on a fanout task is split
+            # into independent subtasks; the parent waits and aggregates.
+            if (
+                event.ok
+                and envelope.role is Role.PLANNER
+                and snapshot.fanout
+                and snapshot.plan is not None
+                and len(snapshot.plan.plan) >= 2
+            ):
+                await self._fanout(snapshot)
+                return
 
         log.info(
             "result received",
@@ -178,10 +291,15 @@ class Orchestrator:
                 "role": envelope.role.value if envelope.role else None,
                 "ok": event.ok,
                 "approved": event.approved,
+                "executed_on": envelope.node,
             },
         )
-        async with self._state_lock:
-            await self._apply(snapshot, event)
+        await self._apply(snapshot, event)
+        if envelope.node:
+            # visibility for meshctl tail: which node executed this stage
+            await self.bus.emit_event(
+                snapshot, "result.executed_on", envelope.node
+            )
 
     def _store_output(
         self, snapshot: TaskSnapshot, role: Role, output: dict
@@ -321,12 +439,107 @@ class Orchestrator:
             snapshot, "dispatch", f"{role.value} command {command.id}"
         )
 
+    # -- M10: fan-out (hive run_worker shape) -------------------------------
+    async def _fanout(self, snapshot: TaskSnapshot) -> None:
+        """Emit each plan step as an independent subtask on mesh.task.submit.
+
+        Returns immediately after emission: subtasks run their own full
+        pipeline (planner->coder->critic) on whichever node's workers claim
+        them; the parent aggregates in ``_check_fanouts``.
+        """
+        assert self.bus.nc is not None
+        assert snapshot.plan is not None  # caller guarantees this
+        for step in snapshot.plan.plan:
+            submission = TaskSubmission(
+                task=step.description or f"step {step.id}",
+                context=f"fanout parent={snapshot.task_id} step={step.id}: "
+                f"{snapshot.task[:120]}",
+                depth=snapshot.depth + 1,
+                claimable=snapshot.claimable,
+            )
+            try:
+                response = await self.bus.nc.request(
+                    SUBJECT_SUBMIT_NODE.format(
+                        node=snapshot.origin_node or self.settings.node_name
+                    ),
+                    submission.model_dump_json().encode(),
+                    timeout=10,
+                )
+                sub_id = (json.loads(response.data) or {}).get("task_id")
+            except Exception:  # noqa: BLE001 - skip this step, keep fanning out
+                log.exception("fanout submit failed for step %s", step.id)
+                continue
+            if not sub_id:
+                continue
+            snapshot.subtasks[sub_id] = step.id
+            sub = await self.bus.get_snapshot(sub_id)
+            if sub is not None:
+                sub.parent_task_id = snapshot.task_id
+                await self.bus.put_snapshot(sub)
+        if not snapshot.subtasks:
+            # nothing was fanned out — continue the normal single pipeline
+            await self._apply(snapshot, Event("result", ok=True))
+            return
+        snapshot.self_assign = True  # parent parks in CODING, waits for subtasks
+        # No at_epoch key: the timeout reaper skips fanout-wait parents; the
+        # aggregation runs in _check_fanouts instead.
+        snapshot.last_action = {"role": "fanout-wait"}
+        snapshot.record("task.fanout", f"{len(snapshot.subtasks)} subtasks")
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(
+            snapshot, "task.fanout", f"{len(snapshot.subtasks)} subtasks emitted"
+        )
+        log.info(
+            "fanout",
+            extra={"task_id": snapshot.task_id, "subtasks": len(snapshot.subtasks)},
+        )
+
+    async def _check_fanouts(self) -> None:
+        """Aggregate fan-out parents whose subtasks have all gone terminal."""
+        for snapshot in await self.bus.list_tasks():
+            if not self._owns(snapshot):
+                continue
+            if snapshot.state in TERMINAL_STATES or not snapshot.subtasks:
+                continue
+            states: list[TaskState] = []
+            for sub_id in snapshot.subtasks:
+                sub = await self.bus.get_snapshot(sub_id)
+                states.append(sub.state if sub is not None else TaskState.FAILED)
+            if not all(s in TERMINAL_STATES for s in states):
+                continue
+            if any(s in (TaskState.FAILED, TaskState.CANCELLED) for s in states):
+                reason = "fanout: a subtask failed or was cancelled"
+                snapshot.state = TaskState.FAILED
+                snapshot.error = reason
+                snapshot.record("task.failed", reason)
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(snapshot, "task.failed", reason)
+                await self.bus.dead_letter(
+                    Envelope(
+                        task_id=snapshot.task_id,
+                        trace_id=snapshot.trace_id,
+                        kind=Kind.EVENT,
+                        node=self.settings.node_name,
+                        payload={"reason": reason, "task": snapshot.task},
+                    ),
+                    reason,
+                )
+                log.warning("fanout failed", extra={"task_id": snapshot.task_id})
+            else:
+                snapshot.state = TaskState.DONE
+                snapshot.record("task.done", "fanout complete")
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(snapshot, "task.done", "fanout complete")
+                log.info("fanout done", extra={"task_id": snapshot.task_id})
+
     # -- timers / recovery -------------------------------------------------
     async def _timeout_loop(self) -> None:
         while not self._stop.is_set():
             await asyncio.sleep(5)
             try:
                 await self._reap_timeouts()
+                await self._check_fanouts()
+                await self._dispatch_claimed()
             except Exception:  # noqa: BLE001
                 log.exception("timeout reaper failed")
 
@@ -334,6 +547,8 @@ class Orchestrator:
         snapshots = await self.bus.list_tasks()
         now = time.time()
         for snapshot in snapshots:
+            if not self._owns(snapshot):
+                continue
             if snapshot.state in TERMINAL_STATES:
                 continue
             last = snapshot.last_action
@@ -349,23 +564,55 @@ class Orchestrator:
                         "state": snapshot.state.value,
                     },
                 )
-                async with self._state_lock:
-                    await self._apply(
-                        snapshot,
-                        Event(
-                            "timeout",
-                            ok=False,
-                            reason=f"{last.get('role')} timed out after {int(limit)}s",
-                        ),
-                    )
+                await self._apply(
+                    snapshot,
+                    Event(
+                        "timeout",
+                        ok=False,
+                        reason=f"{last.get('role')} timed out after {int(limit)}s",
+                    ),
+                )
+
+    async def _dispatch_claimed(self) -> None:
+        """M11 referee: dispatch claimable tasks that have been CAS-claimed.
+
+        Agents claim via bus.try_claim (CAS on the KV entry). The orchestrator
+        does not assign — it only validates a claim and starts the pipeline.
+        """
+        for snapshot in await self.bus.list_tasks():
+            if not self._owns(snapshot):
+                continue
+            if (
+                snapshot.state is TaskState.RECEIVED
+                and snapshot.claimable
+                and snapshot.claimed_by
+                and not snapshot.last_action
+                and not snapshot.next_role  # M14: worker-driven, not ours
+            ):
+                log.info(
+                    "claim accepted",
+                    extra={
+                        "task_id": snapshot.task_id,
+                        "claimed_by": snapshot.claimed_by,
+                    },
+                )
+                snapshot.record("task.claimed", snapshot.claimed_by)
+                await self.bus.put_snapshot(snapshot)
+                await self._apply(snapshot, Event("start"))
 
     async def _recover(self) -> None:
         for snapshot in await self.bus.list_tasks():
+            if not self._owns(snapshot):
+                continue
             if snapshot.state in TERMINAL_STATES:
                 continue
             if snapshot.state is TaskState.REVISE:
                 await self._apply(snapshot, Event("start"))
-            elif snapshot.state is TaskState.RECEIVED and not snapshot.last_action:
+            elif (
+                snapshot.state is TaskState.RECEIVED
+                and not snapshot.last_action
+                and not (snapshot.claimable and not snapshot.claimed_by)
+            ):
                 await self._apply(snapshot, Event("start"))
             else:
                 log.info(

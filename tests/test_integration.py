@@ -96,19 +96,6 @@ async def wait_for_state(bus: Bus, task_id: str, timeout: float = 30.0):
 @pytest.mark.asyncio
 async def test_full_workflow_with_revision(tmp_path):
     suffix = uuid.uuid4().hex[:8]
-    admin = await nats.connect(NATS_URL)
-    try:
-        js = admin.jetstream()
-        for info in await js.streams_info():
-            name = info.config.name
-            if name.startswith("MESH_TEST_") or name.startswith("KV_workflow_test_"):
-                try:
-                    await js.delete_stream(name)
-                except Exception:  # noqa: BLE001
-                    pass
-    finally:
-        await admin.close()
-
     base = Settings(
         nats_url=NATS_URL,
         node_name="test-node",

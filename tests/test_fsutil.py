@@ -38,6 +38,17 @@ def test_safe_path_allows_nested(tmp_path):
     assert safe_path(tmp_path, "a/b/c.txt") == (tmp_path / "a/b/c.txt").resolve()
 
 
+def test_safe_path_strips_redundant_workspace_prefix(tmp_path):
+    # Task text says "write workspace/m14_claim.py" while the tool root is
+    # already .../workspace — the redundant prefix must not nest the file.
+    root = tmp_path / "workspace"
+    root.mkdir()
+    assert safe_path(root, "workspace/m14_claim.py") == (root / "m14_claim.py").resolve()
+    assert safe_path(root, "workspace/workspace/x.py") == (root / "x.py").resolve()
+    # A genuine subdirectory with a different name is untouched.
+    assert safe_path(root, "src/a.py") == (root / "src/a.py").resolve()
+
+
 def test_read_text_limited(tmp_path):
     target = tmp_path / "big.txt"
     target.write_text("abcdef")

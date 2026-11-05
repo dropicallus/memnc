@@ -120,6 +120,30 @@ meshctl submit ─▶ orchestrator ─put snapshot─▶ KV
 - The reaper runs every 5 s and re-dispatches stages older than
   `role_timeout + ORCHESTRATOR_GRACE_S`.
 
+## Identity, ACLs and the capability gate (M9)
+
+Three layers, following Cotal/Synadia (sender identity on the wire) and ormica
+(permission chain):
+
+- **Transport auth**: the NATS token (`NATS_TOKEN`) is the outer layer — it
+  polices who can connect at all. For multi-node deployments the broker is
+  additionally locked down per account/user (NATS ACLs, JWT/operator mode);
+  memnc reads `NATS_TOKEN` and never trusts identity fields inside payloads.
+- **Capability gate** (`MESH_GATE=1`): a write to the registry KV is
+  authorized against a grant ledger (KV `mesh.grants`, deny-by-default).
+  Grants follow the ormica chain — `root` (the orchestrator) may issue grants,
+  `chain` lets an agent write only its own records, `auto` (self-declared) is
+  never sufficient. Issuance/check logic is pure and NATS-free (`memnc/acl.py`).
+- **Pinned inbox**: each agent answers work on `mem.agent.<agent_id>.work` (kept outside the MESH stream: JetStream PubAck would win request/reply)
+  (its own inbox) plus the anycast `mesh.agent.work`; sender-carried subjects
+  (`mesh.<space>.<mode>.<target>.<sender>`) embed the identity in the subject
+  itself so a mismatched claim is detectable (`acl.check_sender`).
+
+Operate with `meshctl grant <agent_id> [--level root|chain] [--ttl-s N]`,
+`meshctl grants`, `meshctl revoke <agent_id>`. With the gate off (local dev)
+registry writes are unrestricted — the deny-by-default check lives in
+`acl.check_registry_write` and is enforced by `Bus.advertise_capability`.
+
 ## Scaling
 
 - Replicas of a role share a durable consumer (queue-group semantics): one
