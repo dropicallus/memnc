@@ -124,3 +124,16 @@ Full shell execution is enabled by default. Restrict exposure:
 - keep the workspace bind mount scoped to disposable output
 - set `ALLOW_SHELL=false` for review-only or untrusted tasks
 - rotate `NATS_TOKEN`; put NATS behind a private network
+
+## E2E live test (T0)
+
+One command for the full self-organization run (submit -> orchestrator stopped ->
+workers claim via CAS -> critique -> artifact executed and output-checked):
+
+    MESHCTL=.venv/bin/meshctl ./scripts/e2e.sh --selforg --expect "hello from the mesh" \
+        "Create hello.py in the workspace that prints 'hello from the mesh'"
+
+Useful flags: `--artifact PATH` (explicit artifact instead of newest workspace .py),
+`--fresh` (wipe workspace first), `--timeout SECONDS`, `--stuck-minutes N` (fail fast
+when the state stops changing; default 10). Exit codes: 0 PASS, 1 FAILED/CANCELLED,
+2 timeout, 3 submit error, 4 stuck, 5 artifact check failed.
