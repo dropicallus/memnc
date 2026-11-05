@@ -30,6 +30,12 @@ from .schema import (
     GrantRecord,
     Envelope,
     REGISTRY_BUCKET,
+    ROSTER_BUCKET,
+    ROSTER_KEY,
+    ROSTER_TTL,
+    Capability,
+    NodeInfo,
+    satisfies,
     Role,
     SUBJECT_DLQ,
     SUBJECT_EVENTS,
@@ -62,6 +68,7 @@ class Bus:
         self.js: JetStreamContext | None = None
         self.kv = None
         self._registry = None
+        self._roster = None
         self._trust = None
         self._grants = None
 
@@ -203,6 +210,53 @@ class Bus:
         for key in sorted(keys):
             entry = await self._registry.get(key)
             out.append(Capability.model_validate_json(entry.value))
+        return out
+
+    # -- T6: node roster ----------------------------------------------------
+
+    async def ensure_roster(self) -> None:
+        """Ensure the TTL node-roster KV bucket exists."""
+        assert self.js is not None
+        if self._roster is not None:
+            return
+        try:
+            self._roster = await self.js.key_value(ROSTER_BUCKET)
+        except NotFoundError:
+            self._roster = await self.js.create_key_value(
+                KeyValueConfig(bucket=ROSTER_BUCKET, history=1, ttl=ROSTER_TTL)
+            )
+            log.info("created roster KV bucket %s (ttl=%ss)", ROSTER_BUCKET, ROSTER_TTL)
+
+    async def advertise_node(self, info: NodeInfo) -> None:
+        """Refresh one node's roster entry (merge with existing roles/models)."""
+        await self.ensure_roster()
+        assert self._roster is not None
+        existing = await self.get_node(info.node_id)
+        merged = info.merge(existing) if existing else info
+        await self._roster.put(merged.key(), merged.model_dump_json().encode())
+        log.debug("advertised node %s", info.node_id)
+
+    async def get_node(self, node_id: str) -> NodeInfo | None:
+        await self.ensure_roster()
+        assert self._roster is not None
+        try:
+            entry = await self._roster.get(ROSTER_KEY.format(node_id=node_id))
+        except (KeyError, NotFoundError):
+            return None
+        return NodeInfo.model_validate_json(entry.value)
+
+    async def list_nodes(self) -> list[NodeInfo]:
+        """Return all live roster entries, sorted by node id."""
+        await self.ensure_roster()
+        assert self._roster is not None
+        out: list[NodeInfo] = []
+        try:
+            keys = await self._roster.keys()
+        except NoKeysError:
+            return out
+        for key in sorted(keys):
+            entry = await self._roster.get(key)
+            out.append(NodeInfo.model_validate_json(entry.value))
         return out
 
     # -- M9: capability grants (permission chain) --------------------------
@@ -434,6 +488,16 @@ class Bus:
         # M14: worker-driven pipeline — only the next scheduled role may claim.
         if role is not None and snapshot.next_role and snapshot.next_role != role:
             return None
+        # T6: resource-aware claim — a task with needs is only claimable by a
+        # node whose live roster entry satisfies them (fail-closed).
+        # VRAM/model constraints apply to the executing (coder) claim only;
+        # infrastructure roles (planner/critic) run fixed per-node models.
+        # The roles constraint applies to every claim.
+        if snapshot.needs is not None:
+            node_id, role_name = worker_id.split(":", 1)
+            node = await self.get_node(node_id)
+            if not satisfies(snapshot.needs, node, role_name):
+                return None
         snapshot.claimed_by = worker_id
         try:
             await self.kv.update(

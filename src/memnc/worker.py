@@ -24,6 +24,7 @@ from .schema import (
     CriticIssue,
     Envelope,
     FileArtifact,
+    NodeInfo,
     ResultPayload,
     Role,
     SUBJECT_CMD,
@@ -220,6 +221,19 @@ class Worker:
                 )
             except Exception:  # noqa: BLE001 - heartbeat is best effort
                 log.debug("heartbeat failed", exc_info=True)
+            # T6: refresh this node's roster entry (models/VRAM/GPU merged in).
+            try:
+                await self.bus.advertise_node(
+                    NodeInfo(
+                        node_id=self.settings.node_name,
+                        roles=[self.role.value],
+                        models=[model],
+                        vram_gb=self.settings.node_vram_gb,
+                        gpu=self.settings.node_gpu,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - roster refresh is best effort
+                log.debug("roster advertise failed", exc_info=True)
             await asyncio.sleep(HEARTBEAT_INTERVAL_S)
 
     # -- command handling --------------------------------------------------
