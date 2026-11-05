@@ -68,7 +68,7 @@ def format_task(snapshot_dict: dict[str, Any]) -> str:
     claimed = snapshot_dict.get("claimed_by") or "unclaimed"
     rev = snapshot_dict.get("revisions", 0)
     attempts = snapshot_dict.get("attempt", 0)
-    title = (snapshot_dict.get("prompt") or snapshot_dict.get("title") or "").strip()
+    title = (snapshot_dict.get("task") or snapshot_dict.get("prompt") or "").strip()
     if len(title) > 120:
         title = title[:117] + "..."
     lines = [
@@ -80,6 +80,72 @@ def format_task(snapshot_dict: dict[str, Any]) -> str:
     verdict = snapshot_dict.get("critic_verdict") or ""
     if verdict:
         lines.append(f"verdict: {verdict[:300]}")
+    return "\n".join(lines)
+
+
+def summarize_tasks(snapshots: list[dict[str, Any]], filter_state: str = "", limit: int = 15) -> str:
+    """Compact /tasks view: state counts + active tasks + recent completions.
+
+    Optional filter_state (e.g. "failed") restricts the detail lines to that
+    state; the header always shows the totals.
+    """
+    if not snapshots:
+        return "no tasks in ledger"
+    counts: dict[str, int] = {}
+    for s in snapshots:
+        counts[s.get("state", "?")] = counts.get(s.get("state", "?"), 0) + 1
+    total = len(snapshots)
+    header = f"{total} tasks: " + " ".join(
+        f"{state}={n}" for state, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    )
+    wanted = filter_state.strip().lower()
+    lines = [header]
+    if wanted:
+        selected = [s for s in snapshots if s.get("state", "").lower() == wanted]
+        if not selected:
+            return f"{header}\nno tasks with state: {wanted}"
+        lines.append(f"showing {wanted} ({len(selected)}):")
+    else:
+        # active tasks first, then the most recent terminal ones
+        active = [s for s in snapshots if s.get("state") not in ("DONE", "FAILED", "CANCELLED")]
+        done = sorted(
+            (s for s in snapshots if s.get("state") in ("DONE", "FAILED", "CANCELLED")),
+            key=lambda s: s.get("task_id", ""),
+        )
+        selected = active + done[-limit:]
+        if not selected:
+            lines.append("no tasks to show")
+            return "\n".join(lines)
+    for s in selected[-40:]:
+        tid = str(s.get("task_id", "?"))[:12]
+        state = s.get("state", "?")
+        claimed = s.get("claimed_by") or ""
+        title = (s.get("task") or s.get("prompt") or "").strip().splitlines()[0][:60]
+        line = f"#{tid} {state}"
+        if claimed:
+            line += f" ({claimed})"
+        if title:
+            line += f" - {title}"
+        lines.append(line)
+    if wanted and len(selected) > 40:
+        lines.append(f"... and {len(selected) - 40} more")
+    return "\n".join(lines)
+
+
+def format_roster(nodes: list[dict[str, Any]]) -> str:
+    """Compact /roster view: one line per live node entry."""
+    if not nodes:
+        return "no nodes in roster"
+    lines = [f"{len(nodes)} nodes:"]
+    for n in nodes:
+        roles = ",".join(n.get("roles") or []) or "-"
+        models = ",".join(n.get("models") or []) or "-"
+        vram = n.get("vram_gb") or 0
+        gpu = n.get("gpu") or "-"
+        lines.append(
+            f"{n.get('node_id', '?')} roles={roles} models={models} "
+            f"vram={vram:g}GB gpu={gpu}"
+        )
     return "\n".join(lines)
 
 
@@ -127,16 +193,15 @@ class TelegramObserver:
         cmd = parts[0].lstrip("/").lower()
         if cmd == "tasks":
             snapshots = await self.bus.list_tasks()
-            if not snapshots:
-                await self.bot.send_message(chat, "no tasks in ledger")
-                return
-            snapshots.sort(key=lambda s: s.task_id)
-            body = "\n".join(
-                f"#{s.task_id[:12]} {s.state.value}"
-                + (f" ({s.claimed_by})" if s.claimed_by else "")
-                for s in snapshots[-20:]
+            filter_state = parts[1].strip() if len(parts) >= 2 else ""
+            await self.bot.send_message(
+                chat, summarize_tasks([s.model_dump() for s in snapshots], filter_state)
             )
-            await self.bot.send_message(chat, f"{len(snapshots)} tasks:\n{body}")
+        elif cmd == "roster":
+            nodes = await self.bus.list_nodes()
+            await self.bot.send_message(
+                chat, format_roster([n.model_dump() for n in nodes])
+            )
         elif cmd == "state" and len(parts) >= 2:
             snapshot = await self.bus.get_snapshot(parts[1].lstrip("#").strip())
             if snapshot is None:
@@ -145,7 +210,7 @@ class TelegramObserver:
                 await self.bot.send_message(chat, format_task(snapshot.model_dump()))
         else:
             await self.bot.send_message(
-                chat, "commands: tasks | state <task-id>"
+                chat, "commands: tasks [state] | roster | state <task-id>"
             )
 
     # -- main loops ---------------------------------------------------------
