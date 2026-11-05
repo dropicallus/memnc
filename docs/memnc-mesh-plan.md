@@ -585,6 +585,22 @@ Referenz: [HKUDS/AutoSwarm](https://github.com/HKUDS/AutoSwarm) (arXiv 2610.3304
 
 Status: alles Ausblick, nichts davon implementiert.
 
+### 14.6 Ausbau-Stufe: Telegram-Kanal + Console-Ausbau — Sichtbarkeit, Eingriff, Human-in-the-Loop (2026-11-05)
+
+*Auslöser:* M14-Livetest erfolgreich (Task `1a1ad38d` → DONE rev=0 ohne Orchestrator, Gemma-31B-Critic verifiziert selbst per MCP-Shell). Die Selbstorganisation funktioniert — aber sie ist unsichtbar: man muss selbst `meshctl state` pollen und Log-Dateien grep-en. Die Tests waren aufwendig; das Mesh braucht ein Fenster, in dem Frank **mitverfolgen, eingreifen und steuern** kann. Vorbilder: grok.bot / dots — Bot-Interface als Primärinterface zum Mesh.
+
+*Verhältnis zu S3/S4 (§14.2):* S3 (Mesh-Console, read-only, Port 8790) ist implementiert. Diese Stufe konkretisiert S4 und baut darauf auf — gleiche Reihenfolge: erst sehen, dann eingreifen, dann steuern. Keine neues Framework, kleine Schritte, jeder einzeln testbar.
+
+| Schritt | Inhalt | Done-Kriterium |
+|---|---|---|
+| **T1 — Telegram-Observer (read-only)** | Telegram-Bot (eigener Service, `memnc.telegram`), der Task-Events aus dem NATS-Ledger abonniert und pro Transition eine Nachricht postet: Task-ID, State, Node/Rolle, Rev#, Critic-Verdict (kurz). Plus `state <id>`- und `tasks`-Antworten auf Befehle. Kein Eingriff — nur Spiegel der Ledger-Events | Frank sieht in Telegram live denselben Verlauf wie `meshctl tail`; Pipeline-Lauf M14-artig ohne Pollen mitverfolgbar |
+| **T2 — Telegram-Eingriff (Steering-Inputs)** | Schreib-Kommandos, alle über Grants (M9) autorisiert: `submit <task>`, `cancel <id>`, `retry <id>`, `stop worker <name>`; jede Aktion wird im Ledger als Human-Event vermerkt (wer, wann, was) | Task-Submit und Abbruch funktionieren aus Telegram; Aktionen sind im Ledger nachvollziehbar |
+| **T3 — Approval-Gate (Human-in-the-Loop)** | Critique-Schritt kann parken: `needs_human=true`-Flag (KV) — Telegram zeigt Plan/Diff/Verdict mit Approve/Reject-Buttons; Reject → Revision-Loop, Approve → DONE. Optional `--gate always|fail|never` pro Task | Kritikwürdiger Patch parkt in CRITIQUE, Frank lehnt aus Telegram ab → Revision → erneutes Parken → Approve → DONE |
+| **T4 — Console-Ausbau (Node-/Task-Management)** | Mesh-Console (S3) erweitert: Node-Roster mit Live-Status (Modelle, Last, Claim-Aktivität), Task-Detail mit Trace/Transcript, Pause/Resume pro Node, Modell-Routing sichtbar und änderbar. Read-only bleibt die Basis, Schreib-Buttons nur mit Grant | Console zeigt von beiden Nodes aus denselben Live-Zustand inkl. Roster; ein Node lässt sich pausieren und ein Worker übernimmt |
+| **T5 — Diskussions-Streaming (später)** | Die Modell-Modell-Diskussionen (disc-Harness) und Critique-Verhandlungen als readable Stream in Console/Telegram — Verhandlung statt nur Ergebnis sehen | Eine Critique-Debatte ist live in Telegram lesbar |
+
+Bewusst ausgespart: keine Cloud-Abhängigkeit (Bot läuft lokal, nur Telegram-API raus), keine zweiten Auth-Welt — Grants bleiben die einzige Autorisierungsebene; Telegram-User-Bindung (nur Frank) ist Konfiguration, kein eigenes System.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
