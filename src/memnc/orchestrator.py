@@ -120,6 +120,7 @@ class Orchestrator:
                 fanout=submission.fanout,
                 depth=submission.depth,
                 claimable=submission.claimable,
+                needs=submission.needs,
                 # M14: worker-driven pipeline for claimable tasks
                 next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
                 # M15: the orchestrator that accepted the submission owns it.

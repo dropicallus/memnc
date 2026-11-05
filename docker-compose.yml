@@ -30,6 +30,9 @@ x-mesh-env: &mesh-env
   MESH_GRANT_NODES: ${MESH_GRANT_NODES:-}
   # M11: ledger-based self-claiming of claimable tasks (worker-side CAS)
   MESH_CLAIM: ${MESH_CLAIM:-false}
+  # T6: node capabilities advertised into the roster KV by every worker.
+  NODE_VRAM_GB: ${NODE_VRAM_GB:-0}
+  NODE_GPU: ${NODE_GPU:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-mesh-service: &mesh-service
