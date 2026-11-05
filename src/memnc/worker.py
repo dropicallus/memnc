@@ -43,6 +43,31 @@ log = logging.getLogger(__name__)
 
 MAX_TOOL_RESULT_CHARS = 8_000
 MAX_CHECKPOINTS = 32
+DISK_MODELS_REFRESH_LOOPS = 12  # refresh disk-model list every ~60s of heartbeats
+
+
+async def fetch_disk_models(base_url: str) -> list[str]:
+    """T7.5: list models present in the local Ollama store (loadable, not loaded).
+
+    Best effort: any failure returns [] and the roster simply shows fewer
+    disk models. Runs the blocking HTTP call in a thread.
+    """
+    import json as _json
+    import urllib.request
+
+    def _fetch() -> list[str]:
+        with urllib.request.urlopen(  # noqa: S310 - configured internal URL
+            f"{base_url.rstrip('/')}/api/tags", timeout=5
+        ) as resp:
+            data = _json.loads(resp.read())
+        return sorted(m["name"] for m in data.get("models", []))
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception:  # noqa: BLE001 - roster advertisement is best effort
+        log.debug("disk model fetch failed", exc_info=True)
+        return []
+
 HEARTBEAT_INTERVAL_S = 5
 
 # M11: mesh_submit — the agent-facing tool that throws a task back into the
@@ -132,6 +157,8 @@ class Worker:
         self._current_task: str | None = None
         self._subscription = None
         self._written_files: dict[str, str] = {}
+        self._heartbeat_loops = 0
+        self._disk_models: list[str] = []
 
     @property
     def role(self) -> Role:
@@ -199,6 +226,7 @@ class Worker:
     async def _heartbeat_loop(self) -> None:
         model = self.settings.model_for(self.role)
         while not self._stop.is_set():
+            self._heartbeat_loops += 1
             envelope = Envelope(
                 task_id="heartbeat",
                 trace_id="heartbeat",
@@ -222,12 +250,19 @@ class Worker:
             except Exception:  # noqa: BLE001 - heartbeat is best effort
                 log.debug("heartbeat failed", exc_info=True)
             # T6: refresh this node's roster entry (models/VRAM/GPU merged in).
+            # T7.5: also advertise models present on local disk (loadable but
+            # not loaded), refreshed every DISK_MODELS_REFRESH_LOOPS beats.
             try:
+                if self._heartbeat_loops % DISK_MODELS_REFRESH_LOOPS == 0:
+                    self._disk_models = await fetch_disk_models(
+                        self.settings.inference_base_url
+                    )
                 await self.bus.advertise_node(
                     NodeInfo(
                         node_id=self.settings.node_name,
                         roles=[self.role.value],
                         models=[model],
+                        disk_models=list(self._disk_models),
                         vram_gb=self.settings.node_vram_gb,
                         gpu=self.settings.node_gpu,
                     )
