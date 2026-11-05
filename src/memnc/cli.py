@@ -20,6 +20,7 @@ from .schema import (
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
     GrantLevel,
+    TaskNeeds,
     TaskSubmission,
 )
 
@@ -42,6 +43,8 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             context=args.context or "",
             fanout=args.fanout,
             claimable=getattr(args, "claimable", False),
+            # T6: optional capability constraints for the claim gate.
+            needs=_needs_from_args(args),
         )
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
@@ -65,6 +68,16 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
 
 
 _TERMINAL_EVENTS = {"task.done", "task.failed", "task.cancelled"}
+
+
+def _needs_from_args(args: argparse.Namespace):
+    """Build TaskNeeds from --needs-* flags; None when no flag is set."""
+    vram = getattr(args, "needs_vram", 0.0) or 0.0
+    model = getattr(args, "needs_model", "") or ""
+    roles = getattr(args, "needs_role", None) or []
+    if not vram and not model and not roles:
+        return None
+    return TaskNeeds(vram_gb=vram, model=model, roles=roles)
 
 
 async def _watch(client, task_id: str) -> None:
@@ -150,6 +163,27 @@ async def cmd_tasks(_: argparse.Namespace, settings: Settings) -> int:
             print(
                 f"{snapshot.task_id}  {snapshot.state.value:<9} "
                 f"rev={snapshot.revisions}  {terminal}  {snapshot.task[:60]}"
+            )
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
+    """T6: list live node roster entries (capabilities + presence)."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        nodes = await bus.list_nodes()
+        if not nodes:
+            print("no nodes in roster")
+            return 0
+        for node in nodes:
+            print(
+                f"{node.node_id}  roles={','.join(node.roles) or '-'}  "
+                f"models={','.join(node.models) or '-'}  "
+                f"vram={node.vram_gb or 0:g}GB  gpu={node.gpu or '-'}  "
+                f"updated={node.updated_at}"
             )
         return 0
     finally:
@@ -312,7 +346,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="M11: leave in RECEIVED for agents to self-claim")
     submit.add_argument("--node", default=None,
                         help="M15: target orchestrator node (default: local node)")
+    submit.add_argument("--needs-vram", type=float, default=0.0,
+                        help="T6: VRAM (GB) the claiming node must have")
+    submit.add_argument("--needs-model", default="",
+                        help="T6: model name the claiming node must serve")
+    submit.add_argument("--needs-role", action="append", default=None,
+                        help="T6: allowed claiming role (repeatable)")
     submit.set_defaults(func=cmd_submit)
+
+    roster = subparsers.add_parser("roster", help="T6: list live node capabilities")
+    roster.set_defaults(func=cmd_roster)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
     tail.add_argument("task_id")

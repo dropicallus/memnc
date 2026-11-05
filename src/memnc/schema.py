@@ -74,6 +74,71 @@ SUBJECT_AGENT_WORK = "mesh.agent.work"
 # Registry KV bucket lives next to the workflow_state bucket (see bus.py).
 REGISTRY_BUCKET = "registry"
 
+# T6: node roster — one live NodeInfo per node in a TTL KV bucket. TTL gives
+# presence: a node that stops heartbeating falls out of the roster on its own.
+ROSTER_BUCKET = "roster"
+ROSTER_KEY = "roster.{node_id}"
+ROSTER_TTL = 60  # seconds; worker heartbeats refresh every ~20s
+
+
+class TaskNeeds(BaseModel):
+    """T6: capability constraints a node must satisfy to claim a task."""
+
+    vram_gb: float = 0.0  # 0 = no VRAM requirement
+    model: str = ""  # exact model name ("" = any)
+    roles: list[str] = Field(default_factory=list)  # empty = any role
+
+
+class NodeInfo(BaseModel):
+    """T6: a node's advertised capabilities (refreshed by its workers)."""
+
+    node_id: str
+    roles: list[str] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=list)
+    vram_gb: float = 0.0
+    gpu: str = ""
+    load: float = 0.0
+    updated_at: str = Field(default_factory=now_iso)
+
+    def key(self) -> str:
+        return ROSTER_KEY.format(node_id=self.node_id)
+
+    def merge(self, other: "NodeInfo") -> "NodeInfo":
+        """Union of two heartbeat entries for the same node (multi-process)."""
+        return NodeInfo(
+            node_id=self.node_id,
+            roles=sorted(set(self.roles) | set(other.roles)),
+            models=sorted(set(self.models) | set(other.models)),
+            vram_gb=self.vram_gb or other.vram_gb,
+            gpu=self.gpu or other.gpu,
+            load=max(self.load, other.load),
+            updated_at=now_iso(),
+        )
+
+
+def satisfies(needs: TaskNeeds | None, node: NodeInfo | None, role: str) -> bool:
+    """Pure claim-gate predicate for T6.
+
+    A task without needs is unconstrained. A task WITH needs is fail-closed:
+    no live roster entry for the claiming node means the claim is denied.
+    """
+    if needs is None:
+        return True
+    if node is None:
+        return False
+    if needs.roles and role not in needs.roles:
+        return False
+    if role != "coder":
+        # VRAM/model constraints target the executing claim; infrastructure
+        # roles (planner/critic) run fixed per-node models.
+        return True
+    if needs.model and needs.model not in node.models:
+        return False
+    if needs.vram_gb and node.vram_gb < needs.vram_gb:
+        return False
+    return True
+
+
 # Capability key layout inside the registry KV:
 #   registry.<agent_id>.<skill>  ->  Capability JSON, expires by bucket TTL.
 CAPABILITY_KEY = "registry.{agent_id}.{skill}"
@@ -352,6 +417,9 @@ class TaskSubmission(BaseModel):
     # the orchestrator. They sit in RECEIVED until an agent CAS-claims them
     # (bus.try_claim); the orchestrator only referees the claim.
     claimable: bool = False
+    # T6 resource-aware claim: capability constraints a claiming node must
+    # satisfy (see satisfies() below). None = unconstrained (legacy tasks).
+    needs: "TaskNeeds | None" = None
 
     @field_validator("task")
     @classmethod
@@ -393,6 +461,8 @@ class TaskSnapshot(BaseModel):
     next_role: str = ""
     # M15: node whose orchestrator owns this task (submit routing + reaping).
     origin_node: str = ""
+    # T6: carried over from TaskSubmission so the claim gate sees the needs.
+    needs: "TaskNeeds | None" = None
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None

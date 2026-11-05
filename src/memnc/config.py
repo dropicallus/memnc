@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # identity / transport
     role: Role = Role.CODER
     node_name: str = Field(default_factory=socket.gethostname)
+    # T6: node capabilities advertised into the roster KV (roster.<node>).
+    # node_vram_gb = VRAM the mesh may plan around (0 = unknown/none);
+    # node_gpu = free-form label (e.g. "rx 6800 xt").
+    node_vram_gb: float = 0.0
+    node_gpu: str = ""
     nats_url: str = "nats://127.0.0.1:4222"
     nats_token: str | None = None
     stream_name: str = "MESH"
