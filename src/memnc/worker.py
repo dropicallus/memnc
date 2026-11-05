@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import sys
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from .mcp.client import MCPClient
 from .roles import PROMPT_VERSION, SYSTEM_PROMPTS, build_user_prompt
 from .schema import (
     CoderOutput,
+    CriticIssue,
     Envelope,
     FileArtifact,
     ResultPayload,
@@ -604,6 +606,7 @@ class Worker:
                 envelope.role is Role.CRITIC
                 and snapshot.critique is not None
             ):
+                await self._verify_gate(snapshot)
                 event = Event(
                     "result", ok=True, approved=snapshot.critique.approved
                 )
@@ -612,6 +615,93 @@ class Worker:
                 snapshot, "result.executed_on", envelope.node
             )
         await self._apply_local(snapshot, event)
+
+    async def _verify_gate(self, snapshot: TaskSnapshot) -> None:
+        """M14 deterministic verification gate.
+
+        Small-model critics hallucinate blockers on correct code. This gate
+        runs mechanical checks on the written artifacts: py_compile every
+        Python file and, if there is exactly one, execute it. Evidence beats
+        the LLM verdict in both directions:
+        - checks pass and the critic rejected -> override to approved
+        - checks fail -> replace the critic's issues with the real errors
+        """
+        critique = snapshot.critique
+        if critique is None:
+            return
+        if critique.approved:
+            return
+        files = snapshot.code.files if snapshot.code else []
+        py_files = [f for f in files if f.path.endswith(".py")]
+        if not py_files:
+            return
+        root = Path(self.settings.workspace_root)
+        evidence: list[str] = []
+        passed = True
+        for f in py_files:
+            path = root / f.path
+            if not path.is_file():
+                evidence.append(f"py_compile {f.path}: MISSING FILE")
+                passed = False
+                continue
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "py_compile", str(path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                evidence.append(f"py_compile {f.path}: TIMEOUT")
+                passed = False
+                continue
+            text = out.decode(errors="replace").strip()
+            evidence.append(
+                f"py_compile {f.path}: exit={proc.returncode}"
+                + (f" {text[:200]}" if text else "")
+            )
+            if proc.returncode != 0:
+                passed = False
+        if passed and len(py_files) == 1:
+            path = root / py_files[0].path
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, str(path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                evidence.append(f"run {py_files[0].path}: TIMEOUT")
+                passed = False
+            else:
+                text = out.decode(errors="replace").strip()
+                evidence.append(
+                    f"run {py_files[0].path}: exit={proc.returncode}"
+                    + (f" output: {text[:300]}" if text else "")
+                )
+                if proc.returncode != 0:
+                    passed = False
+        joined = "\n".join(evidence)
+        log.info("verify gate: passed=%s evidence=%s", passed, joined)
+        if passed:
+            critique.approved = True
+            critique.summary = (
+                "[verify-gate] deterministic checks passed; "
+                "LLM critique overridden.\n" + joined
+            )
+            critique.issues = []
+        else:
+            critique.issues = [
+                CriticIssue(
+                    severity="blocker",
+                    issue=f"[verify-gate] deterministic verification "
+                    f"failed:\n{joined}",
+                    fix="fix the reported runtime/compile errors",
+                )
+            ]
 
     def _store_output(
         self, snapshot: TaskSnapshot, role: Role, output
