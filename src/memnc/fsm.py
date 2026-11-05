@@ -12,7 +12,7 @@ from typing import Literal
 from .schema import Role, TERMINAL_STATES, TaskState
 
 EventType = Literal["start", "result", "failure", "timeout", "cancel"]
-ActionType = Literal["dispatch", "finish", "escalate", "cancel"]
+ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule"]
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,10 @@ class Event:
     approved: bool | None = None
     reason: str = ""
     result_id: str | None = None
+    # DAG scheduler hints. ``all_steps_done`` advances CODING -> CRITIQUE;
+    # ``exhausted`` stops re-auctioning a failed step and fails the task.
+    all_steps_done: bool = False
+    exhausted: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,7 @@ def transition(
     revisions: int = 0,
     max_attempts: int = 3,
     max_revisions: int = 3,
+    self_assign: bool = False,
 ) -> Transition:
     """Compute the next state and the actions the runtime must perform."""
 
@@ -86,6 +91,12 @@ def transition(
 
     if state is TaskState.PLANNING:
         if event.type == "result" and event.ok:
+            if self_assign:
+                return Transition(
+                    TaskState.CODING,
+                    (Action("schedule", reason="dag"),),
+                    attempt_reset=True,
+                )
             return Transition(
                 TaskState.CODING,
                 (Action("dispatch", Role.CODER),),
@@ -101,6 +112,22 @@ def transition(
             )
 
     if state is TaskState.CODING:
+        if self_assign:
+            if event.type == "result" and event.ok:
+                if event.all_steps_done:
+                    return Transition(
+                        TaskState.CRITIQUE,
+                        (Action("dispatch", Role.CRITIC),),
+                        attempt_reset=True,
+                    )
+                return Transition(TaskState.CODING, (Action("schedule"),))
+            if event.type in ("result", "failure", "timeout"):
+                if event.exhausted:
+                    return Transition(
+                        TaskState.FAILED,
+                        (Action("escalate", reason=event.reason or "step failed"),),
+                    )
+                return Transition(TaskState.CODING, (Action("schedule"),))
         if event.type == "result" and event.ok:
             return Transition(
                 TaskState.CRITIQUE,
@@ -118,6 +145,12 @@ def transition(
 
     if state is TaskState.REVISE:
         if event.type == "start":
+            if self_assign:
+                return Transition(
+                    TaskState.CODING,
+                    (Action("schedule", reason="revision"),),
+                    attempt_reset=True,
+                )
             return Transition(
                 TaskState.CODING,
                 (Action("dispatch", Role.CODER),),

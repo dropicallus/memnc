@@ -73,11 +73,7 @@ async def test_shell_rejects_cwd_escape(tmp_path):
 @pytest.mark.asyncio
 async def test_shell_truncates_output(tmp_path):
     result = json.loads(
-        await run_shell(
-            tmp_path,
-            "python3 -c \"print('x' * 100, end='')\"",
-            max_output_bytes=10,
-        )
+        await run_shell(tmp_path, "printf 'x%.0s' {1..100}", max_output_bytes=10)
     )
     assert result["truncated"] is True
     assert result["stdout"] == "x" * 10

@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     kv_bucket: str = "workflow_state"
     nats_name: str | None = None
 
+    # M9: capability gate. When enabled, registry writes require an
+    # orchestrator-issued grant (deny-by-default, see memnc/acl.py).
+    # Default off so local dev/test meshes stay friction-free; compose
+    # and any multi-node deployment set MESH_GATE=1.
+    mesh_gate: bool = False
+    # M9 grant bootstrap: comma-separated glob patterns of node names whose
+    # heartbeat automatically earns their agents a CHAIN grant (e.g.
+    # "node-b-*"). Empty = no auto-grant; manual `meshctl grant` only.
+    grant_nodes: str = ""
+
     # workspace / tools
     workspace_root: Path = Path("/workspace")
     mcp_enabled: bool = True
@@ -48,6 +58,18 @@ class Settings(BaseSettings):
     orchestrator_grace_s: int = 30
     apply_artifacts: bool = True
     max_artifact_bytes: int = 200_000
+
+    # M11: agents as submitters + ledger-based self-claiming
+    # max_submit_depth = how deep agent-initiated resubmissions may nest
+    # (depth 0 = top task; a submission is rejected when depth >= limit).
+    max_submit_depth: int = 2
+    # When set, workers poll the ledger and CAS-claim claimable RECEIVED
+    # tasks themselves instead of waiting for orchestrator dispatch.
+    mesh_claim: bool = False
+    claim_poll_s: float = 5.0
+    # M14: claimed tasks run their pipeline worker-driven — the finishing
+    # worker advances the snapshot itself; the orchestrator is a spectator.
+    self_pipeline: bool = True
 
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"

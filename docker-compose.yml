@@ -24,6 +24,12 @@ x-mesh-env: &mesh-env
   SHELL_TIMEOUT_S: ${SHELL_TIMEOUT_S:-120}
   MAX_OUTPUT_BYTES: ${MAX_OUTPUT_BYTES:-65536}
   APPLY_ARTIFACTS: ${APPLY_ARTIFACTS:-true}
+  # M9 capability gate: enable for multi-node deployments; the orchestrator
+  # auto-grants agents whose node matches MESH_GRANT_NODES (glob patterns).
+  MESH_GATE: ${MESH_GATE:-false}
+  MESH_GRANT_NODES: ${MESH_GRANT_NODES:-}
+  # M11: ledger-based self-claiming of claimable tasks (worker-side CAS)
+  MESH_CLAIM: ${MESH_CLAIM:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-mesh-service: &mesh-service
@@ -93,6 +99,9 @@ services:
       ROLE: planner
       NODE_NAME: ${NODE_NAME:-node-a}-planner
       MODEL_PLANNER: ${MODEL_PLANNER:-qwen2.5:7b}
+    depends_on:
+      nats:
+        condition: service_healthy
     mem_limit: 1g
     cpus: 2.0
     pids_limit: 256
@@ -105,6 +114,9 @@ services:
       ROLE: coder
       NODE_NAME: ${NODE_NAME:-node-a}-coder
       MODEL_CODER: ${MODEL_CODER:-qwen2.5-coder:7b}
+    depends_on:
+      nats:
+        condition: service_healthy
     mem_limit: 2g
     cpus: 4.0
     pids_limit: 512
@@ -117,6 +129,9 @@ services:
       ROLE: critic
       NODE_NAME: ${NODE_NAME:-node-a}-critic
       MODEL_CRITIC: ${MODEL_CRITIC:-llama3.1:8b}
+    depends_on:
+      nats:
+        condition: service_healthy
     mem_limit: 1g
     cpus: 2.0
     pids_limit: 256
