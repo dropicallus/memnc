@@ -604,6 +604,8 @@ Status: alles Ausblick, nichts davon implementiert.
 
 Bewusst ausgespart: keine Cloud-Abhängigkeit (Bot läuft lokal, nur Telegram-API raus), keine zweiten Auth-Welt — Grants bleiben die einzige Autorisierungsebene; Telegram-User-Bindung (nur Frank) ist Konfiguration, kein eigenes System.
 
+*Hinweis aus der AgentLance-Lektüre (T7-Design-Prinzip):* Die Autoren räumen selbst die Haupt-Limitierung ihres Marktes ein — Agenten schätzen ihre Bids (private Kosten) oft falsch und bieten suboptimal; die Paper-Fixes (Reputation-Update, Strategy-Notes) mildern, heben das aber nicht weg. Für memnc heißt das: Unsere Claim-Gewichtung darf nie blind aus dem Modell-Kontext geraten — Bids/Reputation speisen sich nur aus harten, im Ledger geführten Zahlen (gemessene Task-Laufzeiten, Critic-Score-Historie, Verify-Gate-Ergebnisse). Keine selbst-deklarierten Fähigkeiten im Roster; Capabilities werden gemessen, nicht behauptet.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
