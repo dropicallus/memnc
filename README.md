@@ -2,7 +2,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-34d399?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-22d3ee?style=flat-square)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-161%20passing-34d399?style=flat-square)](#local-development)
+[![Tests](https://img.shields.io/badge/tests-214%20passing-34d399?style=flat-square)](#local-development)
 [![No cloud required](https://img.shields.io/badge/cloud-never-fb7185?style=flat-square)](#security-model)
 
 **A multi-agent mesh that runs entirely on your own hardware.**
@@ -26,8 +26,9 @@ No agent framework. No cloud dependencies. No model-serving code.
   (`meshctl ledger`), not in an agent's chat history.
 - **Resource-aware claiming** — workers advertise VRAM, GPU and on-disk models;
   the claim gate routes tasks to nodes that can actually run them.
-- **Human in the loop, on your phone** — a read-only Telegram observer streams
-  task events; an approval gate is on the roadmap.
+- **Human in the loop, on your phone** — a Telegram observer streams task events
+  and takes gated control commands (`/submit`, `/cancel`, `/retry`, `/stop worker`);
+  the model pull path is approval-gated.
 
 ## Quick start
 
@@ -57,10 +58,15 @@ covered in [`docs/operations.md`](docs/operations.md).
 | Worker-driven pipeline (CAS claim, role gate) | ✅ shipped |
 | Cross-node claiming + grants (gateway, sticky revoke) | ✅ shipped |
 | Resource-aware claim gate (VRAM / GPU / roles) | ✅ shipped |
-| Telegram observer: `/tasks`, `/roster`, live events | ✅ shipped |
+| Telegram observer + gated control commands | ✅ shipped |
+| Web task console (roster, task detail, cancel/retry) | ✅ shipped |
+| Debate trace: coder/critic revisions in `/trace` | ✅ shipped |
+| Model lifecycle: pull whitelist, reputation, retirement gate | ✅ shipped |
+| Model routing visible (`/trace` shows node:model per role) | ✅ shipped |
 | Roster advertises `disk_models` (Ollama `/api/tags`) | ✅ shipped |
 | Orchestrator model-demand planning → approval gate | 🚧 in progress |
-| Model auto-load on demand (with human approval) | 🚧 planned |
+| Console v2: live view + problem surface (§14.10) | 🚧 planned |
+| Robustness: worker crash, timeout/requeue, orchestrator restart | 🚧 planned |
 | LAN model blob sharing between nodes | 🚧 planned |
 
 Design details and staged plan: [`docs/memnc-mesh-plan.md`](docs/memnc-mesh-plan.md) §14.
@@ -80,6 +86,7 @@ Everything is environment-driven; see [`.env.example`](.env.example) for the ful
 | `MESH_GATE` | `false` | registry gate; `MESH_GRANT_NODES` bootstraps grants |
 | `MAX_REVISIONS` | `3` | critic rejection cycles before failing |
 | `SELF_PIPELINE` | `true` | workers advance claimable tasks without orchestrator dispatch |
+| `MODEL_PULL_WHITELIST` | stock role models + `gemma*` | fnmatch patterns for the approval-gated model pull path; empty list closes it |
 
 Models with native tool calling work best. Without tools the worker still works:
 the coder returns file contents as JSON and the orchestrator applies them.
@@ -115,6 +122,8 @@ src/memnc/
   backends/        # ollama + openai-compatible clients
   mcp/             # stdio tool server/client (fs + shell)
   cli.py           # meshctl
+  telegram.py      # Telegram observer + control commands
+  console.py       # web task console
 docs/              # architecture, protocol, operations
 ```
 
