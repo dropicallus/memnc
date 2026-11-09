@@ -778,6 +778,22 @@ Build order: items 1–2 as one slice (buttons + short IDs share the
 control plumbing), 3–4 as the second slice, 5–8 opportunistically.
 Items 9–10 wait for the robustness classifier / §14.10 respectively.
 
+### Verified against the live cluster (2026-11-09)
+
+- Short IDs are a real gap: `meshctl state 1a1c28` → "task not found"
+  (full 24-hex required today).
+- Failure-card data already exists: `snapshot.error` is set on failure
+  (orchestrator + worker paths), the reason is also in `history`
+  ("invalid coder output: no JSON object found"), the critic verdict
+  text is in `snapshot.critique`, and `route` names the model per step.
+- `/status` digest data already exists: roster nodes carry `updated`
+  heartbeat timestamps and `disk_models` (heartbeat age + model
+  suggestions computable); `HistoryEntry.at` timestamps make the
+  timeline possible without schema changes.
+- The ledger's pile of FAILED tasks (incl. a planning 404
+  "model not found" case) is itself the failure-first-notification
+  use case: those were silent until someone ran `tasks`.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
