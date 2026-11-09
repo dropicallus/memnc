@@ -37,6 +37,10 @@ from .schema import (
     TaskSubmission,
     TaskState,
     TERMINAL_STATES,
+    reputation_key,
+    should_propose_retirement,
+    model_pull_allowed,
+    new_id,
     ROLE_OUTPUT as _OUTPUT_SCHEMA,
 )
 
@@ -96,6 +100,63 @@ async def load_model(base_url: str, model: str, keep_alive: str = "30m") -> bool
         return ok
     except Exception:  # noqa: BLE001 - load is best effort, reported via event
         log.exception("model load %s failed", model)
+        return False
+
+
+async def pull_model(base_url: str, model: str) -> bool:
+    """T7: pull a model from the Ollama registry onto local disk (approved).
+
+    Uses stream=false so the call returns one JSON status object instead of an
+    ndjson progress stream. Potentially long (multi-GB) — generous timeout.
+    """
+    import json as _json
+    import urllib.request
+
+    def _pull() -> bool:
+        body = _json.dumps({"name": model, "stream": False}).encode()
+        req = urllib.request.Request(  # noqa: S310 - configured internal URL
+            f"{base_url.rstrip('/')}/api/pull",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=3600) as resp:
+            data = _json.loads(resp.read())
+        return data.get("status") == "success"
+
+    try:
+        ok = await asyncio.to_thread(_pull)
+        log.info("model pull %s -> %s", model, "ok" if ok else "failed")
+        return ok
+    except Exception:  # noqa: BLE001 - pull is best effort, reported via event
+        log.exception("model pull %s failed", model)
+        return False
+
+
+async def unload_model(base_url: str, model: str) -> bool:
+    """T7: unload a model from VRAM (retirement approved, keep_alive=0).
+
+    The model stays on disk — retirement only frees VRAM and stops the mesh
+    from planning around it.
+    """
+    import json as _json
+    import urllib.request
+
+    def _unload() -> bool:
+        body = _json.dumps({"model": model, "keep_alive": 0}).encode()
+        req = urllib.request.Request(  # noqa: S310 - configured internal URL
+            f"{base_url.rstrip('/')}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status == 200
+
+    try:
+        ok = await asyncio.to_thread(_unload)
+        log.info("model unload %s -> %s", model, "ok" if ok else "failed")
+        return ok
+    except Exception:  # noqa: BLE001 - unload is best effort
+        log.exception("model unload %s failed", model)
         return False
 
 
@@ -293,11 +354,61 @@ class Worker:
         if request.status != "approved":
             await message.ack()
             return
+        base_url = self.settings.inference_base_url
+        if request.action == "pull":
+            # T7: approved pull — whitelist was checked by the approver's side
+            # as a guard, but re-check locally; never pull unlisted models.
+            if not model_pull_allowed(request.model, self.settings.model_pull_whitelist):
+                log.warning(
+                    "approved pull %s refused: not whitelisted", request.model
+                )
+                await message.ack()
+                return
+            ok = await pull_model(base_url, request.model)
+            if ok:
+                self._disk_models = await fetch_disk_models(base_url)
+                await load_model(base_url, request.model)
+            log.info(
+                "model pull executed",
+                extra={
+                    "node": self.settings.node_name,
+                    "model": request.model,
+                    "request": request.request_id,
+                    "ok": ok,
+                },
+            )
+            await message.ack()
+            return
+        if request.action == "retire":
+            # T7: approved retirement — unload from VRAM; the model stays on
+            # disk. Mark the reputation entry so the claim gate skips it.
+            ok = await unload_model(base_url, request.model)
+            try:
+                rep = await self.bus.get_reputation(request.model)
+                rep.retired = True
+                assert self.bus.kv is not None
+                await self.bus.kv.put(
+                    reputation_key(request.model),
+                    rep.model_dump_json().encode(),
+                )
+            except Exception:  # noqa: BLE001 - reputation is best effort
+                log.debug("retire reputation update failed", exc_info=True)
+            log.info(
+                "model retirement executed",
+                extra={
+                    "node": self.settings.node_name,
+                    "model": request.model,
+                    "request": request.request_id,
+                    "ok": ok,
+                },
+            )
+            await message.ack()
+            return
         if request.model not in self._disk_models:
             # Not on this node's disk — another node owns the load.
             await message.ack()
             return
-        ok = await load_model(self.settings.inference_base_url, request.model)
+        ok = await load_model(base_url, request.model)
         log.info(
             "model decision executed",
             extra={
@@ -599,6 +710,25 @@ class Worker:
         )
 
     # -- M11: ledger-based self-claiming -------------------------------------
+    async def _propose_retirement(self, model: str, rep) -> None:
+        """T7: raise a human-gated retirement proposal for a rejected model."""
+        request = ModelRequest(
+            request_id=new_id(),
+            model=model,
+            reason=(
+                f"retirement proposal: {rep.consecutive_rejections} consecutive "
+                f"critic rejections ({rep.rejections} total, {rep.approvals} "
+                "approvals)"
+            ),
+            action="retire",
+            decided_by=self.settings.node_name,
+        )
+        await self.bus.put_model_request(request)
+        log.info(
+            "retirement proposed",
+            extra={"model": model, "request": request.request_id},
+        )
+
     async def _claim_loop(self) -> None:
         """Poll the ledger and CAS-claim tasks matching our next role.
 
@@ -627,6 +757,14 @@ class Worker:
                     # M14: role gate — only the scheduled next role claims.
                     if snapshot.next_role and snapshot.next_role != self.role.value:
                         continue
+                    # T7: a retired model is not claimable through — the node
+                    # that retired it unloads it, so planning around it would
+                    # hand the task to a node that cannot run it.
+                    needs = snapshot.needs
+                    if needs and needs.model:
+                        rep = await self.bus.get_reputation(needs.model)
+                        if rep.retired:
+                            continue
                     claimed = await self.bus.try_claim(
                         snapshot.task_id, worker_id, role=self.role.value
                     )
@@ -747,6 +885,19 @@ class Worker:
                 envelope.role is Role.CRITIC
                 and snapshot.critique is not None
             ):
+                # T7: record the verdict against the coder model (reputation)
+                # and raise a retirement proposal once the streak is long.
+                coder_model = self.settings.model_coder
+                try:
+                    rep = await self.bus.record_reputation(
+                        coder_model, snapshot.critique.approved
+                    )
+                    if should_propose_retirement(
+                        rep, self.settings.retire_threshold
+                    ):
+                        await self._propose_retirement(coder_model, rep)
+                except Exception:  # noqa: BLE001 - reputation is best effort
+                    log.warning("reputation recording failed", exc_info=True)
                 await self._verify_gate(snapshot)
                 event = Event(
                     "result", ok=True, approved=snapshot.critique.approved

@@ -25,6 +25,7 @@ from .schema import (
     TaskNeeds,
     ControlCommand,
     TaskSubmission,
+    model_pull_allowed,
 )
 
 
@@ -248,6 +249,14 @@ async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
         request = matches[0]
         if request.status != "pending":
             print(f"{request.request_id} already {request.status}")
+            return 1
+        # T7: an approved pull is refused when the model is not whitelisted.
+        if (
+            status == "approved"
+            and request.action == "pull"
+            and not model_pull_allowed(request.model, settings.model_pull_whitelist)
+        ):
+            print(f"refused: {request.model} not in model_pull_whitelist")
             return 1
         request.status = status
         request.decided_by = args.by
