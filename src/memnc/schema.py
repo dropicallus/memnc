@@ -90,6 +90,23 @@ SUBJECT_MODEL_DECISION = "mesh.model.decision"
 MODEL_REQUESTS_BUCKET = "model_requests"
 MODEL_REQUEST_KEY = "mreq.{request_id}"
 
+# T2: human intervention over an approved channel (Telegram observer). The
+# orchestrator is the only subscriber; every command carries the acting
+# agent_id and is granted-checked (deny-by-default, acl.check_registry_write)
+# before it touches the mesh. Response is request-reply JSON.
+SUBJECT_CONTROL = "mesh.control"
+
+
+class ControlCommand(BaseModel):
+    """T2: one human intervention command, issued via an approved channel."""
+
+    action: Literal["submit", "cancel", "retry", "stop_worker"]
+    agent_id: str  # who acts — grant-checked against the M9 registry
+    task: str = ""  # submit only
+    task_id: str = ""  # cancel / retry only
+    node: str = ""  # stop_worker only
+    reason: str = ""
+
 
 class TaskNeeds(BaseModel):
     """T6: capability constraints a node must satisfy to claim a task."""
