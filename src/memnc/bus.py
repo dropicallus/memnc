@@ -29,6 +29,11 @@ from .schema import (
     GrantLevel,
     GrantRecord,
     Envelope,
+    Kind,
+    MODEL_REQUESTS_BUCKET,
+    MODEL_REQUEST_KEY,
+    ModelRequest,
+    SUBJECT_MODEL_DECISION,
     REGISTRY_BUCKET,
     ROSTER_BUCKET,
     ROSTER_KEY,
@@ -71,6 +76,7 @@ class Bus:
         self._roster = None
         self._trust = None
         self._grants = None
+        self._model_requests = None
 
     # -- lifecycle ---------------------------------------------------------
     async def connect(self, attempts: int = 20) -> None:
@@ -130,6 +136,7 @@ class Bus:
                     "mesh.task.*.events",
                     "mesh.dlq",
                     "mesh.node.>",
+                    "mesh.model.>",
                 ],
                 retention=RetentionPolicy.LIMITS,
                 # nats-py 2.x: max_age / duplicate_window are SECONDS;
@@ -258,6 +265,62 @@ class Bus:
             entry = await self._roster.get(key)
             out.append(NodeInfo.model_validate_json(entry.value))
         return out
+
+    # -- T7.5: model requests (human-gated model provisioning) --------------
+    async def ensure_model_requests(self) -> None:
+        """Ensure the model-request KV bucket exists (history keeps decisions)."""
+        assert self.js is not None
+        try:
+            self._model_requests = await self.js.key_value(MODEL_REQUESTS_BUCKET)
+        except NotFoundError:
+            self._model_requests = await self.js.create_key_value(
+                KeyValueConfig(bucket=MODEL_REQUESTS_BUCKET, history=10)
+            )
+            log.info("created model-request KV bucket %s", MODEL_REQUESTS_BUCKET)
+
+    async def put_model_request(self, request: ModelRequest) -> None:
+        """Create or update one model request record."""
+        await self.ensure_model_requests()
+        assert self._model_requests is not None
+        await self._model_requests.put(request.key(), request.model_dump_json().encode())
+
+    async def get_model_request(self, request_id: str) -> ModelRequest | None:
+        await self.ensure_model_requests()
+        assert self._model_requests is not None
+        try:
+            entry = await self._model_requests.get(
+                MODEL_REQUEST_KEY.format(request_id=request_id)
+            )
+        except (KeyError, NotFoundError):
+            return None
+        return ModelRequest.model_validate_json(entry.value)
+
+    async def list_model_requests(self) -> list[ModelRequest]:
+        """All model requests, newest first."""
+        await self.ensure_model_requests()
+        assert self._model_requests is not None
+        out: list[ModelRequest] = []
+        try:
+            keys = await self._model_requests.keys()
+        except NoKeysError:
+            return out
+        for key in keys:
+            entry = await self._model_requests.get(key)
+            out.append(ModelRequest.model_validate_json(entry.value))
+        return sorted(out, key=lambda r: r.created_at, reverse=True)
+
+    async def publish_model_decision(self, request: ModelRequest) -> None:
+        """Announce an approve/reject decision so nodes can act on it."""
+        assert self.nc is not None
+        envelope = Envelope(
+            task_id=request.task_id or "model",
+            trace_id=request.request_id,
+            kind=Kind.EVENT,
+            payload={"event": "model.decision", "request": request.model_dump()},
+        )
+        await self.nc.publish(
+            SUBJECT_MODEL_DECISION, envelope.model_dump_json().encode()
+        )
 
     # -- M9: capability grants (permission chain) --------------------------
     async def ensure_grants(self) -> None:
@@ -544,6 +607,16 @@ class Bus:
             durable,
             ack_wait_s=60,
             max_deliver=5,
+        )
+
+    async def pull_model_decisions(self, durable: str = "worker-model-decisions"):
+        """T7.5: subscribe to approve/reject decisions for model requests."""
+        assert self.js is not None
+        return await self._pull(
+            SUBJECT_MODEL_DECISION,
+            durable,
+            ack_wait_s=60,
+            max_deliver=3,
         )
 
     async def _pull(

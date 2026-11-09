@@ -24,6 +24,7 @@ from .schema import (
     CriticIssue,
     Envelope,
     FileArtifact,
+    ModelRequest,
     NodeInfo,
     ResultPayload,
     Role,
@@ -68,7 +69,38 @@ async def fetch_disk_models(base_url: str) -> list[str]:
         log.debug("disk model fetch failed", exc_info=True)
         return []
 
+
+async def load_model(base_url: str, model: str, keep_alive: str = "30m") -> bool:
+    """T7.5: load a model from the local Ollama store into VRAM (approved request).
+
+    An empty prompt on /api/generate makes Ollama load the model and keep it
+    resident for `keep_alive` without generating anything. Best effort: the
+    result is reported through a task event, not raised.
+    """
+    import json as _json
+    import urllib.request
+
+    def _load() -> bool:
+        body = _json.dumps({"model": model, "keep_alive": keep_alive}).encode()
+        req = urllib.request.Request(  # noqa: S310 - configured internal URL
+            f"{base_url.rstrip('/')}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return resp.status == 200
+
+    try:
+        ok = await asyncio.to_thread(_load)
+        log.info("model load %s -> %s", model, "ok" if ok else "failed")
+        return ok
+    except Exception:  # noqa: BLE001 - load is best effort, reported via event
+        log.exception("model load %s failed", model)
+        return False
+
+
 HEARTBEAT_INTERVAL_S = 5
+
 
 # M11: mesh_submit — the agent-facing tool that throws a task back into the
 # mesh. This is the core of self-orchestration: a coder inside task X can
@@ -187,6 +219,7 @@ class Worker:
         await asyncio.gather(
             self._command_loop(),
             self._heartbeat_loop(),
+            self._model_decision_loop(),
             *(
                 (self._claim_loop(),) if self.settings.mesh_claim else ()
             ),
@@ -222,6 +255,54 @@ class Worker:
                         await message.nak()
                     except Exception:  # noqa: BLE001
                         pass
+
+    # -- T7.5: model decisions (plan §14.7) ----------------------------------
+    async def _model_decision_loop(self) -> None:
+        """Watch approve/reject decisions; on approve, load the model from disk.
+
+        Every node sees the decision (broadcast), but only nodes that actually
+        hold the model on disk act — the others ack and ignore.
+        """
+        try:
+            subscription = await self.bus.pull_model_decisions(
+                durable=f"worker-{self.settings.node_name}-model-decisions"
+            )
+        except Exception:  # noqa: BLE001 - never kill startup over this
+            log.exception("model decision subscription failed")
+            return
+        while not self._stop.is_set():
+            messages = await self.bus.fetch(subscription, batch=1, timeout_s=5)
+            for message in messages:
+                try:
+                    await self._handle_model_decision(message)
+                except Exception:  # noqa: BLE001 - never kill the loop
+                    log.exception("model decision handling failed")
+                    try:
+                        await message.nak()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+    async def _handle_model_decision(self, message) -> None:
+        envelope = Envelope.model_validate_json(message.data)
+        request = ModelRequest.model_validate(envelope.payload.get("request", {}))
+        if request.status != "approved":
+            await message.ack()
+            return
+        if request.model not in self._disk_models:
+            # Not on this node's disk — another node owns the load.
+            await message.ack()
+            return
+        ok = await load_model(self.settings.inference_base_url, request.model)
+        log.info(
+            "model decision executed",
+            extra={
+                "node": self.settings.node_name,
+                "model": request.model,
+                "request": request.request_id,
+                "ok": ok,
+            },
+        )
+        await message.ack()
 
     async def _heartbeat_loop(self) -> None:
         model = self.settings.model_for(self.role)
