@@ -31,7 +31,13 @@ from nats.aio.msg import Msg
 
 from .bus import Bus
 from .config import Settings
-from .schema import SUBJECT_CONTROL, SUBJECT_EVENTS, ControlCommand, ModelRequest
+from .schema import (
+    SUBJECT_CONTROL,
+    SUBJECT_EVENTS,
+    ControlCommand,
+    ModelRequest,
+    model_pull_allowed,
+)
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +266,20 @@ class TelegramObserver:
         elif cmd == "mreqs":
             requests = await self.bus.list_model_requests()
             await self.bot.send_message(chat, format_model_requests(requests))
+        elif cmd == "mrep":
+            # T7: model reputation (critic verdict streaks, retirements).
+            reps = await self.bus.list_reputation()
+            if not reps:
+                await self.bot.send_message(chat, "no reputation entries")
+            else:
+                lines = ["model | appr | rej | streak | retired"]
+                for r in reps:
+                    lines.append(
+                        f"{r.model} | {r.approvals} | {r.rejections} "
+                        f"| {r.consecutive_rejections} "
+                        f"| {'yes' if r.retired else 'no'}"
+                    )
+                await self.bot.send_message(chat, "\n".join(lines))
         elif cmd in ("approve", "reject") and len(parts) >= 2:
             await self._decide(chat, cmd, parts[1].lstrip("#").strip())
         elif cmd == "gate" and len(parts) >= 3 and parts[1] in ("approve", "reject"):
@@ -274,7 +294,7 @@ class TelegramObserver:
         else:
             await self.bot.send_message(
                 chat, "commands: tasks [state] | roster | state <task-id> "
-                "| trace <task-id> | mreqs | approve|reject <request-id> | gate approve|reject "
+                "| trace <task-id> | mreqs | mrep | approve|reject <request-id> | gate approve|reject "
                 "<task-id> | submit <task> "
                 "| cancel <task-id> | retry <task-id> | stop worker <node>"
             )
@@ -322,6 +342,18 @@ class TelegramObserver:
         if request.status != "pending":
             await self.bot.send_message(
                 chat, f"{request.request_id} already {request.status}"
+            )
+            return
+        # T7: an approved pull is refused when the model is not whitelisted.
+        if (
+            status == "approved"
+            and request.action == "pull"
+            and not model_pull_allowed(
+                request.model, self.settings.model_pull_whitelist
+            )
+        ):
+            await self.bot.send_message(
+                chat, f"refused: {request.model} not in model_pull_whitelist"
             )
             return
         request.status = status

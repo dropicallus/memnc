@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import fnmatch
 import uuid
 from enum import Enum
 from typing import Any, Literal
@@ -89,6 +90,14 @@ ROSTER_TTL = 60  # seconds; worker heartbeats refresh every ~20s
 SUBJECT_MODEL_DECISION = "mesh.model.decision"
 MODEL_REQUESTS_BUCKET = "model_requests"
 MODEL_REQUEST_KEY = "mreq.{request_id}"
+
+# T7: per-model reputation from critic verdicts (hard numbers only).
+REPUTATION_KEY = "model_rep.{model}"
+
+
+def reputation_key(model: str) -> str:
+    """KV-safe reputation key (KV charset forbids ':' — ollama tags use it)."""
+    return REPUTATION_KEY.format(model=model.replace(":", "_"))
 
 # T2: human intervention over an approved channel (Telegram observer). The
 # orchestrator is the only subscriber; every command carries the acting
@@ -187,15 +196,42 @@ class ModelRequest(BaseModel):
     request_id: str
     model: str
     task_id: str = ""
-    action: Literal["load", "pull"] = "load"
+    action: Literal["load", "pull", "retire"] = "load"
     status: Literal["pending", "approved", "rejected"] = "pending"
     nodes_disk: list[str] = Field(default_factory=list)  # nodes holding it on disk
+    reason: str = ""  # T7: human-readable why (pull request / retirement proposal)
     created_at: str = Field(default_factory=now_iso)
     decided_by: str = ""
     decided_at: str = ""
 
     def key(self) -> str:
         return MODEL_REQUEST_KEY.format(request_id=self.request_id)
+
+
+class ModelReputation(BaseModel):
+    """T7: per-model reputation, written from critic verdicts only.
+
+    Hard numbers, no narratives: consecutive_rejections >= threshold makes a
+    model eligible for a retirement proposal (human-gated).
+    """
+
+    model: str
+    approvals: int = 0
+    rejections: int = 0
+    consecutive_rejections: int = 0
+    retired: bool = False
+    updated_at: str = Field(default_factory=now_iso)
+
+
+def should_propose_retirement(
+    rep: ModelReputation, threshold: int
+) -> bool:
+    """Pure T7 rule: is this model due for a retirement proposal?"""
+    return (
+        threshold > 0
+        and rep.consecutive_rejections >= threshold
+        and not rep.retired
+    )
 
 
 def plan_model_request(
@@ -220,6 +256,15 @@ def plan_model_request(
         action="load" if disk_nodes else "pull",
         nodes_disk=disk_nodes,
     )
+
+
+def model_pull_allowed(model: str, patterns: list[str]) -> bool:
+    """T7: is `model` covered by the pull whitelist?
+
+    fnmatch patterns ("qwen*", "gemma-4-31b"); an empty whitelist closes the
+    pull path entirely (approved pull decisions are then refused).
+    """
+    return any(fnmatch.fnmatch(model, p) for p in patterns)
 
 
 # Capability key layout inside the registry KV:

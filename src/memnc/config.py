@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     model_critic: str = "llama3.1:8b"
     num_ctx: int = 8192
     num_predict: int = 4096
+    # T7: model pull whitelist. fnmatch patterns ("qwen*", "gemma-4-31b").
+    # Empty list = the pull path is closed (pull decisions are acknowledged
+    # but refused); loaded/disk models keep working without any entry.
+    model_pull_whitelist: list[str] = Field(default_factory=list)
+    # T7: consecutive critic rejections before a retirement proposal is raised.
+    retire_threshold: int = 3
 
     log_level: str = "INFO"
 

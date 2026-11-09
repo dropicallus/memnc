@@ -34,7 +34,9 @@ from .schema import (
     MODEL_REQUESTS_BUCKET,
     MODEL_REQUEST_KEY,
     ModelRequest,
+    ModelReputation,
     SUBJECT_MODEL_DECISION,
+    reputation_key,
     REGISTRY_BUCKET,
     ROSTER_BUCKET,
     ROSTER_KEY,
@@ -321,6 +323,50 @@ class Bus:
             entry = await self._model_requests.get(key)
             out.append(ModelRequest.model_validate_json(entry.value))
         return sorted(out, key=lambda r: r.created_at, reverse=True)
+
+    # -- T7: model reputation ------------------------------------------------
+    async def get_reputation(self, model: str) -> ModelReputation:
+        """Fetch the reputation entry for a model; defaults if never recorded."""
+        assert self.kv is not None
+        try:
+            entry = await self.kv.get(reputation_key(model))
+            return ModelReputation.model_validate_json(entry.value)
+        except KeyError:
+            return ModelReputation(model=model)
+
+    async def record_reputation(
+        self, model: str, approved: bool
+    ) -> ModelReputation:
+        """Record a critic verdict against the coder model (T7).
+
+        An approval clears the consecutive-rejection streak; a rejection
+        increments it. Best effort only.
+        """
+        rep = await self.get_reputation(model)
+        if approved:
+            rep.approvals += 1
+            rep.consecutive_rejections = 0
+        else:
+            rep.rejections += 1
+            rep.consecutive_rejections += 1
+        rep.updated_at = now_iso()
+        assert self.kv is not None
+        await self.kv.put(reputation_key(model), rep.model_dump_json().encode())
+        return rep
+
+    async def list_reputation(self) -> list[ModelReputation]:
+        """All recorded model reputations, alphabetical by model."""
+        assert self.kv is not None
+        out: list[ModelReputation] = []
+        try:
+            keys = await self.kv.keys()
+        except NoKeysError:
+            return out
+        for key in keys:
+            if str(key).startswith("model_rep."):
+                entry = await self.kv.get(key)
+                out.append(ModelReputation.model_validate_json(entry.value))
+        return sorted(out, key=lambda r: r.model)
 
     async def publish_model_decision(self, request: ModelRequest) -> None:
         """Announce an approve/reject decision so nodes can act on it."""
