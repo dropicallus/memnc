@@ -23,6 +23,7 @@ from nats.js.errors import InvalidKeyError, NotFoundError, NoKeysError
 from . import acl
 from .config import Settings
 from .schema import (
+    now_iso,
     CAPABILITY_KEY,
     GRANT_BUCKET,
     Capability,
@@ -265,6 +266,18 @@ class Bus:
             entry = await self._roster.get(key)
             out.append(NodeInfo.model_validate_json(entry.value))
         return out
+
+    async def set_node_paused(self, node_id: str, paused: bool) -> NodeInfo | None:
+        """T4: force the paused flag on a roster entry (bypasses the merge)."""
+        await self.ensure_roster()
+        assert self._roster is not None
+        info = await self.get_node(node_id)
+        if info is None:
+            return None
+        info.paused = paused
+        info.updated_at = now_iso()
+        await self._roster.put(info.key(), info.model_dump_json().encode())
+        return info
 
     # -- T7.5: model requests (human-gated model provisioning) --------------
     async def ensure_model_requests(self) -> None:

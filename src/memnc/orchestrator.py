@@ -169,7 +169,8 @@ class Orchestrator:
     # -- T2: human intervention over approved channels -----------------------
 
     async def _on_control(self, message) -> None:
-        """Grant-checked human commands: submit / cancel / retry / stop_worker.
+        """Grant-checked human commands: submit / cancel / retry / stop_worker /
+        decide / pause_node / resume_node.
 
         Deny-by-default: the command's agent_id must hold a valid CHAIN grant
         (the Telegram observer gets one via ``meshctl grant`` once). Every
@@ -242,6 +243,26 @@ class Orchestrator:
                             "verdict": verdict,
                             "state": snapshot.state.value,
                         }
+                    ).encode()
+                )
+            elif cmd.action in ("pause_node", "resume_node"):
+                # T4: human pause — the node's claim loop stops pulling work
+                # until resume (heartbeat refreshes keep the flag).
+                if not cmd.node.strip():
+                    raise ValueError(f"{cmd.action} needs a node name")
+                node = await self.bus.set_node_paused(
+                    cmd.node.strip(), cmd.action == "pause_node"
+                )
+                if node is None:
+                    raise ValueError(f"unknown node {cmd.node.strip()}")
+                log.info(
+                    "node %s by human",
+                    "paused" if cmd.action == "pause_node" else "resumed",
+                    extra={"node": cmd.node, "by": cmd.agent_id},
+                )
+                await message.respond(
+                    json.dumps(
+                        {"ok": True, "node": node.node_id, "paused": node.paused}
                     ).encode()
                 )
             elif cmd.action == "stop_worker":

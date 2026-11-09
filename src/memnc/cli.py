@@ -266,6 +266,25 @@ async def cmd_gate(args: argparse.Namespace, settings: Settings) -> int:
         await client.close()
 
 
+async def cmd_pause(args: argparse.Namespace, settings: Settings) -> int:
+    """T4: pause or resume a node's claim loop."""
+    client = await _connect(settings)
+    cmd = ControlCommand(action=args.verb, agent_id=args.by, node=args.node)
+    try:
+        response = await client.request(
+            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
+        )
+        data = json.loads(response.data)
+        if "error" in data:
+            print(f"error: {data['error']}", file=sys.stderr)
+            return 1
+        state = "paused" if data["paused"] else "resumed"
+        print(f"{data['node']} {state}")
+        return 0
+    finally:
+        await client.close()
+
+
 async def cmd_registry(_: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
@@ -440,6 +459,16 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("task_id", help="parked task id (prefix not supported)")
     gate.add_argument("--by", default="meshctl")
     gate.set_defaults(func=cmd_gate)
+
+    pause = subparsers.add_parser("pause", help="T4: stop a node from claiming work")
+    pause.add_argument("node")
+    pause.add_argument("--by", default="meshctl")
+    pause.set_defaults(func=cmd_pause, verb="pause_node")
+
+    resume = subparsers.add_parser("resume", help="T4: let a paused node claim again")
+    resume.add_argument("node")
+    resume.add_argument("--by", default="meshctl")
+    resume.set_defaults(func=cmd_pause, verb="resume_node")
 
     roster = subparsers.add_parser("roster", help="T6: list live node capabilities")
     roster.set_defaults(func=cmd_roster)
