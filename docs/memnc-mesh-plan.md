@@ -689,6 +689,95 @@ Deferred deliberately — build after §14.9 and once T4's remaining
 model-routing-visible slice lands, since both share the task-detail
 data model.
 
+## 14.11 Usability & operator experience (PLANNED, researched 2026-11-09)
+
+Goal: make daily driving of the mesh feel like texting a competent
+operator, not querying a database. Ideas researched against current
+chatops/agent-UX practice (inline-keyboard approvals are the established
+pattern; "actions in context" and edit-in-place confirmation are the
+consensus UX rules). Ordered by impact; each item states what it fixes
+today.
+
+### P0 — friction we feel every day
+
+1. **Inline keyboards for gates and control actions** (biggest single win).
+   Instead of typing `/approve <request-id>` / `/gate approve <task-id>`,
+   the bot sends the pending request as a message with buttons:
+   `[✅ Approve] [❌ Reject]` for model requests, `[Cancel] [Retry]` under
+   failed-task events, `[Pause] [Resume]` under roster anomalies. On tap:
+   `answerCallbackQuery` + edit the original message in place to show the
+   decision (buttons removed, decision stamped) — no extra chat clutter.
+   Implementation: python-telegram-bot `CallbackQueryHandler`; store the
+   `ControlCommand` as `callback_data` (compact `m:<req-id>:approve`,
+   `t:<task-id>:retry`); the existing grant-checked `_control` path is
+   reused unchanged, only the transport becomes a button.
+   Fixes: copying 20-hex IDs on mobile, typo risk, slow approval loop.
+2. **Short task IDs everywhere.** Accept unambiguous prefixes (≥6 chars)
+   for every task-id argument (`state`, `trace`, `cancel`, `retry`,
+   `gate`); `/tasks` and `/trace` already print only a prefix — align
+   them. Fixes: ID copy/paste round trips.
+3. **`/status` one-shot digest.** One command answering "is everything
+   fine?": tasks by state (count + the interesting ones), nodes with
+   heartbeat age and current claim, pending model requests, models near
+   retirement. Replaces composing `/tasks` + `/roster` + `/mreqs` +
+   `/mrep`. The console's roster data model is the source; the digest is
+   a formatter, not a new data path.
+4. **Failure-first notifications with the cause.** Today a failed task
+   arrives as one event line among many; the reason ("invalid coder
+   output") hides in the trace. When a task reaches a terminal state,
+   push a short verdict card: what failed, which role/model ran it, the
+   last critic objection, and *what to do* (`/retry <id>` or, if the
+   route shows the weak model, a one-tap "pull a stronger coder" button
+   that files the ModelRequest). Fixes: silent failure discovery,
+   model-mismatch invisible → remediation one tap away.
+
+### P1 — smoother daily loop
+
+5. **Task output delivered to chat.** On completion, push the result
+   artifact (or its path/summary) with the final event, not just ledger
+   state. Fix: no second tool hop to read what the mesh produced.
+6. **Retry with intent.** `/retry <id> --model qwen2.5-coder:7b` (or a
+   button variant) overrides the model for the rerun; `/retry` alone
+   keeps the recorded route. Fixes: rerunning a task into the same
+   failing configuration.
+7. **Command discovery.** Register the command list with BotFather
+   (setMyCommands) so Telegram autocompletes; `/help` prints the same
+   list grouped (view / act / decide). Fix: the dense one-line usage
+   string is the only discovery surface today.
+8. **Quieter event stream.** Group and throttle routine state transitions
+   (e.g. claim→advance collapsed), keep the loud channel for submit /
+   failure / gate / completion. Rationale: notification rules belong to
+   the user, not the emitter; §14.10's "park > 10 min → DM" rule then
+   composes on top. Fix: event spam vs. signal (Frank's original
+   Telegram frustration).
+
+### P2 — polish, tie into later milestones
+
+9. **Model-suggestion flow on failure**: when the failure classifier
+   (robustness milestone) tags "weak model" and reputation data agrees,
+   the failure card offers the known-good alternative from the roster's
+   `disk_models`/whitelist. Bridges §14.11 → §14.10 problem surface.
+10. **Console ↔ Telegram links**: task-detail deep links from failure
+    cards into the console page (and back-buttons into chat). Zero new
+    state; pure URL construction once §14.10 lands.
+11. **Drafted-submit flow**: `/submit` with no argument starts a guided
+    prompt (Bot API question mode); plain chat text stays non-commands
+    (no accidental task creation). Fix: new-user error surface.
+
+### Non-goals / guardrails
+
+- No freeform chat-as-instruction: commands stay explicit and
+  grant-checked; buttons only *transport* existing `ControlCommand`s —
+  no new authority path (T2 deny-by-default model untouched).
+- Single-consumer rule unchanged: buttons are handled by the same
+  observer poller via callback queries, not a second getUpdates loop.
+- German-language chat output stays a presentation-layer choice; repo
+  strings stay English (hard repo constraint).
+
+Build order: items 1–2 as one slice (buttons + short IDs share the
+control plumbing), 3–4 as the second slice, 5–8 opportunistically.
+Items 9–10 wait for the robustness classifier / §14.10 respectively.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
