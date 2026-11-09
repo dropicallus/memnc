@@ -65,7 +65,7 @@ class FakeBus:
 
 
 _GRANTED = GrantRecord(
-    agent_id="telegram:123", level=GrantLevel.CHAIN,
+    agent_id="telegram-123", level=GrantLevel.CHAIN,
     granted_by="root",
 )
 
@@ -77,7 +77,7 @@ def _orch(grants=None) -> Orchestrator:
 
 
 def _cmd(**kw) -> ControlCommand:
-    base = dict(action="submit", agent_id="telegram:123", task="write hello")
+    base = dict(action="submit", agent_id="telegram-123", task="write hello")
     base.update(kw)
     return ControlCommand(**base)
 
@@ -97,7 +97,7 @@ def test_denied_without_grant():
 
 
 def test_submit_creates_task_and_records_human_event():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd())
     assert resp["ok"] is True
     snapshot = orch.bus.snapshots[resp["task_id"]]
@@ -106,13 +106,13 @@ def test_submit_creates_task_and_records_human_event():
 
 
 def test_submit_requires_task_text():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd(task="   "))
     assert "error" in resp
 
 
 def test_cancel_moves_task_to_cancelled():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd())
     resp2 = _run(orch, _cmd(action="cancel", task_id=resp["task_id"], task=""))
     assert resp2["ok"] is True
@@ -122,7 +122,7 @@ def test_cancel_moves_task_to_cancelled():
 
 
 def test_retry_redispatches_failed_task():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd())
     task_id = resp["task_id"]
     orch.bus.snapshots[task_id].state = TaskState.FAILED
@@ -134,7 +134,7 @@ def test_retry_redispatches_failed_task():
 
 
 def test_retry_rejects_terminal_done_task():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd())
     task_id = resp["task_id"]
     orch.bus.snapshots[task_id].state = TaskState.DONE
@@ -143,13 +143,13 @@ def test_retry_rejects_terminal_done_task():
 
 
 def test_cancel_unknown_task_errors():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd(action="cancel", task_id="nope", task=""))
     assert "error" in resp
 
 
 def test_stop_worker_withdraws_node_capabilities():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     orch.bus.capabilities = [
         Capability(agent_id="n1-coder", skill="code", node="n1"),
         Capability(agent_id="n1-critic", skill="critic", node="n1"),
@@ -161,6 +161,6 @@ def test_stop_worker_withdraws_node_capabilities():
 
 
 def test_stop_worker_requires_node():
-    orch = _orch({"telegram:123": _GRANTED})
+    orch = _orch({"telegram-123": _GRANTED})
     resp = _run(orch, _cmd(action="stop_worker", task="", node="  "))
     assert "error" in resp
