@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from unittest.mock import MagicMock
 
-from src.memnc.schema import (
+from memnc.schema import (
     TrustEntry,
     TRUST_DEFAULT,
     TRUST_MAX,
@@ -12,8 +12,8 @@ from src.memnc.schema import (
     TRUST_DECAY,
     TRUST_BUCKET,
 )
-from src.memnc.bus import Bus
-from src.memnc.scoring import Candidate, score_candidates
+from memnc.bus import Bus
+from memnc.scoring import Candidate, score_candidates
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def mock_settings():
 def bus(mock_settings):
     bus = Bus(mock_settings)
     # Setup FakeKV in bus
-    from tests.test_trust_fake import FakeKV
+    from test_trust_fake import FakeKV
     bus._trust = FakeKV()
     # Mock NATS objects so connect doesn't fail
     bus.js = MagicMock()
@@ -73,7 +73,7 @@ async def test_trust_decay_multiplies(bus):
     # Setup initial state
     await bus.trust_credit(subject, rating="orchestrator") # credit = 1.0
     # Force credit to 5.0 manually for testing decay
-    from tests.test_trust_fake import FakeKV
+    from test_trust_fake import FakeKV
     await bus._trust.put(f"trust.{subject}", b'{"subject": "agent-1", "rating": "admin", "credit": 5.0, "ts": 0.0, "attribution": []}')
     
     await bus.trust_decay(subject)
