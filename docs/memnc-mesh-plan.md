@@ -627,6 +627,21 @@ The practical win is therefore not shuttling but **demand-driven loading**: one 
 Context: node-a currently holds three edge models (Gemma-4-31B-Humanlike-Chat as critic, Apex-35B-V1.0, ripple) — role assignment for Apex and ripple is still open and deliberately deferred until this stage is discussed.
 
 
+## 14.8 Shipment: distribution & deployment
+
+Two artifacts, two audiences (decided 2026-11-09):
+
+- **Mesh services — docker compose (status quo, stays).** One `docker compose up -d` on a fresh host stands up NATS + orchestrator + workers + telegram observer. Workers need host-native Ollama anyway (ROCm), so containers never carry inference. Image is `memnc:latest`, built from the same `pyproject.toml`; the only node-specific input is env (`.env`: token, allow-list, VRAM/GPU, NATS URL). No registry dependency for now — `compose build` on the target node is the delivery.
+- **`meshctl` — installable package (uv/pip).** Client-side only: hosts and agents (Hermes, LAN admins) must not run Docker to talk to the mesh. The package already exists (`pyproject.toml`, Python 3.11+); ship it as `uv tool install memnc` (or `uv sync` from a clone). Client needs no token for a plaintext NATS; with auth, `NATS_URL` carries credentials via query params (`nats://user:token@host:4222`) — document that.
+
+Explicitly NOT shipped as a uv package: orchestrator/worker/observer runtimes. They are stateful-in-practice (Ollama co-location, GPU env, container isolation for the shell sandbox — see §15) and packaging them for pip would duplicate the compose path for no gain. If a later phase wants bare-metal workers, that is a separate `memnc-worker` package decision, not now.
+
+Checklist for shipping a new node:
+1. `git clone` + `docker compose up -d --build` (or pull prebuilt image later).
+2. Node env: `NODE_NAME`, `NODE_ROLES`, `NODE_VRAM_GB`, `NODE_GPU`, `OLLAMA_BASE_URL`, `TELEGRAM_*` only on the observer host.
+3. Install meshctl on the operator/agent host: `uv tool install` from the repo.
+4. `meshctl doctor` → `meshctl roster` to verify presence.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
