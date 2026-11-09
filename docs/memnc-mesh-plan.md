@@ -664,6 +664,26 @@ Status: a draft skill (`t7-gate`) exists in this Hermes profile; treat it
 as the reference for the eventual in-repo plugin. Nothing of this ships
 with memnc until Frank green-lights it.
 
+## 14.10 Console v2: live view + problem surface (PLANNED, deferred 2026-11-09)
+
+Frank's motivation: Telegram delivers events but no overview — he wants
+updates pushed to him, visibility of *which node does what*, and problems
+surfaced without polling commands. The T4 console slice already has the
+static bones (node roster, task buttons, debate trace); v2 is about
+liveness and problem focus:
+
+- live updates without reload (SSE/WebSocket on `mesh.task.*.events` +
+  roster changes),
+- a per-node activity view (current claim, last result, heartbeat age),
+- a "problems" surface: parked tasks, failed/retrying tasks, silent
+  nodes (heartbeat stale), models nearing retirement threshold,
+- optional notification rules ("park > 10 min" → Telegram DM) so the
+  observer stays the push channel and the console the rich view.
+
+Deferred deliberately — build after §14.9 and once T4's remaining
+model-routing-visible slice lands, since both share the task-detail
+data model.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
