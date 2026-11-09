@@ -247,8 +247,9 @@ class TelegramObserver:
     # -- T2: human intervention via the orchestrator control gate ------------
     async def _control(self, chat: str, action: str, argument: str) -> None:
         """Publish a ControlCommand; the orchestrator grant-checks and acts."""
+        # NOTE: KV keys reject ':', so the grantable agent id uses a hyphen.
         cmd = ControlCommand(
-            action=action, agent_id=f"telegram:{chat}",  # type: ignore[arg-type]
+            action=action, agent_id=f"telegram-{chat}",  # type: ignore[arg-type]
             task=argument if action == "submit" else "",
             task_id=argument.lstrip("#") if action in ("cancel", "retry") else "",
             node=argument if action == "stop_worker" else "",
