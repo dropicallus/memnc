@@ -642,6 +642,26 @@ Checklist for shipping a new node:
 3. Install meshctl on the operator/agent host: `uv tool install` from the repo.
 4. `meshctl doctor` → `meshctl roster` to verify presence.
 
+## 14.9 Hermes plugin as second approval surface (PLANNED, not built)
+
+Plan only — deliberately not implemented yet (Frank, 2026-11-09).
+
+A small Hermes-side plugin/skill wrapping `meshctl` as a second approval
+channel next to Telegram (§14.7/T7.5). Both channels are first-come
+first-served on the same KV record + `mesh.model.decision` stream; the
+second one sees "already decided". Scope when built:
+
+- skill with the `mreqs` / `decide approve|reject` workflow (meshctl from
+  the host, `NATS_URL=nats://localhost:4222` override, PYTHONPATH caveat);
+- optionally thin shell scripts so agents call `meshctl-mreqs` /
+  `meshctl-decide` instead of remembering env flags;
+- the Telegram observer keeps its minimal approve/reject write path
+  unchanged; the observer stays read-only apart from that.
+
+Status: a draft skill (`t7-gate`) exists in this Hermes profile; treat it
+as the reference for the eventual in-repo plugin. Nothing of this ships
+with memnc until Frank green-lights it.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
