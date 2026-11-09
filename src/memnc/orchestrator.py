@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from . import acl
+from .acl import check_registry_write
 from .bus import Bus
 from .config import Settings, get_settings
 from .fsutil import apply_artifacts
@@ -23,6 +24,7 @@ from .schema import (
     plan_model_request,
     Role,
     SUBJECT_CMD,
+    SUBJECT_CONTROL,
     SUBJECT_HEARTBEAT,
     SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
@@ -31,6 +33,7 @@ from .schema import (
     TaskState,
     TERMINAL_STATES,
     TaskSubmission,
+    ControlCommand,
     GrantLevel,
     new_id,
     now_iso,
@@ -64,6 +67,11 @@ class Orchestrator:
         )
         self._heartbeat_sub = await self.bus.nc.subscribe(
             SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
+        )
+        # T2: human intervention commands (submit/cancel/retry/stop_worker)
+        # from approved channels — grant-checked, then ledger-recorded.
+        self._control_sub = await self.bus.nc.subscribe(
+            SUBJECT_CONTROL, cb=self._on_control
         )
         self._results = await self.bus.pull_results(
             durable=f"orchestrator-results-{self.settings.node_name}"
@@ -104,53 +112,139 @@ class Orchestrator:
             if target_node not in accepted:
                 return
             submission = TaskSubmission.model_validate_json(message.data)
-            # M11: recursion limit for agents-as-submitters.
-            if submission.depth >= self.settings.max_submit_depth:
-                raise ValueError(
-                    f"submission depth {submission.depth} >= "
-                    f"max_submit_depth {self.settings.max_submit_depth}"
-                )
-            snapshot = TaskSnapshot(
-                task_id=new_id(),
-                trace_id=new_id(),
-                task=submission.task,
-                context=submission.context,
-                max_revisions=submission.max_revisions
-                if submission.max_revisions is not None
-                else self.settings.max_revisions,
-                fanout=submission.fanout,
-                depth=submission.depth,
-                claimable=submission.claimable,
-                needs=submission.needs,
-                # M14: worker-driven pipeline for claimable tasks
-                next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
-                # M15: the orchestrator that accepted the submission owns it.
-                origin_node=self.settings.node_name,
-                state=TaskState.RECEIVED,
-            )
-            await self.bus.put_snapshot(snapshot)
-            await self.bus.emit_event(snapshot, "task.received", submission.task[:200])
-            await message.respond(
-                json.dumps({"task_id": snapshot.task_id}).encode()
-            )
-            log.info(
-                "task submitted",
-                extra={"task_id": snapshot.task_id, "task": submission.task[:200]},
-            )
-            if submission.claimable:
-                # M11: referee mode — the orchestrator does NOT dispatch.
-                # The task waits in RECEIVED until an agent CAS-claims it
-                # (bus.try_claim); _timeout_loop then dispatches claimed ones.
-                await self.bus.emit_event(snapshot, "task.claimable", "waiting for claim")
-            else:
-                await self._apply(snapshot, Event("start"))
-            await self._maybe_request_model(snapshot)
+            snapshot = await self._accept_submission(submission)
+            await message.respond(json.dumps({"task_id": snapshot.task_id}).encode())
         except Exception as exc:  # noqa: BLE001
             log.exception("submission failed")
             try:
                 await message.respond(json.dumps({"error": str(exc)}).encode())
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _accept_submission(
+        self, submission: TaskSubmission, source: str = "meshctl"
+    ) -> TaskSnapshot:
+        """Create the snapshot and start the pipeline (shared by submit paths)."""
+        # M11: recursion limit for agents-as-submitters.
+        if submission.depth >= self.settings.max_submit_depth:
+            raise ValueError(
+                f"submission depth {submission.depth} >= "
+                f"max_submit_depth {self.settings.max_submit_depth}"
+            )
+        snapshot = TaskSnapshot(
+            task_id=new_id(),
+            trace_id=new_id(),
+            task=submission.task,
+            context=submission.context,
+            max_revisions=submission.max_revisions
+            if submission.max_revisions is not None
+            else self.settings.max_revisions,
+            fanout=submission.fanout,
+            depth=submission.depth,
+            claimable=submission.claimable,
+            needs=submission.needs,
+            # M14: worker-driven pipeline for claimable tasks
+            next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
+            # M15: the orchestrator that accepted the submission owns it.
+            origin_node=self.settings.node_name,
+            state=TaskState.RECEIVED,
+        )
+        await self.bus.put_snapshot(snapshot)
+        await self.bus.emit_event(snapshot, "task.received", f"[{source}] {submission.task[:180]}")
+        log.info(
+            "task submitted",
+            extra={"task_id": snapshot.task_id, "task": submission.task[:200]},
+        )
+        if submission.claimable:
+            # M11: referee mode — the orchestrator does NOT dispatch.
+            # The task waits in RECEIVED until an agent CAS-claims it
+            # (bus.try_claim); _timeout_loop then dispatches claimed ones.
+            await self.bus.emit_event(snapshot, "task.claimable", "waiting for claim")
+        else:
+            await self._apply(snapshot, Event("start"))
+        await self._maybe_request_model(snapshot)
+        return snapshot
+
+    # -- T2: human intervention over approved channels -----------------------
+
+    async def _on_control(self, message) -> None:
+        """Grant-checked human commands: submit / cancel / retry / stop_worker.
+
+        Deny-by-default: the command's agent_id must hold a valid CHAIN grant
+        (the Telegram observer gets one via ``meshctl grant`` once). Every
+        accepted action is recorded on the task snapshot as a human.* event.
+        """
+        try:
+            cmd = ControlCommand.model_validate_json(message.data)
+            grant = await self.bus.grant_read(cmd.agent_id)
+            decision = check_registry_write(grant, cmd.agent_id)
+            if not decision:
+                await message.respond(json.dumps({"error": decision.reason}).encode())
+                return
+            if cmd.action == "submit":
+                if not cmd.task.strip():
+                    raise ValueError("submit needs a task")
+                snapshot = await self._accept_submission(
+                    TaskSubmission(task=cmd.task.strip()), source=f"human:{cmd.agent_id}"
+                )
+                snapshot.record("human.submit", f"by={cmd.agent_id} via control")
+                await self.bus.put_snapshot(snapshot)
+                await message.respond(
+                    json.dumps({"ok": True, "task_id": snapshot.task_id}).encode()
+                )
+            elif cmd.action == "cancel":
+                snapshot = await self._human_task_op(cmd)
+                await self._apply(snapshot, Event("cancel", reason=f"by {cmd.agent_id}"))
+                await message.respond(json.dumps({"ok": True}).encode())
+            elif cmd.action == "retry":
+                snapshot = await self._human_task_op(cmd)
+                if snapshot.state not in (TaskState.FAILED, TaskState.CANCELLED):
+                    raise ValueError(
+                        f"retry needs a FAILED/CANCELLED task, {snapshot.task_id} is {snapshot.state.value}"
+                    )
+                snapshot.state = TaskState.RECEIVED
+                snapshot.record("human.retry", f"by={cmd.agent_id}")
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(
+                    snapshot, "human.retry", f"re-dispatched by {cmd.agent_id}"
+                )
+                await self._apply(snapshot, Event("start"))
+                await self._maybe_request_model(snapshot)
+                await message.respond(json.dumps({"ok": True}).encode())
+            elif cmd.action == "stop_worker":
+                if not cmd.node.strip():
+                    raise ValueError("stop_worker needs a node name")
+                # Withdraw every capability record on that node so it receives
+                # no further work; the process itself keeps running until the
+                # operator stops it on the host (plan §14.6 T2 scope note).
+                caps = await self.bus.list_capabilities()
+                withdrawn = [
+                    cap.agent_id for cap in caps if cap.node == cmd.node.strip()
+                ]
+                for agent_id in sorted(set(withdrawn)):
+                    await self.bus.withdraw_capability(agent_id)
+                log.info(
+                    "worker stopped by human",
+                    extra={"node": cmd.node, "by": cmd.agent_id, "agents": withdrawn},
+                )
+                await message.respond(json.dumps({"ok": True}).encode())
+        except Exception as exc:  # noqa: BLE001
+            log.exception("control command failed")
+            try:
+                await message.respond(json.dumps({"error": str(exc)}).encode())
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _human_task_op(self, cmd: ControlCommand) -> TaskSnapshot:
+        """Fetch the target task and record the human action on it."""
+        if not cmd.task_id.strip():
+            raise ValueError(f"{cmd.action} needs a task_id")
+        snapshot = await self.bus.get_snapshot(cmd.task_id.strip())
+        if snapshot is None:
+            raise ValueError(f"unknown task {cmd.task_id.strip()}")
+        snapshot.record(f"human.{cmd.action}", f"by={cmd.agent_id}")
+        await self.bus.put_snapshot(snapshot)
+        return snapshot
 
     # -- T7.5: model demand planning (plan §14.7) ----------------------------
     async def _maybe_request_model(self, snapshot: TaskSnapshot) -> None:

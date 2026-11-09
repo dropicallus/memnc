@@ -31,7 +31,7 @@ from nats.aio.msg import Msg
 
 from .bus import Bus
 from .config import Settings
-from .schema import SUBJECT_EVENTS, ModelRequest
+from .schema import SUBJECT_CONTROL, SUBJECT_EVENTS, ControlCommand, ModelRequest
 
 log = logging.getLogger(__name__)
 
@@ -233,11 +233,40 @@ class TelegramObserver:
             await self.bot.send_message(chat, format_model_requests(requests))
         elif cmd in ("approve", "reject") and len(parts) >= 2:
             await self._decide(chat, cmd, parts[1].lstrip("#").strip())
+        elif cmd in ("submit", "cancel", "retry"):
+            await self._control(chat, cmd, parts[1] if len(parts) >= 2 else "")
+        elif cmd == "stop" and len(parts) >= 3 and parts[1].lower() == "worker":
+            await self._control(chat, "stop_worker", parts[2])
         else:
             await self.bot.send_message(
                 chat, "commands: tasks [state] | roster | state <task-id> "
-                "| mreqs | approve|reject <request-id>"
+                "| mreqs | approve|reject <request-id> | submit <task> "
+                "| cancel <task-id> | retry <task-id> | stop worker <node>"
             )
+
+    # -- T2: human intervention via the orchestrator control gate ------------
+    async def _control(self, chat: str, action: str, argument: str) -> None:
+        """Publish a ControlCommand; the orchestrator grant-checks and acts."""
+        cmd = ControlCommand(
+            action=action, agent_id=f"telegram:{chat}",  # type: ignore[arg-type]
+            task=argument if action == "submit" else "",
+            task_id=argument.lstrip("#") if action in ("cancel", "retry") else "",
+            node=argument if action == "stop_worker" else "",
+        )
+        try:
+            assert self.bus.nc is not None
+            reply = await self.bus.nc.request(
+                SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
+            )
+            resp = json.loads(reply.data)
+            if "error" in resp:
+                await self.bot.send_message(chat, f"denied: {resp['error']}")
+            elif action == "submit":
+                await self.bot.send_message(chat, f"submitted: #{resp['task_id']}")
+            else:
+                await self.bot.send_message(chat, f"{action} ok")
+        except Exception as exc:  # noqa: BLE001
+            await self.bot.send_message(chat, f"control failed: {exc}")
 
     # -- T7.5: minimal model-request write path -----------------------------
     async def _decide(self, chat: str, action: str, request_id: str) -> None:
