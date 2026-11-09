@@ -1,14 +1,19 @@
-"""T1: read-only Telegram observer (plan §14.6, T1).
+"""T1: Telegram observer (plan §14.6).
 
-Mirrors mesh ledger activity into Telegram and answers two read-only
-commands. No intervention, no write path: every message it sends is derived
-from NATS events or KV snapshots. Authorization is a static allow-list of
-chat ids (TELEGRAM_ALLOW, comma-separated); anything else is ignored.
+Mirrors mesh ledger activity into Telegram and answers read-only commands,
+plus the single gated write path for T7.5 model requests: /mreqs lists them,
+/approve and /reject decide one and publish the decision on
+mesh.model.decision. Nothing else writes. Authorization is a static
+allow-list of chat ids (TELEGRAM_ALLOW, comma-separated); anything else is
+ignored.
 
 Design notes:
 - Uses the raw Bot API over httpx (long polling) - no extra dependency.
 - Events are published per task on core NATS subjects
   (mesh.task.<id>.events), so a wildcard core subscription sees all of them.
+- The write path is deliberately minimal: only /approve//reject on model
+  requests, only for allow-listed chats, always via the KV record + one
+  event publish - the mesh itself stays untouched.
 - The Bot API calls never raise into the event loop: delivery problems are
   logged and swallowed (an observer must never disturb the mesh).
 """
@@ -18,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -25,7 +31,7 @@ from nats.aio.msg import Msg
 
 from .bus import Bus
 from .config import Settings
-from .schema import SUBJECT_EVENTS
+from .schema import SUBJECT_EVENTS, ModelRequest
 
 log = logging.getLogger(__name__)
 
@@ -149,8 +155,22 @@ def format_roster(nodes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_model_requests(requests: list["ModelRequest"]) -> str:
+    """Compact /mreqs view: one line per model request, newest first."""
+    if not requests:
+        return "no model requests"
+    lines = [f"{len(requests)} model requests:"]
+    for r in requests[:15]:
+        disk = f" disk@{','.join(r.nodes_disk)}" if r.nodes_disk else ""
+        lines.append(
+            f"{r.request_id} {r.status} {r.action} {r.model}{disk}"
+        )
+    return "\n".join(lines)
+
+
 class TelegramObserver:
-    """Read-only mirror: NATS events -> Telegram, Telegram commands -> KV."""
+    """NATS events -> Telegram; read commands plus the ONE gated write path
+    (approve/reject on model requests, plan §14.7)."""
 
     def __init__(self, settings: Settings, bot: "BotAPI"):
         self.settings = settings
@@ -208,10 +228,42 @@ class TelegramObserver:
                 await self.bot.send_message(chat, f"task not found: {parts[1]}")
             else:
                 await self.bot.send_message(chat, format_task(snapshot.model_dump()))
+        elif cmd == "mreqs":
+            requests = await self.bus.list_model_requests()
+            await self.bot.send_message(chat, format_model_requests(requests))
+        elif cmd in ("approve", "reject") and len(parts) >= 2:
+            await self._decide(chat, cmd, parts[1].lstrip("#").strip())
         else:
             await self.bot.send_message(
-                chat, "commands: tasks [state] | roster | state <task-id>"
+                chat, "commands: tasks [state] | roster | state <task-id> "
+                "| mreqs | approve|reject <request-id>"
             )
+
+    # -- T7.5: minimal model-request write path -----------------------------
+    async def _decide(self, chat: str, action: str, request_id: str) -> None:
+        """The ONLY write path: approve/reject on a model request."""
+        status = "approved" if action == "approve" else "rejected"
+        matches = [
+            r for r in await self.bus.list_model_requests()
+            if r.request_id.startswith(request_id)
+        ]
+        if not matches:
+            await self.bot.send_message(chat, f"no model request: {request_id}")
+            return
+        request = matches[0]
+        if request.status != "pending":
+            await self.bot.send_message(
+                chat, f"{request.request_id} already {request.status}"
+            )
+            return
+        request.status = status
+        request.decided_by = f"telegram:{chat}"
+        request.decided_at = datetime.now(timezone.utc).isoformat()
+        await self.bus.put_model_request(request)
+        await self.bus.publish_model_decision(request)
+        await self.bot.send_message(
+            chat, f"{request.request_id} {status} ({request.model})"
+        )
 
     # -- main loops ---------------------------------------------------------
     async def run_events(self) -> None:
