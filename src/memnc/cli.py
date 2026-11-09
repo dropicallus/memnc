@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 import time
+from datetime import datetime, timezone
 
 import nats
 
@@ -191,6 +192,54 @@ async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_mreqs(_: argparse.Namespace, settings: Settings) -> int:
+    """T7.5: list model requests (pending first)."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        requests = await bus.list_model_requests()
+        if not requests:
+            print("no model requests")
+            return 0
+        for r in requests:
+            disk = f" disk@{','.join(r.nodes_disk)}" if r.nodes_disk else ""
+            print(
+                f"{r.request_id}  {r.status}  {r.action}  {r.model}{disk}"
+                f"  task={r.task_id or '-'}  decided={r.decided_by or '-'}"
+            )
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
+    """T7.5: approve or reject a model request (human gate)."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        status = "approved" if args.action == "approve" else "rejected"
+        matches = [
+            r for r in await bus.list_model_requests()
+            if r.request_id.startswith(args.request_id)
+        ]
+        if not matches:
+            print(f"no model request matching {args.request_id}")
+            return 1
+        request = matches[0]
+        if request.status != "pending":
+            print(f"{request.request_id} already {request.status}")
+            return 1
+        request.status = status
+        request.decided_by = args.by
+        request.decided_at = datetime.now(timezone.utc).isoformat()
+        await bus.put_model_request(request)
+        await bus.publish_model_decision(request)
+        print(f"{request.request_id} {status} ({request.model})")
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_registry(_: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
@@ -369,6 +418,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     tasks = subparsers.add_parser("tasks", help="list tasks")
     tasks.set_defaults(func=cmd_tasks)
+
+    mreqs = subparsers.add_parser(
+        "mreqs", help="T7.5: list model requests (pending first)"
+    )
+    mreqs.set_defaults(func=cmd_mreqs)
+
+    decide = subparsers.add_parser(
+        "decide", help="T7.5: approve/reject a model request (human gate)"
+    )
+    decide.add_argument("action", choices=["approve", "reject"])
+    decide.add_argument("request_id", help="request id (prefix match)")
+    decide.add_argument("--by", default="meshctl")
+    decide.set_defaults(func=cmd_decide)
 
     registry = subparsers.add_parser("registry", help="list advertised capability records")
     registry.set_defaults(func=cmd_registry)
