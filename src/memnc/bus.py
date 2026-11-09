@@ -676,3 +676,34 @@ def SUBJECT_CMD_FOR(role: Role) -> str:
     from .schema import SUBJECT_CMD
 
     return SUBJECT_CMD.format(role=role.value)
+
+
+async def emit_debate(bus: "Bus", snapshot: TaskSnapshot, role: Role) -> None:
+    """T5: stream the coder/critic negotiation as readable events.
+
+    Emits `debate.code` (coder summary + files) or `debate.critique`
+    (verdict + summary + top issues) and records them into the snapshot
+    history so `/trace` or `meshctl trace` can replay the debate later.
+    """
+    name = ""
+    detail = ""
+    if role is Role.CODER and snapshot.code is not None:
+        name = "debate.code"
+        files = ", ".join(f.path for f in snapshot.code.files) or "no files"
+        detail = f"{snapshot.code.summary}\nfiles: {files}".strip()[:400]
+    elif role is Role.CRITIC and snapshot.critique is not None:
+        c = snapshot.critique
+        name = "debate.critique"
+        verdict = "APPROVED" if c.approved else "REJECTED"
+        issues = "; ".join(
+            f"[{i.severity}] {i.file or '?'}:{i.line or '?'} {i.issue}"
+            for i in c.issues[:3]
+        )
+        detail = f"{verdict} - {c.summary}"
+        if issues:
+            detail += f" - {issues}"
+        detail = detail.strip()[:500]
+    if not name:
+        return
+    snapshot.record(name, detail)
+    await bus.emit_event(snapshot, name, detail)

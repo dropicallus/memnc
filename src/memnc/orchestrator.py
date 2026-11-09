@@ -472,6 +472,11 @@ class Orchestrator:
             ):
                 await self._fanout(snapshot)
                 return
+            if event.ok:
+                # T5: stream the coder/critic debate as events + history so
+                # the negotiation is readable live (Telegram observer) and
+                # replayable via /trace or `meshctl trace`.
+                await self._emit_debate(snapshot, envelope.role)
 
         log.info(
             "result received",
@@ -489,6 +494,12 @@ class Orchestrator:
             await self.bus.emit_event(
                 snapshot, "result.executed_on", envelope.node
             )
+
+    async def _emit_debate(self, snapshot: TaskSnapshot, role: Role) -> None:
+        """T5: delegate the debate stream to the shared bus helper."""
+        from .bus import emit_debate
+
+        await emit_debate(self.bus, snapshot, role)
 
     def _store_output(
         self, snapshot: TaskSnapshot, role: Role, output: dict

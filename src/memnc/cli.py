@@ -154,6 +154,23 @@ async def cmd_state(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_trace(args: argparse.Namespace, settings: Settings) -> int:
+    """T5: replay the coder/critic debate from the task snapshot history."""
+    from .telegram import format_trace
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        snapshot = await bus.get_snapshot(args.task_id)
+        if snapshot is None:
+            print(f"task not found: {args.task_id}", file=sys.stderr)
+            return 1
+        print(format_trace(snapshot.model_dump()))
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_tasks(_: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
@@ -481,6 +498,9 @@ def build_parser() -> argparse.ArgumentParser:
     state = subparsers.add_parser("state", help="print a task snapshot")
     state.add_argument("task_id")
     state.set_defaults(func=cmd_state)
+    trace = subparsers.add_parser("trace", help="T5: replay a task's coder/critic debate")
+    trace.add_argument("task_id")
+    trace.set_defaults(func=cmd_trace)
 
     tasks = subparsers.add_parser("tasks", help="list tasks")
     tasks.set_defaults(func=cmd_tasks)
