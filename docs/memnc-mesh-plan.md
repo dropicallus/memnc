@@ -555,6 +555,48 @@ Two core elements carry the mesh concept beyond DeepSeed's dsh-superagent (whose
 
 **Design consequence for S3:** the console is the observation window of self-organization, not a dashboard: it shows *who organizes how* (claims, roles, node roster) and *where the negotiation stands* (critique verdicts, trust, grants) — not just a task list.
 
+**Self-organization ladder** (2026-11-09, prompted by "how flexible should
+role assignment be?"; grounded in SwarmHarness 2605.28764 as the origin
+paper). A deliberately ordered path — each step only pays off once the
+mesh is actually heterogeneous (different hardware/models per node):
+
+- **Stage 0 — already real.** Cross-node CAS claiming (M11/M12), owner
+  routing + fan-out (M15), critique debate as institutionalized peer
+  review. The mesh already distributes itself; only roles are static.
+- **Stage 1 — trust-weighted claiming** (near-free, do first). The
+  SwarmHarness utility score `U = w1·cap + w2·(1−load) + w3·(1−lat) +
+  w4·trust` applied at the claim decision. The trust ledger (T7
+  reputation) and the claim gate already exist; only the weighting at
+  claim-poll time is missing. Effect: reliable nodes automatically
+  inherit more attractive tasks — reputation-driven self-organization
+  with no central dispatcher.
+- **Stage 2 — capability registry + dynamic roles** (the real target
+  state for the heterogeneous vision). Instead of a fixed `roles=coder`
+  in the roster, nodes *advertise* skills — including models on disk
+  (already available via Ollama `/api/tags`) — and tasks ask "who can
+  do X?" instead of targeting queue groups. One node can then act as
+  planner *and* coder depending on which model is loaded. The
+  2026-11-03 discussion (disc_20261103_230643) warned correctly: fixed
+  leader-follower roles deadlock under async latency — state-based
+  coordination plus a capability hierarchy is the way out.
+- **Stage 3 — emergence / stigmergy** (design direction, not a
+  milestone). Ormica-style: routing and trust signals as digital
+  pheromones, roles arising from demand rather than config. Honest
+  caveat: with 3 nodes running local 3B–31B models, coordination
+  overhead (negotiation rounds cost GPU time) is real, and every
+  non-deterministic distribution step makes debugging harder. The
+  paper itself gates this: utility routing pays off only once nodes
+  *differ* — heterogeneity raises the value, homogeneity makes it
+  noise.
+
+Guardrail: none of this weakens the human gate — self-organization
+distributes *work*; approvals stay human. That is the clean split.
+And per §14.4, the ordering discipline applies: **measure first**
+(tokens/task, failed-tool-call ratio, critique round trips, per task
+type per the Graphify benchmark pattern) before dynamizing — without
+a baseline we cannot know whether flexible distribution beats the
+static one.
+
 ### 14.4 Outlook: task affinity, evidence metrics & learned distribution (2026-11-04)
 
 **Task affinity / "don't take the task away"** (from the DeepSeek dsh-superagent prototype, S., 2026-11-03):
