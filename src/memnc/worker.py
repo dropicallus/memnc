@@ -535,6 +535,12 @@ class Worker:
             self._current_task = None
 
     async def _run(self, envelope: Envelope, snapshot: TaskSnapshot) -> ResultPayload:
+        """Run one role step; stamp the executed model onto the result (T4)."""
+        result = await self._run_impl(envelope, snapshot)
+        result.model = self.settings.model_for(envelope.role or self.role)
+        return result
+
+    async def _run_impl(self, envelope: Envelope, snapshot: TaskSnapshot) -> ResultPayload:
         role = envelope.role or self.role
         model = self.settings.model_for(role)
         self._written_files = {}
@@ -869,6 +875,10 @@ class Worker:
         if envelope.id not in snapshot.seen_result_ids:
             snapshot.seen_result_ids.append(envelope.id)
             snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]
+        # T4 (model-routing-visible): record which node:model ran this step.
+        if envelope.role is not None and result.model:
+            node = envelope.node or self.settings.node_name
+            snapshot.route[envelope.role.value] = f"{node}:{result.model}"
 
         event = Event("result", ok=result.ok, reason=result.error or "")
         if result.ok and envelope.role is not None:

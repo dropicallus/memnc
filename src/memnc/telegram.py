@@ -103,6 +103,9 @@ def format_trace(snapshot_dict: dict[str, Any], max_entries: int = 25) -> str:
     title = (snapshot_dict.get("task") or "").strip().splitlines()[0][:60]
     if title:
         lines.append(f"task: {title}")
+    # T4 (model-routing-visible): which node:model ran each role step.
+    for role_name, target in (snapshot_dict.get("route") or {}).items():
+        lines.append(f"route {role_name}: {target}")
     entries = snapshot_dict.get("history") or []
     if not entries:
         lines.append("no history recorded")
