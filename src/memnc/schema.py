@@ -80,6 +80,16 @@ ROSTER_BUCKET = "roster"
 ROSTER_KEY = "roster.{node_id}"
 ROSTER_TTL = 60  # seconds; worker heartbeats refresh every ~20s
 
+# --- T7.5: model demand planning (plan §14.7) -------------------------------
+# When a task's needs.model is loaded nowhere but present on a node's local
+# disk (Ollama blob store), the orchestrator raises a ModelRequest. A human
+# approves it (meshctl approve, later the Telegram gate) and the owning node
+# loads the model from disk — no network download. If no node has it on disk
+# either, the request falls back to a "pull" proposal (T7 path).
+SUBJECT_MODEL_DECISION = "mesh.model.decision"
+MODEL_REQUESTS_BUCKET = "model_requests"
+MODEL_REQUEST_KEY = "mreq.{request_id}"
+
 
 class TaskNeeds(BaseModel):
     """T6: capability constraints a node must satisfy to claim a task."""
@@ -139,6 +149,47 @@ def satisfies(needs: TaskNeeds | None, node: NodeInfo | None, role: str) -> bool
     if needs.vram_gb and node.vram_gb < needs.vram_gb:
         return False
     return True
+
+
+class ModelRequest(BaseModel):
+    """T7.5: a human-gated proposal to make a model available for a task."""
+
+    request_id: str
+    model: str
+    task_id: str = ""
+    action: Literal["load", "pull"] = "load"
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    nodes_disk: list[str] = Field(default_factory=list)  # nodes holding it on disk
+    created_at: str = Field(default_factory=now_iso)
+    decided_by: str = ""
+    decided_at: str = ""
+
+    def key(self) -> str:
+        return MODEL_REQUEST_KEY.format(request_id=self.request_id)
+
+
+def plan_model_request(
+    needs: TaskNeeds | None, nodes: list[NodeInfo], task_id: str = ""
+) -> ModelRequest | None:
+    """Pure T7.5 planner: decide whether a model request must be raised.
+
+    Returns None when nothing is needed: no model constraint, or the model is
+    already loaded on some live node (the claim market serves the task).
+    Otherwise the request proposes "load" (model on some node's disk) or
+    "pull" (nowhere on disk — T7 download path).
+    """
+    if needs is None or not needs.model:
+        return None
+    if any(needs.model in node.models for node in nodes):
+        return None
+    disk_nodes = sorted({node.node_id for node in nodes if needs.model in node.disk_models})
+    return ModelRequest(
+        request_id=new_id(),
+        model=needs.model,
+        task_id=task_id,
+        action="load" if disk_nodes else "pull",
+        nodes_disk=disk_nodes,
+    )
 
 
 # Capability key layout inside the registry KV:

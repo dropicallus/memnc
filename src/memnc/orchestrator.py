@@ -20,6 +20,7 @@ from .schema import (
     Kind,
     PlannerOutput,
     ResultPayload,
+    plan_model_request,
     Role,
     SUBJECT_CMD,
     SUBJECT_HEARTBEAT,
@@ -143,12 +144,46 @@ class Orchestrator:
                 await self.bus.emit_event(snapshot, "task.claimable", "waiting for claim")
             else:
                 await self._apply(snapshot, Event("start"))
+            await self._maybe_request_model(snapshot)
         except Exception as exc:  # noqa: BLE001
             log.exception("submission failed")
             try:
                 await message.respond(json.dumps({"error": str(exc)}).encode())
             except Exception:  # noqa: BLE001
                 pass
+
+    # -- T7.5: model demand planning (plan §14.7) ----------------------------
+    async def _maybe_request_model(self, snapshot: TaskSnapshot) -> None:
+        """Raise a human-gated ModelRequest when needs.model is unmet everywhere.
+
+        Loaded nowhere → "load" if some node has it on disk, else "pull" (T7).
+        One pending request per model, ever — no request spam on resubmits.
+        Best effort: a failure here must never break submission.
+        """
+        try:
+            request = plan_model_request(
+                snapshot.needs, await self.bus.list_nodes(), snapshot.task_id
+            )
+            if request is None:
+                return
+            existing = await self.bus.list_model_requests()
+            if any(r.model == request.model and r.status == "pending" for r in existing):
+                log.info("model request for %s already pending", request.model)
+                return
+            await self.bus.put_model_request(request)
+            detail = (
+                f"model {request.model} not loaded anywhere; "
+                f"on disk at {', '.join(request.nodes_disk)}"
+                if request.action == "load"
+                else f"model {request.model} nowhere loaded or on disk; needs pull"
+            )
+            await self.bus.emit_event(snapshot, "model.request", detail)
+            log.info(
+                "model request %s raised (%s)", request.request_id, detail,
+                extra={"task_id": snapshot.task_id},
+            )
+        except Exception:  # noqa: BLE001 - model planning is best effort
+            log.debug("model request planning failed", exc_info=True)
 
     # -- M10: queryable ledger ----------------------------------------------
     async def _on_ledger(self, message) -> None:
