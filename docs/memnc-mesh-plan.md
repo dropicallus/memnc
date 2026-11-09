@@ -675,6 +675,11 @@ liveness and problem focus:
 - live updates without reload (SSE/WebSocket on `mesh.task.*.events` +
   roster changes),
 - a per-node activity view (current claim, last result, heartbeat age),
+- a **task decomposition timeline**: how the planner broke the task down
+  (plan steps/subtasks, fanout tree), which role/model handled each
+  step, state transitions with timestamps, and *when human-in-the-loop
+  happened* (gate parked, who approved/rejected via which channel,
+  model requests raised and decided),
 - a "problems" surface: parked tasks, failed/retrying tasks, silent
   nodes (heartbeat stale), models nearing retirement threshold,
 - optional notification rules ("park > 10 min" → Telegram DM) so the
