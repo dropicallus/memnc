@@ -1,227 +1,105 @@
 # memnc
 
-A lightweight, distributed multi-agent mesh. NATS is the only backbone; a
-durable state machine drives `planner`, `coder` and `critic` stages across
-worker nodes; each worker runs a local MCP tool server (filesystem + shell)
-and talks to a local inference endpoint (Ollama or any OpenAI-compatible API).
-Claimable tasks run **worker-driven** (M14): the claiming worker advances the
-pipeline itself via CAS role-gated handoffs — the orchestrator is a spectator.
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-34d399?style=flat-square)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-22d3ee?style=flat-square)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-161%20passing-34d399?style=flat-square)](#local-development)
+[![No cloud required](https://img.shields.io/badge/cloud-never-fb7185?style=flat-square)](#security-model)
 
-No agent framework, no cloud dependencies, no model serving code.
+**A multi-agent mesh that runs entirely on your own hardware.**
+NATS is the only backbone. A durable state machine drives `planner → coder → critic`
+across worker nodes. Every worker runs a local MCP tool server (filesystem + shell)
+and talks to its own local inference endpoint (Ollama or any OpenAI-compatible API).
+Claimable tasks run **worker-driven**: the claiming worker advances the pipeline
+itself via CAS role-gated handoffs — the orchestrator is a spectator you can kill
+mid-run without stopping the pipeline.
 
-```
-             ┌──────────────────┐
- meshctl ───▶│  NATS (Docker)   │◀──────────────┐
-             │  pub/sub         │               │
-             │  JetStream + KV  │               │
-             │  request/reply   │               │
-             └───┬──────────┬───┘               │
-                 │          │                   │
-   mesh.agent.*.cmd        │ mesh.agent.*.result│
-                 ▼          ▼                   │
-        ┌──────────────────────────┐            │
-        │  Orchestrator            │            │
-        │  FSM + durable snapshots │            │
-        └──────────────────────────┘            │
-                 ▲                               │
-     ┌───────────┼───────────┐                   │
-     │           │           │                   │
-┌─────────┐ ┌─────────┐ ┌─────────┐              │
-│ planner │ │  coder  │ │ critic  │  workers ────┘
-│ worker  │ │ worker  │ │ worker  │
-└────┬────┘ └────┬────┘ └────┬────┘
-     │ stdio     │ stdio     │ stdio
-┌────▼────┐ ┌────▼────┐ ┌────▼────┐        HTTP
-│MCP srv  │ │MCP srv  │ │MCP srv  │──────▶ Ollama / OpenAI-compatible
-│fs+shell │ │fs+shell │ │fs+shell │        (local to each node)
-└─────────┘ └─────────┘ └─────────┘
-```
+No agent framework. No cloud dependencies. No model-serving code.
+
+<p align="center">
+  <img src="assets/architecture.svg" alt="memnc mesh architecture" width="920">
+</p>
+
+## Why
+
+- **Your GPUs, your models, your data** — nothing leaves the network.
+- **The mesh is the memory** — every stage is attributed in a durable ledger
+  (`meshctl ledger`), not in an agent's chat history.
+- **Resource-aware claiming** — workers advertise VRAM, GPU and on-disk models;
+  the claim gate routes tasks to nodes that can actually run them.
+- **Human in the loop, on your phone** — a read-only Telegram observer streams
+  task events; an approval gate is on the roadmap.
 
 ## Quick start
 
-Prerequisites: Docker + Docker Compose, Python 3.11+ for `meshctl`, and a
-running inference endpoint.
-
 ```bash
-cp .env.example .env
-# edit .env: INFERENCE_BASE_URL and MODEL_*
-#   host Ollama:          http://host.docker.internal:11434
-#   OpenAI-compatible:    INFERENCE_PROVIDER=openai, INFERENCE_BASE_URL=..., INFERENCE_API_KEY=...
-
+cp .env.example .env        # set INFERENCE_BASE_URL and MODEL_*
 mkdir -p workspace          # bind-mounted at /workspace in every container
 docker compose up --build -d
-docker compose ps
 
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 
-# meshctl runs on the host and talks to the published NATS port
-export NATS_URL=nats://127.0.0.1:4222
-export NATS_TOKEN=dev-token
+export NATS_URL=nats://127.0.0.1:4222 NATS_TOKEN=dev-token
 .venv/bin/meshctl doctor
 
 TASK_ID=$(.venv/bin/meshctl submit "Create hello.py that prints hello from the mesh")
 .venv/bin/meshctl tail "$TASK_ID"
-.venv/bin/meshctl state "$TASK_ID"
 ```
 
-The coder and orchestrator both write artifacts into `./workspace`, so the
-result is visible on the host as soon as the coder step completes.
+More capacity is one flag: `docker compose up -d --scale worker-coder=3`.
+Two-machine mesh, worker-driven claimable tasks and grant/revoke semantics are
+covered in [`docs/operations.md`](docs/operations.md).
 
-## Inference
+## What's live
 
-The mesh only connects to inference; it never runs a model server.
-
-| Variable | Meaning |
+| Feature | Status |
 |---|---|
-| `INFERENCE_PROVIDER` | `ollama` (native `/api/chat`) or `openai` (`/v1/chat/completions`) |
-| `INFERENCE_BASE_URL` | endpoint root, e.g. `http://192.168.1.20:11434` |
-| `INFERENCE_API_KEY` | bearer token for OpenAI-compatible endpoints |
-| `MODEL_PLANNER` / `MODEL_CODER` / `MODEL_CRITIC` | per-role model names |
-| `INFERENCE_TIMEOUT_S` | request timeout |
-| `NUM_CTX` / `NUM_PREDICT` | context window / max output tokens |
+| Worker-driven pipeline (CAS claim, role gate) | ✅ shipped |
+| Cross-node claiming + grants (gateway, sticky revoke) | ✅ shipped |
+| Resource-aware claim gate (VRAM / GPU / roles) | ✅ shipped |
+| Telegram observer: `/tasks`, `/roster`, live events | ✅ shipped |
+| Roster advertises `disk_models` (Ollama `/api/tags`) | ✅ shipped |
+| Orchestrator model-demand planning → approval gate | 🚧 in progress |
+| Model auto-load on demand (with human approval) | 🚧 planned |
+| LAN model blob sharing between nodes | 🚧 planned |
 
-Each node uses its own `INFERENCE_BASE_URL`, so a node with a local Ollama
-instance can point at `http://localhost:11434` (or
-`host.docker.internal` from a container) while another points at a remote
-endpoint.
-
-Models with native tool calling work best. Without tools the worker still
-works: the coder returns file contents as JSON and the orchestrator applies
-them.
-
-## Scaling out
-
-More capacity on one host:
-
-```bash
-docker compose up -d --scale worker-coder=3
-```
-
-### Two-machine mesh (gated)
-
-Machine A owns NATS + orchestrator; machine B joins with workers and an
-adapter agent. The capability gate is on, and machine B's agents are granted
-automatically via heartbeat bootstrap (`MESH_GRANT_NODES` on machine A).
-
-**Machine A** (starts broker, orchestrator, workers; allows `node-b-*` to
-join):
-
-```bash
-MESH_GATE=true MESH_GRANT_NODES='node-b-*' docker compose up --build -d
-```
-
-**Machine B** (workers use B's own local Ollama via `host.docker.internal`;
-set `AGENT_MODEL` to a model Ollama on B actually has):
-
-```bash
-NATS_URL=nats://<host-a-ip>:4222 NODE_NAME=node-b MESH_GATE=true \
-  docker compose -f docker-compose.node.yml up --build -d
-```
-
-Verify (from machine A, with `NATS_URL`/`NATS_TOKEN` exported or `.env`):
-
-```bash
-meshctl grants        # node-b-planner / -coder / -critic / -agent appear
-                      # within ~5 s of node B starting (heartbeat bootstrap)
-meshctl registry      # node-b-agent's capability record is listed
-meshctl submit "write a hello world in python" --watch
-meshctl tail <task_id>   # events carry node=<node-a|node-b-…> per dispatch
-```
-
-Workers of the same role share a JetStream durable pull consumer, so each
-command is delivered to exactly one worker in the group — a task may execute
-on either machine. Which node ran a stage shows up in `meshctl tail <id>` /
-`meshctl submit --watch` as a `result.executed_on` event (the executing
-worker's node name), and in the worker's own logs on machine B
-(`docker compose -f docker-compose.node.yml logs -f worker-coder`).
-
-Revoking stays sticky: `meshctl revoke node-b-coder` blocks that agent even
-though heartbeats keep arriving (bootstrap never overwrites an existing grant
-record — delete is respected until manually re-granted).
-
-Without the gate (`MESH_GATE=false`, the default), both machines still work —
-the gate only guards registry writes, not queue-group work delivery.
-
-### Worker-driven pipeline (M14)
-
-Submit with `--claimable` and the pipeline runs without any orchestrator
-dispatch: the snapshot carries `next_role`; only that role can claim it
-(CAS role gate), the claiming worker runs its stage and re-publishes the
-snapshot with the next `next_role` — `RECEIVED→PLANNING→CODING→CRITIQUE→DONE`
-across any nodes, with every stage attributed in the ledger
-(`meshctl ledger`). The orchestrator skips worker-driven tasks entirely;
-you can even stop it mid-run and the pipeline keeps going.
-
-### Roadmap status
-
-M11 (CAS claim), M12 (cross-node claim live, A→B and B→A), M13 (agent
-`mesh_submit` sub-tasks cross-node live) and M14 (worker-driven pipeline,
-unit-green, live test pending) are done on `mesh/architecture`; M15
-(symmetric topology: owner-routed subjects, origin_node, Node-B
-orchestrator, wildcard+durable-name fixes — commits 86fc593/928e2ed) is
-code-done, live test pending. Next: M14/M15 live tests, then M16
-(peer-orchestration demo), then the Ausbau-Stufe (§14.2: smoke gate,
-Swift default backend, mesh console UI, human-in-the-loop steering).
-See `docs/memnc-mesh-plan.md` §14.1–§14.2.
+Design details and staged plan: [`docs/memnc-mesh-plan.md`](docs/memnc-mesh-plan.md) §14.
 
 ## Configuration
 
-Everything is environment-driven; see `.env.example` for the full list.
+Everything is environment-driven; see [`.env.example`](.env.example) for the full list.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `NATS_URL` | `nats://127.0.0.1:4222` | NATS server |
 | `NATS_TOKEN` | — | shared token auth |
-| `ROLE` | `coder` | worker role |
-| `NODE_NAME` | hostname | identity in logs/heartbeats |
-| `WORKSPACE_ROOT` | `/workspace` | tool sandbox and artifact root |
+| `INFERENCE_PROVIDER` | `ollama` | `ollama` (native) or `openai` (compatible) |
+| `INFERENCE_BASE_URL` | — | endpoint root, per-node |
+| `MODEL_PLANNER` / `MODEL_CODER` / `MODEL_CRITIC` | — | per-role model names |
+| `NODE_VRAM_GB` / `NODE_GPU` | `0` / — | advertised in the roster, used by the claim gate |
+| `MESH_GATE` | `false` | registry gate; `MESH_GRANT_NODES` bootstraps grants |
 | `MAX_REVISIONS` | `3` | critic rejection cycles before failing |
-| `MAX_ATTEMPTS` | `3` | retries per stage |
-| `MAX_TOOL_STEPS` | `12` | model tool-call rounds per command |
-| `PLANNER_TIMEOUT_S` / `CODER_TIMEOUT_S` / `CRITIC_TIMEOUT_S` | 180 / 600 / 180 | per-stage budgets |
-| `ORCHESTRATOR_GRACE_S` | `30` | slack before the reaper re-dispatches |
-| `ALLOW_SHELL` | `true` | enable the `run_shell` MCP tool |
-| `SHELL_TIMEOUT_S` | `120` | per-command timeout |
-| `APPLY_ARTIFACTS` | `true` | write coder output files to the workspace |
-| `MESH_CLAIM` | `false` | workers CAS-claim submitted tasks themselves (M11) |
-| `SELF_PIPELINE` | `true` | claiming worker advances claimable tasks itself, no orchestrator dispatch (M14) |
+| `SELF_PIPELINE` | `true` | workers advance claimable tasks without orchestrator dispatch |
+
+Models with native tool calling work best. Without tools the worker still works:
+the coder returns file contents as JSON and the orchestrator applies them.
 
 ## Security model
 
-`run_shell` is intentionally unrestricted (no allowlist/denylist). The
-isolation boundary is the container:
-
-- runs as a non-root user with `cap_drop: ALL`, `no-new-privileges`, read-only
-  root filesystem, CPU/memory/PID limits
-- only the workspace bind mount is writable; no Docker socket
-- the model can execute arbitrary code and reach anything the container can
-  reach — treat a mesh worker as a trusted-but-dangerous sandbox and do not
-  mount host paths you care about
-
-Set `ALLOW_SHELL=false` to disable command execution entirely.
+`run_shell` is intentionally unrestricted — the isolation boundary is the container:
+non-root user, `cap_drop: ALL`, `no-new-privileges`, read-only root filesystem,
+CPU/memory/PID limits, only the workspace bind mount is writable, no Docker socket.
+Treat a mesh worker as a trusted-but-dangerous sandbox. Set `ALLOW_SHELL=false` to
+disable command execution entirely. Inbound message content (Telegram, NATS) is
+treated as untrusted data, never instructions; secrets live in the gitignored `.env`.
 
 ## Local development
 
 ```bash
 docker run -d --rm -p 4222:4222 nats:2-alpine -js
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-
-export NATS_URL=nats://127.0.0.1:4222
-.venv/bin/python -m memnc.orchestrator &
-ROLE=planner .venv/bin/python -m memnc.worker &
-ROLE=coder .venv/bin/python -m memnc.worker &
-ROLE=critic .venv/bin/python -m memnc.worker &
-.venv/bin/meshctl submit "Create hello.py"
-```
-
-Run the suite:
-
-```bash
 .venv/bin/python -m pytest            # unit tests, no NATS required
-docker run -d --rm -p 4223:4222 nats:2-alpine -js
-MEMNC_TEST_NATS=nats://127.0.0.1:4223 .venv/bin/python -m pytest -m integration
-./scripts/smoke.sh                    # against a running mesh + real model
+./scripts/e2e.sh                      # full end-to-end against a running mesh
 ```
 
 ## Layout
@@ -240,5 +118,6 @@ src/memnc/
 docs/              # architecture, protocol, operations
 ```
 
-See `docs/architecture.md`, `docs/protocol.md` and `docs/operations.md` for
-details.
+## Contributing & License
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Apache License 2.0 — see [LICENSE](LICENSE).
