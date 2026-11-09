@@ -15,6 +15,7 @@ from .backends import make_backend
 from .bus import Bus
 from .config import Settings, get_settings
 from .schema import (
+    SUBJECT_CONTROL,
     SUBJECT_EVENTS,
     SUBJECT_LEDGER,
     SUBJECT_SUBMIT,
@@ -22,6 +23,7 @@ from .schema import (
     TERMINAL_STATES,
     GrantLevel,
     TaskNeeds,
+    ControlCommand,
     TaskSubmission,
 )
 
@@ -46,6 +48,7 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             claimable=getattr(args, "claimable", False),
             # T6: optional capability constraints for the claim gate.
             needs=_needs_from_args(args),
+            gate=args.gate,  # type: ignore[arg-type]
         )
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
@@ -240,6 +243,29 @@ async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_gate(args: argparse.Namespace, settings: Settings) -> int:
+    """T3: approve or reject a task parked at the approval gate."""
+    client = await _connect(settings)
+    cmd = ControlCommand(
+        action="decide",
+        agent_id=args.by,
+        task_id=args.task_id.lstrip("#"),
+        approved=args.action == "approve",
+    )
+    try:
+        response = await client.request(
+            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
+        )
+        data = json.loads(response.data)
+        if "error" in data:
+            print(f"error: {data['error']}", file=sys.stderr)
+            return 1
+        print(f"{data['task_id']} {data['verdict']} -> {data['state']}")
+        return 0
+    finally:
+        await client.close()
+
+
 async def cmd_registry(_: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
@@ -402,7 +428,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="T6: model name the claiming node must serve")
     submit.add_argument("--needs-role", action="append", default=None,
                         help="T6: allowed claiming role (repeatable)")
+    submit.add_argument("--gate", default="never",
+                        choices=["always", "fail", "never"],
+                        help="T3: human approval gate at the critique step")
     submit.set_defaults(func=cmd_submit)
+
+    gate = subparsers.add_parser(
+        "gate", help="T3: approve/reject a task parked at the approval gate"
+    )
+    gate.add_argument("action", choices=["approve", "reject"])
+    gate.add_argument("task_id", help="parked task id (prefix not supported)")
+    gate.add_argument("--by", default="meshctl")
+    gate.set_defaults(func=cmd_gate)
 
     roster = subparsers.add_parser("roster", help="T6: list live node capabilities")
     roster.set_defaults(func=cmd_roster)

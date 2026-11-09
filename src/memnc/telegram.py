@@ -233,6 +233,11 @@ class TelegramObserver:
             await self.bot.send_message(chat, format_model_requests(requests))
         elif cmd in ("approve", "reject") and len(parts) >= 2:
             await self._decide(chat, cmd, parts[1].lstrip("#").strip())
+        elif cmd == "gate" and len(parts) >= 3 and parts[1] in ("approve", "reject"):
+            # T3 task approval gate (distinct from T7.5 /approve model requests)
+            await self._control(
+                chat, "decide", f"{parts[2].lstrip('#').strip()} {parts[1]}"
+            )
         elif cmd in ("submit", "cancel", "retry"):
             await self._control(chat, cmd, parts[1] if len(parts) >= 2 else "")
         elif cmd == "stop" and len(parts) >= 3 and parts[1].lower() == "worker":
@@ -240,7 +245,8 @@ class TelegramObserver:
         else:
             await self.bot.send_message(
                 chat, "commands: tasks [state] | roster | state <task-id> "
-                "| mreqs | approve|reject <request-id> | submit <task> "
+                "| mreqs | approve|reject <request-id> | gate approve|reject "
+                "<task-id> | submit <task> "
                 "| cancel <task-id> | retry <task-id> | stop worker <node>"
             )
 
@@ -251,7 +257,10 @@ class TelegramObserver:
         cmd = ControlCommand(
             action=action, agent_id=f"telegram-{chat}",  # type: ignore[arg-type]
             task=argument if action == "submit" else "",
-            task_id=argument.lstrip("#") if action in ("cancel", "retry") else "",
+            task_id=argument.split()[0].lstrip("#") if action == "decide" else "",
+            approved=(argument.split()[1] == "approve")
+            if action == "decide" and len(argument.split()) >= 2
+            else None,
             node=argument if action == "stop_worker" else "",
         )
         try:
