@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from .agent import parse_role_output, run_agent
 from .backends import make_backend
-from .bus import Bus
+from .bus import Bus, emit_debate
 from .config import Settings, get_settings
 from .fsm import Event, transition
 from .fsutil import apply_artifacts
@@ -738,6 +738,8 @@ class Worker:
                 output_model = _OUTPUT_SCHEMA[envelope.role]
                 output = output_model.model_validate(result.output)
                 self._store_output(snapshot, envelope.role, output)
+                # T5: stream the coder/critic debate as events + history
+                await emit_debate(self.bus, snapshot, envelope.role)
             except Exception as exc:  # noqa: BLE001
                 log.warning("bad output in self pipeline: %s", exc)
                 event = Event("result", ok=False, reason=f"invalid output: {exc}")

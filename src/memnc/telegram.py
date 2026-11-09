@@ -89,6 +89,29 @@ def format_task(snapshot_dict: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_trace(snapshot_dict: dict[str, Any], max_entries: int = 25) -> str:
+    """T5: replay the coder/critic debate from the snapshot history."""
+    tid = str(snapshot_dict.get("task_id", "?"))[:12]
+    state = snapshot_dict.get("state", "?")
+    lines = [f"#trace {tid} ({state}, rev{snapshot_dict.get('revisions', 0)})"]
+    title = (snapshot_dict.get("task") or "").strip().splitlines()[0][:60]
+    if title:
+        lines.append(f"task: {title}")
+    entries = snapshot_dict.get("history") or []
+    if not entries:
+        lines.append("no history recorded")
+        return "\n".join(lines)
+    if len(entries) > max_entries:
+        lines.append(f"({len(entries)} entries, last {max_entries} shown)")
+    for entry in entries[-max_entries:]:
+        detail = str(entry.get("detail", "")).replace("\n", " ").strip()
+        line = f"- {entry.get('event', '?')}: {detail}" if detail else (
+            f"- {entry.get('event', '?')}"
+        )
+        lines.append(line[:220])
+    return "\n".join(lines)
+
+
 def summarize_tasks(snapshots: list[dict[str, Any]], filter_state: str = "", limit: int = 15) -> str:
     """Compact /tasks view: state counts + active tasks + recent completions.
 
@@ -222,6 +245,12 @@ class TelegramObserver:
             await self.bot.send_message(
                 chat, format_roster([n.model_dump() for n in nodes])
             )
+        elif cmd == "trace" and len(parts) >= 2:
+            snapshot = await self.bus.get_snapshot(parts[1].lstrip("#").strip())
+            if snapshot is None:
+                await self.bot.send_message(chat, f"task not found: {parts[1]}")
+            else:
+                await self.bot.send_message(chat, format_trace(snapshot.model_dump()))
         elif cmd == "state" and len(parts) >= 2:
             snapshot = await self.bus.get_snapshot(parts[1].lstrip("#").strip())
             if snapshot is None:
@@ -245,7 +274,7 @@ class TelegramObserver:
         else:
             await self.bot.send_message(
                 chat, "commands: tasks [state] | roster | state <task-id> "
-                "| mreqs | approve|reject <request-id> | gate approve|reject "
+                "| trace <task-id> | mreqs | approve|reject <request-id> | gate approve|reject "
                 "<task-id> | submit <task> "
                 "| cancel <task-id> | retry <task-id> | stop worker <node>"
             )

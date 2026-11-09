@@ -161,9 +161,17 @@ document.getElementById("tasks").addEventListener("click", async ev => {
   document.getElementById("detail").textContent = "loading " + tr.dataset.id + "…";
   try {
     const r = await fetch("/api/task/" + tr.dataset.id);
-    document.getElementById("detail").innerHTML =
-      "<h2>Task " + esc(tr.dataset.id) + "</h2><pre>" +
-      esc(JSON.stringify(await r.json(), null, 2)) + "</pre>";
+    const s = await r.json();
+    let html = "<h2>Task " + esc(tr.dataset.id) + "</h2>"
+      + "<pre>" + esc(JSON.stringify(s, null, 2)) + "</pre>";
+    // T5: render the coder/critic debate as a readable trace
+    if (Array.isArray(s.history) && s.history.length > 0) {
+      html += "<h2>Debate trace</h2><ul>" + s.history.map(h =>
+        "<li><b>" + esc(h.event || "?") + "</b>" +
+        (h.detail ? ": " + esc(h.detail).replace(/\\n/g, "<br>") : "") +
+        "</li>").join("") + "</ul>";
+    }
+    document.getElementById("detail").innerHTML = html;
   } catch (e) { document.getElementById("detail").textContent = "error: " + e; }
 });
 poll(); setInterval(poll, _REFRESH_MS_PLACEHOLDER);
