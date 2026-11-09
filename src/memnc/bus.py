@@ -18,7 +18,7 @@ from nats.js.api import (
     RetentionPolicy,
     StreamConfig,
 )
-from nats.js.errors import NotFoundError, NoKeysError
+from nats.js.errors import InvalidKeyError, NotFoundError, NoKeysError
 
 from . import acl
 from .config import Settings
@@ -362,6 +362,9 @@ class Bus:
         try:
             entry = await self._grants.get(GrantRecord(agent_id=agent_id).key())
         except (KeyError, NotFoundError):
+            return None
+        except InvalidKeyError:
+            # agent ids containing KV-illegal characters simply hold no grant
             return None
         return GrantRecord.model_validate_json(entry.value)
 
