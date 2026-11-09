@@ -228,6 +228,11 @@ class Worker:
     async def stop(self) -> None:
         self._stop.set()
 
+    async def _paused(self) -> bool:
+        """T4: True while this node is human-paused (no claims)."""
+        node = await self.bus.get_node(self.settings.node_name)
+        return node is not None and node.paused
+
     async def aclose(self) -> None:
         self._stop.set()
         if self.tools is not None:
@@ -608,6 +613,10 @@ class Worker:
         while not self._stop.is_set():
             await asyncio.sleep(self.settings.claim_poll_s)
             try:
+                # T4: a paused node pulls no work (flag survives heartbeat
+                # refreshes; cleared by resume_node or a process restart).
+                if await self._paused():
+                    continue
                 for snapshot in await self.bus.list_tasks():
                     if snapshot.state in TERMINAL_STATES:
                         continue

@@ -100,11 +100,14 @@ SUBJECT_CONTROL = "mesh.control"
 class ControlCommand(BaseModel):
     """T2: one human intervention command, issued via an approved channel."""
 
-    action: Literal["submit", "cancel", "retry", "stop_worker", "decide"]
+    action: Literal[
+        "submit", "cancel", "retry", "stop_worker", "decide",
+        "pause_node", "resume_node",
+    ]
     agent_id: str  # who acts — grant-checked against the M9 registry
     task: str = ""  # submit only
     task_id: str = ""  # cancel / retry / decide only
-    node: str = ""  # stop_worker only
+    node: str = ""  # stop_worker / pause_node / resume_node only
     approved: bool | None = None  # decide only
     gate: str = ""  # submit only: "always" | "fail" | "never"
     reason: str = ""
@@ -132,6 +135,7 @@ class NodeInfo(BaseModel):
     vram_gb: float = 0.0
     gpu: str = ""
     load: float = 0.0
+    paused: bool = False  # T4: human pause — claim loop skips this node
     updated_at: str = Field(default_factory=now_iso)
 
     def key(self) -> str:
@@ -147,6 +151,9 @@ class NodeInfo(BaseModel):
             vram_gb=self.vram_gb or other.vram_gb,
             gpu=self.gpu or other.gpu,
             load=max(self.load, other.load),
+            # T4: a pause must survive heartbeat refreshes; only resume_node
+            # (or the node's own restart) clears it again.
+            paused=self.paused or other.paused,
             updated_at=now_iso(),
         )
 

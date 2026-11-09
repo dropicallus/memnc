@@ -1,9 +1,15 @@
-"""Mesh-Console: read-only local web view of the mesh (S3).
+"""Mesh-Console: local web view of the mesh (S3).
 
 Stdlib-only HTTP server (no framework) that renders the same state as
 ``meshctl tasks`` / ``ledger`` / ``registry`` / ``grants`` / ``trust`` in a
 browser. Every request opens its own short-lived NATS connection, so the
-console stays stateless and poll-friendly; it never writes to the mesh.
+console stays stateless and poll-friendly.
+
+T4: the console can also forward a small set of human control commands
+(pause/resume a node, cancel/retry a task) via ``POST /api/control``. It
+always acts as agent ``console`` — the orchestrator grant-checks that id,
+so without ``meshctl grant console`` the buttons answer with a deny.
+Reads stay read-only.
 
 Run with:  python -m memnc.console [--port 8765]
 """
@@ -18,8 +24,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from .bus import Bus
+from .cli import _connect
 from .config import get_settings
-from .schema import TERMINAL_STATES
+from .schema import SUBJECT_CONTROL, TERMINAL_STATES, ControlCommand
 
 _REFRESH_MS = 3000
 
@@ -52,12 +59,16 @@ tr:hover td { background:#161b22; cursor:pointer; }
 pre { background:#010409; border:1px solid #21262d; border-radius:6px;
       padding:.6rem; overflow-x:auto; font-size:.75rem; }
 #detail { margin-top:.6rem; }
+button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
+         border-radius:4px; padding:.15rem .5rem; cursor:pointer; font-size:.7rem; }
+button:hover { background:#30363d; }
 a { color:#58a6ff; text-decoration:none; }
 </style>
 </head>
 <body>
 <h1>memnc mesh console</h1>
 <div id="status">connecting…</div>
+<h2>Nodes</h2><table id="nodes"></table>
 <h2>Tasks</h2><table id="tasks"></table>
 <h2>Node roster (capabilities)</h2><table id="caps"></table>
 <h2>Grants</h2><table id="grants"></table>
@@ -79,13 +90,28 @@ async function poll() {
     document.getElementById("status").textContent =
       "broker " + esc(d.nats_url) + " · live · " + d.tasks.length + " tasks, "
       + d.caps.length + " capabilities · " + new Date().toLocaleTimeString();
+    fill("nodes",
+      "<tr><th>node</th><th>roles</th><th>models</th><th>vram</th>" +
+      "<th>paused</th><th>updated</th><th></th></tr>" +
+      d.nodes.map(n =>
+        `<tr><td>${esc(n.node_id)}</td>` +
+        `<td>${esc(n.roles.join(", "))}</td>` +
+        `<td>${esc(n.models.join(", "))}</td>` +
+        `<td>${esc(n.vram_gb)} GB ${esc(n.gpu)}</td>` +
+        `<td class="${n.paused ? "bad" : "ok"}">${n.paused ? "PAUSED" : "live"}</td>` +
+        `<td>${esc(n.updated_at)}</td>` +
+        `<td><button onclick="control({action:'${n.paused ? "resume_node" : "pause_node"}',node:'${esc(n.node_id)}'},this)">` +
+        `${n.paused ? "resume" : "pause"}</button></td></tr>`).join(""));
     fill("tasks",
-      "<tr><th>task</th><th>state</th><th>rev</th><th>created</th><th>task text</th></tr>" +
+      "<tr><th>task</th><th>state</th><th>rev</th><th>created</th><th>task text</th><th></th></tr>" +
       d.tasks.map(t =>
         `<tr data-id="${esc(t.task_id)}"><td>${esc(t.task_id)}</td>` +
         `<td class="state ${esc(t.state)}">${esc(t.state)}</td>` +
         `<td>${t.revisions}</td><td>${esc(t.created_at)}</td>` +
-        `<td>${esc(t.task)}</td></tr>`).join(""));
+        `<td>${esc(t.task)}</td>` +
+        `<td>${t.terminal ? "" :
+          `<button onclick="control({action:'cancel',task_id:'${esc(t.task_id)}'},this)">cancel</button> ` +
+          `<button onclick="control({action:'retry',task_id:'${esc(t.task_id)}'},this)">retry</button>`}</td></tr>`).join(""));
     fill("caps",
       "<tr><th>agent</th><th>skill</th><th>node</th><th>load</th><th>model</th></tr>" +
       d.caps.map(c =>
@@ -111,7 +137,25 @@ async function poll() {
       '<span class="bad">broker unreachable: ' + esc(e.message) + "</span>";
   }
 }
+async function control(payload, btn) {
+  if (btn) { btn.disabled = true; }
+  try {
+    const r = await fetch("/api/control", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (d.error) { document.getElementById("status").innerHTML = '<span class="bad">' + esc(d.error) + "</span>"; }
+    else { await poll(); }
+  } catch (e) {
+    document.getElementById("status").innerHTML = '<span class="bad">' + esc(e.message) + "</span>";
+  } finally {
+    if (btn) { btn.disabled = false; }
+  }
+}
 document.getElementById("tasks").addEventListener("click", async ev => {
+  if (ev.target.tagName === "BUTTON") return;  // action buttons, not detail
   const tr = ev.target.closest("tr[data-id]");
   if (!tr) return;
   document.getElementById("detail").textContent = "loading " + tr.dataset.id + "…";
@@ -152,10 +196,23 @@ async def collect_state(settings) -> dict:
         grants = await bus.list_grants()
         trust = await bus.list_trust()
         ledger = await bus.read_ledger()
+        nodes = await bus.list_nodes()
     finally:
         await bus.close()
     return {
         "nats_url": settings.nats_url,
+        "nodes": [
+            {
+                "node_id": n.node_id,
+                "roles": n.roles,
+                "models": n.models,
+                "vram_gb": n.vram_gb,
+                "gpu": n.gpu,
+                "paused": n.paused,
+                "updated_at": n.updated_at,
+            }
+            for n in sorted(nodes, key=lambda n: n.node_id)
+        ],
         "tasks": [
             {
                 "task_id": t.task_id,
@@ -232,6 +289,41 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return snapshot.model_dump(mode="json")
         finally:
             await bus.close()
+
+    def do_POST(self) -> None:
+        """T4: forward a human control command as agent 'console' (grant-checked)."""
+        path = urlparse(self.path).path
+        if path != "/api/control":
+            self._send(404, b"not found", "text/plain")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            action = payload.get("action", "")
+            if action not in ("pause_node", "resume_node", "cancel", "retry"):
+                raise ValueError(f"action not allowed: {action!r}")
+            data = asyncio.run(self._control(action, payload))
+            self._send(200, json.dumps(data).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001
+            body = json.dumps({"error": str(exc)}).encode()
+            self._send(503, body, "application/json")
+
+    async def _control(self, action: str, payload: dict) -> dict:
+        client = await _connect(self.settings)
+        try:
+            response = await client.request(
+                SUBJECT_CONTROL,
+                ControlCommand(
+                    action=action,  # type: ignore[arg-type]
+                    agent_id="console",
+                    node=str(payload.get("node", "")),
+                    task_id=str(payload.get("task_id", "")).lstrip("#"),
+                ).model_dump_json().encode(),
+                timeout=15,
+            )
+            return json.loads(response.data)
+        finally:
+            await client.close()
 
 
 def serve(port: int) -> None:
