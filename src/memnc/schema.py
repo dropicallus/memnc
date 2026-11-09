@@ -276,7 +276,10 @@ class GrantRecord(BaseModel):
     expires_at: float = 0
 
     def key(self) -> str:
-        return GRANT_KEY.format(agent_id=self.agent_id)
+        # KV keys only allow [-_./a-zA-Z0-9]; transliterate everything else
+        # (e.g. ':' or '[]' in agent ids) so put/get use the same valid key.
+        safe = "".join(c if c.isalnum() or c in "-_./" else "-" for c in self.agent_id)
+        return GRANT_KEY.format(agent_id=safe)
 
 
 class Envelope(BaseModel):
