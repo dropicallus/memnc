@@ -33,6 +33,10 @@ x-mesh-env: &mesh-env
   # T6: node capabilities advertised into the roster KV by every worker.
   NODE_VRAM_GB: ${NODE_VRAM_GB:-0}
   NODE_GPU: ${NODE_GPU:-}
+  # T7: pull whitelist. Empty list = pull path closed. Patterns are fnmatch
+  # against ollama model tags. Override in .env (MODEL_PULL_WHITELIST=[...]).
+  # Default covers the stock role models plus the gemma family.
+  MODEL_PULL_WHITELIST: ${MODEL_PULL_WHITELIST:-["llama3.2:3b","llama3.1:8b","qwen2.5:7b","qwen2.5-coder:7b","gemma*"]}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-mesh-service: &mesh-service
