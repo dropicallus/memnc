@@ -100,12 +100,18 @@ SUBJECT_CONTROL = "mesh.control"
 class ControlCommand(BaseModel):
     """T2: one human intervention command, issued via an approved channel."""
 
-    action: Literal["submit", "cancel", "retry", "stop_worker"]
+    action: Literal["submit", "cancel", "retry", "stop_worker", "decide"]
     agent_id: str  # who acts — grant-checked against the M9 registry
     task: str = ""  # submit only
-    task_id: str = ""  # cancel / retry only
+    task_id: str = ""  # cancel / retry / decide only
     node: str = ""  # stop_worker only
+    approved: bool | None = None  # decide only
+    gate: str = ""  # submit only: "always" | "fail" | "never"
     reason: str = ""
+
+    def gate_value(self) -> Literal["always", "fail", "never"]:
+        """Validated gate for submits; unknown values fall back to never."""
+        return self.gate if self.gate in ("always", "fail", "never") else "never"
 
 
 class TaskNeeds(BaseModel):
@@ -493,6 +499,8 @@ class TaskSubmission(BaseModel):
     # T6 resource-aware claim: capability constraints a claiming node must
     # satisfy (see satisfies() below). None = unconstrained (legacy tasks).
     needs: "TaskNeeds | None" = None
+    # T3 human approval gate carried over from the submission.
+    gate: Literal["always", "fail", "never"] = "never"
 
     @field_validator("task")
     @classmethod
@@ -536,6 +544,15 @@ class TaskSnapshot(BaseModel):
     origin_node: str = ""
     # T6: carried over from TaskSubmission so the claim gate sees the needs.
     needs: "TaskNeeds | None" = None
+    # T3 human approval gate: when the critic's verdict should park the task
+    # for a human decision instead of auto-advancing.
+    #   always — every critique verdict parks the task
+    #   fail   — only a rejection parks it (instead of auto-revise)
+    #   never  — fully automatic (legacy behavior, default)
+    gate: Literal["always", "fail", "never"] = "never"
+    # T3: set while the task sits parked at the CRITIQUE gate awaiting a
+    # human approve/reject (meshctl gate or Telegram /approve /reject).
+    needs_human: bool = False
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None

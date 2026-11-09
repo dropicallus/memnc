@@ -914,6 +914,7 @@ class Worker:
             revisions=snapshot.revisions,
             max_attempts=self.settings.max_attempts,
             max_revisions=snapshot.max_revisions,
+            gate=snapshot.gate,
         )
         snapshot.state = result.state
         snapshot.attempt = (
@@ -944,6 +945,12 @@ class Worker:
                 snapshot.next_role = ""
                 snapshot.claimable = False
                 snapshot.record("task.cancelled", action.reason)
+            elif action.type == "park":
+                # T3 approval gate: park at CRITIQUE for a human decision.
+                snapshot.needs_human = True
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.record("task.parked", action.reason)
 
         # M16 worker-driven fan-out: the planning worker splits the plan into
         # claimable subtasks itself instead of handing the parent back to an

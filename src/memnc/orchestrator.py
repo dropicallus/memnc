@@ -143,6 +143,7 @@ class Orchestrator:
             depth=submission.depth,
             claimable=submission.claimable,
             needs=submission.needs,
+            gate=submission.gate,
             # M14: worker-driven pipeline for claimable tasks
             next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
             # M15: the orchestrator that accepted the submission owns it.
@@ -185,7 +186,11 @@ class Orchestrator:
                 if not cmd.task.strip():
                     raise ValueError("submit needs a task")
                 snapshot = await self._accept_submission(
-                    TaskSubmission(task=cmd.task.strip()), source=f"human:{cmd.agent_id}"
+                    TaskSubmission(
+                        task=cmd.task.strip(),
+                        gate=cmd.gate_value() if cmd.gate else "never",
+                    ),
+                    source=f"human:{cmd.agent_id}",
                 )
                 snapshot.record("human.submit", f"by={cmd.agent_id} via control")
                 await self.bus.put_snapshot(snapshot)
@@ -211,6 +216,34 @@ class Orchestrator:
                 await self._apply(snapshot, Event("start"))
                 await self._maybe_request_model(snapshot)
                 await message.respond(json.dumps({"ok": True}).encode())
+            elif cmd.action == "decide":
+                # T3 approval gate: approve/reject a parked task.
+                snapshot = await self._human_task_op(cmd)
+                if not snapshot.needs_human:
+                    raise ValueError(
+                        f"task {snapshot.task_id} is not parked ({snapshot.state.value})"
+                    )
+                if cmd.approved is None:
+                    raise ValueError("decide needs approved true/false")
+                snapshot.needs_human = False
+                await self.bus.put_snapshot(snapshot)
+                verdict = "approved" if cmd.approved else "rejected"
+                await self.bus.emit_event(
+                    snapshot, f"human.decision", f"{verdict} by {cmd.agent_id}"
+                )
+                await self._apply(
+                    snapshot, Event("human_decision", approved=cmd.approved)
+                )
+                await message.respond(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "task_id": snapshot.task_id,
+                            "verdict": verdict,
+                            "state": snapshot.state.value,
+                        }
+                    ).encode()
+                )
             elif cmd.action == "stop_worker":
                 if not cmd.node.strip():
                     raise ValueError("stop_worker needs a node name")
@@ -351,6 +384,11 @@ class Orchestrator:
             return
         if not self._owns(snapshot):  # M15: another node's orchestrator owns it
             return
+        if snapshot.needs_human:  # T3: parked at the approval gate
+            log.info(
+                "ignoring result for parked task", extra={"task_id": snapshot.task_id}
+            )
+            return
         if envelope.id in snapshot.seen_result_ids:
             return
         # M14: worker-driven pipeline — the claiming worker advances the
@@ -460,6 +498,7 @@ class Orchestrator:
             revisions=snapshot.revisions,
             max_attempts=self.settings.max_attempts,
             max_revisions=snapshot.max_revisions,
+            gate=snapshot.gate,
         )
 
         changed = (
@@ -525,6 +564,21 @@ class Orchestrator:
                 snapshot.record("task.cancelled", action.reason)
                 await self.bus.put_snapshot(snapshot)
                 await self.bus.emit_event(snapshot, "task.cancelled", action.reason)
+            elif action.type == "park":
+                # T3 approval gate: park at CRITIQUE for a human decision.
+                snapshot.needs_human = True
+                snapshot.record("task.parked", action.reason)
+                await self.bus.put_snapshot(snapshot)
+                verdict = "approved" if event.approved else "rejected"
+                summary = (
+                    snapshot.critique.summary if snapshot.critique else ""
+                )
+                await self.bus.emit_event(
+                    snapshot,
+                    "task.parked",
+                    f"critic {verdict}; {action.reason} — /approve or /reject "
+                    f"{snapshot.task_id} | {summary}",
+                )
 
         if result.state is TaskState.REVISE:
             await self._apply(snapshot, Event("start"))

@@ -11,8 +11,8 @@ from typing import Literal
 
 from .schema import Role, TERMINAL_STATES, TaskState
 
-EventType = Literal["start", "result", "failure", "timeout", "cancel"]
-ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule"]
+EventType = Literal["start", "result", "failure", "timeout", "cancel", "human_decision"]
+ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule", "park"]
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ def transition(
     max_attempts: int = 3,
     max_revisions: int = 3,
     self_assign: bool = False,
+    gate: str = "never",
 ) -> Transition:
     """Compute the next state and the actions the runtime must perform."""
 
@@ -158,10 +159,32 @@ def transition(
             )
 
     if state is TaskState.CRITIQUE:
-        if event.type == "result" and event.ok:
-            if event.approved is True:
+        # T3: human decision from the parked approval gate.
+        if event.type == "human_decision":
+            if event.approved:
                 return Transition(TaskState.DONE, (Action("finish"),))
-            if event.approved is False:
+            if revisions < max_revisions:
+                return Transition(TaskState.REVISE, revision_delta=1, attempt_reset=True)
+            return Transition(
+                TaskState.FAILED,
+                (Action("escalate", reason="rejected at gate, max revisions reached"),),
+            )
+        if event.type == "result" and event.ok:
+            approved = event.approved
+            if approved is True:
+                # T3 gate "always": even an approval parks for the human.
+                if gate == "always":
+                    return Transition(
+                        TaskState.CRITIQUE, (Action("park", reason="gate always"),)
+                    )
+                return Transition(TaskState.DONE, (Action("finish"),))
+            if approved is False:
+                # T3 gate "always"/"fail": a rejection parks instead of
+                # auto-revising, so the human sees the verdict first.
+                if gate in ("always", "fail"):
+                    return Transition(
+                        TaskState.CRITIQUE, (Action("park", reason="critic rejected"),)
+                    )
                 if revisions < max_revisions:
                     return Transition(
                         TaskState.REVISE,
