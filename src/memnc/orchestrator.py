@@ -448,6 +448,11 @@ class Orchestrator:
 
         snapshot.seen_result_ids.append(envelope.id)
         snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]
+        # T4 (model-routing-visible): record which node:model ran this step.
+        if envelope.role is not None and payload.model:
+            snapshot.route[envelope.role.value] = (
+                f"{envelope.node or '?'}:{payload.model}"
+            )
 
         event = Event("result", ok=payload.ok, reason=payload.error or "")
         if payload.ok and envelope.role is not None:

@@ -531,6 +531,9 @@ class ResultPayload(BaseModel):
     error: str | None = None
     prompt_version: str | None = None
     tool_steps: int = 0
+    # T4 (model-routing-visible): the model the worker actually ran, so the
+    # orchestrator can record node:model per role on the task snapshot.
+    model: str | None = None
 
 
 class TaskSubmission(BaseModel):
@@ -596,6 +599,10 @@ class TaskSnapshot(BaseModel):
     origin_node: str = ""
     # T6: carried over from TaskSubmission so the claim gate sees the needs.
     needs: "TaskNeeds | None" = None
+    # T4 (model-routing-visible): role -> "node:model" for every executed
+    # step, recorded from the worker's result payloads. Shows which model
+    # actually handled each pipeline stage.
+    route: dict[str, str] = Field(default_factory=dict)
     # T3 human approval gate: when the critic's verdict should park the task
     # for a human decision instead of auto-advancing.
     #   always — every critique verdict parks the task

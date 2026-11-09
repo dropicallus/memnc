@@ -164,6 +164,11 @@ document.getElementById("tasks").addEventListener("click", async ev => {
     const s = await r.json();
     let html = "<h2>Task " + esc(tr.dataset.id) + "</h2>"
       + "<pre>" + esc(JSON.stringify(s, null, 2)) + "</pre>";
+    // T4 (model-routing-visible): which node:model ran each role step
+    if (s.route && Object.keys(s.route).length > 0) {
+      html += "<h2>Routing</h2><ul>" + Object.entries(s.route).map(([r, m]) =>
+        "<li><b>" + esc(r) + "</b>: " + esc(m) + "</li>").join("") + "</ul>";
+    }
     // T5: render the coder/critic debate as a readable trace
     if (Array.isArray(s.history) && s.history.length > 0) {
       html += "<h2>Debate trace</h2><ul>" + s.history.map(h =>
