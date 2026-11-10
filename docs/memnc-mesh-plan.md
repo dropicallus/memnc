@@ -942,6 +942,56 @@ not deletion — rejected/contradicted records stay archived in the log,
 only their attention weight decays. Runs when no workers hold claims, so
 it never races the CAS layer.
 
+### 14.13 Build-order roadmap for the experience graph (2026-11-10)
+
+Dependency-ordered sequence from the current state to the full §14.12
+vision. Each step is extend → test → harden → continue (Frank's rule);
+no step starts before the previous one is fully green in the suite.
+
+**Step 0 — DONE: observation schema (commit d6cb4fb).**
+`TaskObservation` + `observation_from_snapshot()`, 13 tests, suite green.
+
+**Step 1 — Deposit wiring (small, local, next).**
+Orchestrator calls `observation_from_snapshot()` at every terminal
+transition and persists the observation into a new KV bucket
+(`mesh.observations`, subject prefix `mesh.obs.*`). Emit an event so
+Telegram/console can confirm deposits. Tests: transition hooks, KV
+round-trip, deposit does not break terminal-state handling on KV
+failure (observation loss degrades learning, never the task).
+
+**Step 2 — Trace query (read path before intelligence).**
+Read observations back per task-type prefix and per model. Gives an
+early human view (meshctl/Telegram command, e.g. `obslast`) so Frank
+can sanity-check what the mesh remembers before any automatic use.
+
+**Step 3 — Team-synergy aggregation (pure computation, no behavior).**
+From deposited observations, aggregate per model pair: success ratio,
+revision counts, sample size. Surface only (console/Telegram). No
+routing decisions yet — measurement first (§14.4 guardrail).
+
+**Step 4 — Similarity + ranked attention (first real graph step).**
+Jaccard similarity over task text/type as the first basis (embedding
+upgrade stays open, §14.12 open point (a)). Port the deterministic
+ranked attention from `context_attention.py` (half-life decay + outcome
+reward + corroboration) onto our observations. Still read-only.
+
+**Step 5 — Routing feedback loop (behavior change, human-gated).**
+Claim decision consults ranked traces alongside the existing configured
+utility score; a config flag (default off) selects the mode. Compare
+both modes on a shadow period before switching. T7 scalar stays as the
+human-gated retirement source (two consumers, §14.12 point 4).
+
+**Step 6 — Dreaming job (nightly consolidation).**
+Scheduled offline walk: decay, consolidate corroborated traces,
+archive contradicted edges, refresh god-node rankings. Human-approved
+design first; optional proposal digest for human sign-off.
+
+**Step 7 — Distributed graphs + god nodes (later).**
+Per-node graph shards, selective merge, god-node risk hook in claims.
+
+Explicitly deferred: embeddings, ant-based scaling, cross-node merges —
+only after Steps 1–5 prove out on real task data.
+
 ## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
