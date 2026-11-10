@@ -71,6 +71,23 @@ While the Experience Graph is being built, these tracks must run in parallel to 
 - **Model Selection:** Deciding on the primary role-models (e.g., Gemma-4-31B for Critic).
 - **Prompt Engineering for observations:** Refining what constitutes a "high-value" observation.
 
+### Track C: Corpus-Derived Architecture Proposals (2026-11-10, from 25-paper corpus)
+*Source: ~/research-papers synthesis + cross-reading. Top-3 by impact, ranked.*
+
+1. **Implicit preference-mining from failed trajectories** (Implicit-Preference paper, arXiv 2603.17187).
+   Preference pairs can be auto-mined from self-corrections inside failed agent trajectories.
+   **Mapping:** the Step-1 `mesh_observations` KV bucket with `outcome: failed` is exactly this raw material — observations are *training data*, not telemetry. Wire a miner that extracts (rejected attempt, corrected attempt) pairs from `mesh_observations` and stages them as DPO/LoRA training pairs for the weight-memory pipeline.
+2. **Per-role LoRA adapters instead of shared prompts** (arXiv 2608.09251).
+   One shared adapter cannot represent planner- vs coder-updates that point in divergent directions in weight space — specialization is a mathematical constraint, not a taste choice.
+   **Mapping:** replace "same model, different prompt" (llama3.2:3b as both planner and coder) with role-specific adapters as soon as the weight-memory pipeline lands. Single-model roles are a structural diversity killer in self-improvement loops (cf. Multiagent-FT, Yilun-Du papers: models collapse into their own patterns without diversity).
+3. **Puppeteer pattern for tool-call JSON** (MLPO / Puppeteer / 2605.08626).
+   3B models lack instruction-following depth for structured tool-args under load; this is not a prompt problem. Decouple reasoning from execution: a reasoning model decides *what* to do, a thin executor turns a fixed action set into deterministic JSON.
+   **Mapping:** coder stays llama3.2:3b but only selects from a fixed action enum; the orchestrator (or critic side) builds the JSON tool-call. Cheap fix, no new model needed.
+
+*Supporting context:* leader = meta-reasoner, not best solver (Gemma-31B critic fits; matters for future Apex). LoRA-memory vision gets its mathematical foundation from PE-MA (2506.11803: shared adapter for common knowledge + personal adapter per node, convergence guarantee) — the design target for Growing-LoRA. Small-base operating point legitimized by the MDPI edge paper (Qwen3-0.6B, 4.8× faster latency at acceptable reliability). Trust-Ledger (M8) grows in importance with swarm scale — large swarms fail on noise vs signal, not unwillingness to cooperate.
+
+> **Sequencing note:** these proposals feed Step 4+ (behavioral change / weight memory). Do not pull them forward before Step 3 metrics exist — measure first.
+
 ---
 
 ## Implementation Sequence Summary
