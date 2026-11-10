@@ -836,7 +836,79 @@ Items 9–10 wait for the robustness classifier / §14.10 respectively.
   "model not found" case) is itself the failure-first-notification
   use case: those were silent until someone ran `tasks`.
 
-## 15. Risks & mitigations
+### 14.12 Graph-based experiential memory & stigmergic routing (PLANNED, 2026-11-09)
+
+Origin: Frank's existing work in `eclipse-score/mcp-servers`
+(S-CORE APM monorepo) — the design is **already built there**, the mesh
+task is to port/adapt it, not to invent it. Verified against the repo:
+
+**What exists in eclipse-score/mcp-servers (verified 2026-11-09):**
+
+- `libs/score-context` (MCP-free, Apache-2.0, pydantic): the normalized
+  write unit is a `ContextDelta` = one `Signal` (type, source, weight,
+  **`decays: bool`** — the pheromone primitive is already in the schema)
+  + `graph_ops` (upsert_node/upsert_edge). Every node/edge carries
+  `Provenance` (repo, sha, adapter, **confidence**, observed_at).
+- `packages/context-discipline` — the working-memory MCP server:
+  session trace types are already defined — `SessionRecord`,
+  `TaskRecord`, `ReasoningRecord`, `RetrievalRecord`, `OutcomeRecord`
+  (pass/fail + coverage), `AttentionRecord`. Tools:
+  `initialize_session`, `query_graph`, `record_decision`,
+  `record_outcome`, `get_prior_context` (intersession retrieval),
+  `add_overlay_node`. Sessions AND tasks are traced — session-to-session
+  learning is live there.
+- `context_attention.py` — deterministic ranked edge attention:
+  `score_candidate` combines semantic (jaccard over tokenized goals),
+  structural (grounded-node overlap), **recency decay**
+  (`0.5 ** (age_days / half_life_days)`), **outcome reward/bonus**
+  (pass/fail reinforcement), and **corroboration** (multiple independent
+  records agreeing → reward). Selection uses `threshold` or `top_k`
+  with `noise_floor` + `rank_gap_ratio`, so stale records fall out of
+  attention *automatically* without being deleted from the log
+  (decay-as-pruning, not decay-as-deletion).
+
+**Design principle (Frank):** every model deposits its own experience
+as observations in the graph; other agents *follow those traces* on
+similar tasks and reinforce them. Ant-based attention scales this up
+once the graph grows. The graph is shared experiential memory
+(stigmergy), not a context-retrieval tool.
+
+**memnc mapping (PLANNED):**
+
+1. **Observation deposit.** After each result, the worker emits a
+   `ContextDelta`-shaped observation: task type, role, model, route
+   (already recorded since T4-Rest), plan steps, critique summary,
+   outcome. The T7 reputation *scalar* becomes a derived/aggregated
+   view over graph edges — not the storage itself.
+2. **Trace-following at claim time.** The claim decision attends over
+   ranked edges from similar past tasks ("this task type ran well on
+   node X with model Y, critic needed 1 round") instead of a
+   configured utility score — weights emerge from use (Stage 1+ of the
+   §14.3 ladder, organic rather than hand-tuned).
+3. **Engine choice.** `libs/score-context` is MCP-free and independent —
+   embed it directly (it already brings decay, reward, corroboration,
+   provenance, deterministic selection) rather than re-implementing.
+   memnc adds an adapter: worker/orchestrator events → `ContextDelta`.
+4. **Two consumers of one signal.** The human-gated retirement decision
+   keeps the hard T7 scalar (auditable numbers); the graph drives
+   dynamic routing. Same origin, different consumers.
+5. **KV charset constraint.** Graph records in the JetStream KV follow
+   `[-_./a-zA-Z0-9]` — node/edge keys must use `reputation_key()`-style
+   sanitization (`:` → `_`).
+6. **Open questions.** (a) similarity basis for "similar task" — the
+   score engine uses jaccard on goal text; embeddings are an upgrade
+   path; (b) per-model locality: observations stay attributed per
+   (node, model) via Provenance.adapter so heterogeneous meshes get a
+   learned capability map instead of a hardcoded `cap` term; (c) schema
+   versioning of observation payloads so old formats don't poison the
+   ranking.
+
+**Prerequisite discipline (unchanged):** measure first (§14.4
+Graphify-pattern metrics) — with the score engine we get a baseline
+comparator for free: run grep-baseline vs. graph-attention on identical
+tasks before trusting the routing.
+
+### 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
