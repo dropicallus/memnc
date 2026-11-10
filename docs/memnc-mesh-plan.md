@@ -648,7 +648,7 @@ Deliberately left out: no cloud dependency (the bot runs locally, only the Teleg
 
 *Note from the AgentLance reading (T7 design principle):* the authors themselves concede the main weakness of their market — agents often misestimate their bids (private costs) and bid suboptimally; the paper's fixes (reputation update, strategy notes) mitigate this but do not remove it. For memnc this means: our claim weighting must never be blindly guessed from model context — bids/reputation draw only on hard numbers kept in the ledger (measured task runtimes, critic-score history, verify-gate results). No self-declared capabilities in the roster; capabilities are measured, not claimed.
 
-### 14.6 Status
+### 14.6.1 Status (2026-11-09)
 
 *Status (2026-11-09):* T0, T1, T6, T7.5, T2, T3, T4 and T5 shipped. T5 (commit `ac9f10c`, discussion streaming): every coder/critic result now emits a readable `debate.code` / `debate.critique` event and records it into the task snapshot history — implemented as a shared `emit_debate()` helper in `bus.py` used by both the orchestrator (`_handle_result`) and the worker self-pipeline (M14). `meshctl trace <task-id>` and the Telegram `/trace <task-id>` command replay that history (`format_trace` in telegram.py is shared by both); the console task detail renders a "Debate trace" section under the raw snapshot. Live-verified end to end: a submitted task ran coder → critic, `meshctl trace` showed `debate.code` (summary + files) and `debate.critique` (APPROVED verdict + summary). 203 tests green (was 194). T4's task-detail-with-trace is now covered; model-routing-visible remains open. T7, T8 open. T4 (console expansion, first slice): the console now shows a **Nodes** table (roster live status: roles, models, VRAM/GPU, paused flag, last heartbeat) and forwards human control commands via `POST /api/control` — `pause_node`/`resume_node` for a node and `cancel`/`retry` for a task, always acting as agent `console` (the orchestrator grant-checks that id, so the buttons answer with a deny until `meshctl grant console` is issued). `meshctl pause <node>` / `meshctl resume <node>` do the same from the CLI. A paused node stops claiming work (the `paused` flag rides the roster entry, survives heartbeat merges, and is cleared by `resume_node` or a node restart); other nodes keep claiming its tasks. Task-detail-with-trace and model-routing-visible remain open parts of T4 scope. 194 tests green. T5, T7, T8 open. T3 (approval gate): tasks carry `gate: always|fail|never` (default `never` = legacy behavior); when the critic result reaches CRITIQUE, the FSM parks the task (`needs_human=true`, `task.parked` event) instead of finishing/revisioning whenever the gate applies (`always` = park on both verdicts, `fail` = park on rejection). A human decides via Telegram `/gate approve|reject <task-id>` or `meshctl gate approve|reject <task-id>` (both go through the same `mesh.control` `decide` action, grant-checked like all T2 commands): approve → DONE, reject → revision (exhausted revisions → FAILED). Results arriving for a parked task are ignored. Telegram `/approve`|`/reject` remain reserved for T7.5 model requests. T2 (commit `9e463a0` + `fae6b2c` + `46db138`): `ControlCommand` on subject `mesh.control`; orchestrator grant-checks each command (deny-by-default via `acl.check_registry_write`, CHAIN level) and records accepted actions as `human.submit` / `human.cancel` / `human.retry` events on the task snapshot. Telegram commands `/submit`, `/cancel`, `/retry`, `/stop worker <node>` forward via request-reply; response is JSON (`{"ok":true,"task_id":...}` or `{"error":...}`). The Telegram agent id is `telegram-<chat>` (KV keys reject `:`); a `CHAIN` grant for it must be issued once via `meshctl grant`. `stop_worker` withdraws all capability records on the named node — the process itself keeps running until the operator stops it on the host (per scope note above). Submit path is shared with meshctl submit (`_accept_submission`, incl. the M11 depth check).
 
@@ -671,7 +671,7 @@ The practical win is therefore not shuttling but **demand-driven loading**: one 
 Context: node-a currently holds three edge models (Gemma-4-31B-Humanlike-Chat as critic, Apex-35B-V1.0, ripple) — role assignment for Apex and ripple is still open and deliberately deferred until this stage is discussed.
 
 
-## 14.8 Shipment: distribution & deployment
+### 14.8 Shipment: distribution & deployment
 
 Two artifacts, two audiences (decided 2026-11-09):
 
@@ -686,7 +686,7 @@ Checklist for shipping a new node:
 3. Install meshctl on the operator/agent host: `uv tool install` from the repo.
 4. `meshctl doctor` → `meshctl roster` to verify presence.
 
-## 14.9 Hermes plugin as second approval surface (PLANNED, not built)
+### 14.9 Hermes plugin as second approval surface (PLANNED, not built)
 
 Plan only — deliberately not implemented yet (Frank, 2026-11-09).
 
@@ -706,7 +706,7 @@ Status: a draft skill (`t7-gate`) exists in this Hermes profile; treat it
 as the reference for the eventual in-repo plugin. Nothing of this ships
 with memnc until Frank green-lights it.
 
-## 14.10 Console v2: live view + problem surface (PLANNED, deferred 2026-11-09)
+### 14.10 Console v2: live view + problem surface (PLANNED, deferred 2026-11-09)
 
 Frank's motivation: Telegram delivers events but no overview — he wants
 updates pushed to him, visibility of *which node does what*, and problems
@@ -731,7 +731,7 @@ Deferred deliberately — build after §14.9 and once T4's remaining
 model-routing-visible slice lands, since both share the task-detail
 data model.
 
-## 14.11 Usability & operator experience (PLANNED, researched 2026-11-09)
+### 14.11 Usability & operator experience (PLANNED, researched 2026-11-09)
 
 Goal: make daily driving of the mesh feel like texting a competent
 operator, not querying a database. Ideas researched against current
@@ -931,7 +931,7 @@ not deletion — rejected/contradicted records stay archived in the log,
 only their attention weight decays. Runs when no workers hold claims, so
 it never races the CAS layer.
 
-### 15. Risks & mitigations
+## 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
