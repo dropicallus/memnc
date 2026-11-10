@@ -921,6 +921,16 @@ merged experience graph, a god node reveals where knowledge concentrates
 ("everyone's traces point here") — a bootstrap answer for a new node and a
 signal for context prefetch on similar tasks.
 
+**Nightly graph pruning ("dreaming") (future).** A scheduled job (cron /
+systemd timer, one node, human-approved design) walks the merged graph at
+night: applies offline decay to stale edges, merges corroborated traces
+into consolidated knowledge (observations → durable task-pattern nodes),
+prunes contradicted or superseded edges (schema-version sweep), and
+refreshes god-node rankings. Follows the dreaming pattern: consolidation,
+not deletion — rejected/contradicted records stay archived in the log,
+only their attention weight decays. Runs when no workers hold claims, so
+it never races the CAS layer.
+
 ### 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
