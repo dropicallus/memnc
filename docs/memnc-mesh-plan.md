@@ -921,6 +921,17 @@ merged experience graph, a god node reveals where knowledge concentrates
 ("everyone's traces point here") — a bootstrap answer for a new node and a
 signal for context prefetch on similar tasks.
 
+**Model-team synergy in the graph (Frank, 2026-11-10).** Which models
+work well *together* is itself an observation: every task implicitly
+runs a team (the `route` dict maps roles to `node:model`). Each finished
+task deposits a cooperation edge for every unordered model pair that
+served on it, weighted by the outcome (done+approved = reinforce,
+failed = decay). Over time the graph yields a team-performance view:
+"task-type T ran well with planner A + coder B + critic C" — which
+feeds back into routing (prefer proven teams for similar tasks) and
+into pull/retire discussions. Pairs where one model dominated the route
+(e.g. same model on two roles) produce no self-edge.
+
 **Nightly graph pruning ("dreaming") (future).** A scheduled job (cron /
 systemd timer, one node, human-approved design) walks the merged graph at
 night: applies offline decay to stale edges, merges corroborated traces
