@@ -22,6 +22,7 @@ from nats.js.errors import InvalidKeyError, NotFoundError, NoKeysError
 
 from . import acl
 from .config import Settings
+from .observations import OBSERVATIONS_BUCKET, TaskObservation
 from .schema import (
     now_iso,
     CAPABILITY_KEY,
@@ -80,6 +81,7 @@ class Bus:
         self._trust = None
         self._grants = None
         self._model_requests = None
+        self._observations = None
 
     # -- lifecycle ---------------------------------------------------------
     async def connect(self, attempts: int = 20) -> None:
@@ -109,6 +111,7 @@ class Bus:
         await self.ensure_registry()
         await self.ensure_trust()
         await self.ensure_grants()
+        await self.ensure_observations()
         log.info("connected to NATS at %s", self.settings.nats_url)
 
     async def close(self) -> None:
@@ -437,6 +440,44 @@ class Bus:
         for key in sorted(keys):
             entry = await self._grants.get(key)
             out.append(GrantRecord.model_validate_json(entry.value))
+        return out
+
+    # -- 14.13 step 1: observation deposits (experience graph) --------------
+
+    async def ensure_observations(self) -> None:
+        """Ensure the observation KV bucket exists (history keeps corrections)."""
+        assert self.js is not None
+        if self._observations is not None:
+            return
+        try:
+            self._observations = await self.js.key_value(OBSERVATIONS_BUCKET)
+        except NotFoundError:
+            self._observations = await self.js.create_key_value(
+                KeyValueConfig(bucket=OBSERVATIONS_BUCKET, history=10)
+            )
+            log.info("created observation KV bucket %s", OBSERVATIONS_BUCKET)
+
+    async def deposit_observation(self, observation: TaskObservation) -> None:
+        """Write one finished-task observation into the experience graph."""
+        await self.ensure_observations()
+        assert self._observations is not None
+        await self._observations.put(
+            observation.kv_id(), observation.model_dump_json().encode()
+        )
+        log.debug("deposited observation %s", observation.kv_id())
+
+    async def list_observations(self) -> list[TaskObservation]:
+        """All deposited observations, sorted by task id."""
+        await self.ensure_observations()
+        assert self._observations is not None
+        out: list[TaskObservation] = []
+        try:
+            keys = await self._observations.keys()
+        except NoKeysError:
+            return out
+        for key in sorted(keys):
+            entry = await self._observations.get(key)
+            out.append(TaskObservation.model_validate_json(entry.value))
         return out
 
     # -- M8: trust ledger --------------------------------------------------

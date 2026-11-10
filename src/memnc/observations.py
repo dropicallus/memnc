@@ -21,6 +21,11 @@ from memnc.schema import TERMINAL_STATES, TaskSnapshot, now_iso
 
 OBSERVATION_SCHEMA_VERSION = 1
 
+# Dedicated KV bucket for the experience graph (plan section 14.13, step 1).
+# NOTE: KV *bucket* names must not contain dots (keys may); "mesh.observations"
+# from the plan sketch would raise InvalidBucketNameError on connect.
+OBSERVATIONS_BUCKET = "mesh_observations"
+
 # KV charset is [-_./a-zA-Z0-9]; cooperation edge ids use "|" and "+" which
 # are both safe, and models are joined with a fixed separator.
 _PAIR_SEP = "|+|"
