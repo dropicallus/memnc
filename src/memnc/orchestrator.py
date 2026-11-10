@@ -14,6 +14,7 @@ from .bus import Bus
 from .config import Settings, get_settings
 from .fsutil import apply_artifacts
 from .fsm import Event, transition
+from .observations import observation_from_snapshot
 from .schema import (
     CoderOutput,
     CriticOutput,
@@ -576,6 +577,12 @@ class Orchestrator:
             },
         )
 
+        # 14.13 step 1: deposit an observation for every terminal transition
+        # into the experience graph. Duck-typed + best effort: a broken
+        # observation store must never fail the task lifecycle itself.
+        if result.state in TERMINAL_STATES and hasattr(self.bus, "deposit_observation"):
+            await self._deposit_observation(snapshot)
+
         for action in result.actions:
             if action.type == "dispatch" and action.role is not None:
                 await self._dispatch(snapshot, action.role)
@@ -619,6 +626,23 @@ class Orchestrator:
 
         if result.state is TaskState.REVISE:
             await self._apply(snapshot, Event("start"))
+
+    async def _deposit_observation(self, snapshot: TaskSnapshot) -> None:
+        """14.13 step 1: write the terminal snapshot into mesh.observations.
+
+        Never raises: observation is a side channel; a KV failure here must
+        not corrupt the already-applied task transition.
+        """
+        observation = observation_from_snapshot(snapshot)
+        if observation is None:
+            return
+        try:
+            await self.bus.deposit_observation(observation)
+        except Exception as exc:  # noqa: BLE001 - side channel only
+            log.warning(
+                "observation deposit failed",
+                extra={"task_id": snapshot.task_id, "error": str(exc)},
+            )
 
     async def _dispatch(self, snapshot: TaskSnapshot, role: Role) -> None:
         timeout_s = self.settings.timeout_for(role)

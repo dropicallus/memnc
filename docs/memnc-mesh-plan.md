@@ -954,7 +954,7 @@ no step starts before the previous one is fully green in the suite.
 **Step 1 — Deposit wiring (small, local, next).**
 Orchestrator calls `observation_from_snapshot()` at every terminal
 transition and persists the observation into a new KV bucket
-(`mesh.observations`, subject prefix `mesh.obs.*`). Emit an event so
+(`mesh_observations` KV bucket — dots are invalid in KV bucket names —, subject prefix `mesh.obs.*`). Emit an event so
 Telegram/console can confirm deposits. Tests: transition hooks, KV
 round-trip, deposit does not break terminal-state handling on KV
 failure (observation loss degrades learning, never the task).
