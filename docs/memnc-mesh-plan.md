@@ -908,6 +908,19 @@ Graphify-pattern metrics) — with the score engine we get a baseline
 comparator for free: run grep-baseline vs. graph-attention on identical
 tasks before trusting the routing.
 
+**Distributed graph topology (Frank's design intent).** The mesh does not
+maintain one monolithic graph: each node produces its own graph — its
+experience observations per model (from task traces) plus a graphify code
+graph of the repo it works on. Graphs are merged selectively
+(cf. `context_merge.py` in eclipse-score/mcp-servers). **God nodes**
+(graphify: nodes with a disproportionate number of edges) serve the mesh
+twice: (a) in the code graph, a god node marks high blast-radius targets —
+tasks touching one earn extra critic attention or a more capable model
+(risk-aware routing, the same escalate-only signal AE uses); (b) in the
+merged experience graph, a god node reveals where knowledge concentrates
+("everyone's traces point here") — a bootstrap answer for a new node and a
+signal for context prefetch on similar tasks.
+
 ### 15. Risks & mitigations
 
 | Risk | Impact | Mitigation |
