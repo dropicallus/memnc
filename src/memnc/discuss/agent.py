@@ -45,7 +45,7 @@ NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
 # DISCUSS_PROMPT_FILE.
 PROMPT_FILE = os.environ.get(
     "DISCUSS_PROMPT_FILE",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "discuss_prompt.md"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt.md"),
 )
 with open(PROMPT_FILE, encoding="utf-8") as f:
     _SYSTEM_TEMPLATE = f.read()
