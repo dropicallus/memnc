@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     max_concurrency: int = 1
     max_revisions: int = 3
     max_attempts: int = 3
+    # M16 mesh-clarify: consult the peer roles once before a question goes
+    # to the human; peers that do not answer within the timeout are declined.
+    max_clarify_rounds: int = 1
+    clarify_timeout_s: int = 120
     planner_timeout_s: int = 180
     coder_timeout_s: int = 600
     critic_timeout_s: int = 180
