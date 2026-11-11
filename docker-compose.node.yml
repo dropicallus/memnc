@@ -1,6 +1,6 @@
 # Additional worker node: join an existing NATS server.
 #
-#   NATS_URL=nats://<host-a-ip>:4222 NODE_NAME=node-b MESH_GATE=true \
+#   NODE_NATS_URL=nats://<host-a-ip>:4222 NODE_NAME=node-b MESH_GATE=true \
 #     docker compose -f docker-compose.node.yml up --build -d
 #
 # Do not run the `nats` or `orchestrator` service here; the first node owns them.
@@ -14,7 +14,7 @@ services:
       file: docker-compose.yml
       service: worker-planner
     environment:
-      NATS_URL: ${NATS_URL:-nats://host.docker.internal:4222}
+      NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}-planner
       MESH_GATE: ${MESH_GATE:-false}
@@ -28,7 +28,7 @@ services:
       file: docker-compose.yml
       service: worker-coder
     environment:
-      NATS_URL: ${NATS_URL:-nats://host.docker.internal:4222}
+      NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}-coder
       MESH_GATE: ${MESH_GATE:-false}
@@ -42,7 +42,7 @@ services:
       file: docker-compose.yml
       service: worker-critic
     environment:
-      NATS_URL: ${NATS_URL:-nats://host.docker.internal:4222}
+      NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}-critic
       MESH_GATE: ${MESH_GATE:-false}
@@ -66,7 +66,7 @@ services:
               "--contact", "mcp://memnc-agent",
               "--skill", "code"]
     environment:
-      NATS_URL: ${NATS_URL:-nats://host.docker.internal:4222}
+      NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_NAME:-node-b}
       MESH_GATE: ${MESH_GATE:-false}
@@ -84,7 +84,7 @@ services:
       service: worker-coder
     command: ["python", "-m", "memnc.orchestrator"]
     environment:
-      NATS_URL: ${NATS_URL:-nats://host.docker.internal:4222}
+      NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: node-b
       MESH_GATE: ${MESH_GATE:-false}
