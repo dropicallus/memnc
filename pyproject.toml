@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+  "ruff>=0.8",
   "pytest-asyncio>=0.24",
 ]
 
@@ -34,4 +35,22 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "integration: requires a running NATS server (skipped when unavailable)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["training", "workspace"]
+
+[tool.ruff.lint]
+select = [
+  "E4", "E7", "E9", "F",   # pyflakes + core errors
+  "I",                     # import sorting
+  "UP",                    # pyupgrade
+  "B",                     # bugbear
+]
+ignore = [
+  "S110",  # try-except-pass: intentional in observers/bus handlers
+  "BLE001",# blind except: intentional at mesh boundaries
+  "S112",  # try-except-continue: same
 ]

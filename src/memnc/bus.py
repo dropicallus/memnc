@@ -18,47 +18,45 @@ from nats.js.api import (
     RetentionPolicy,
     StreamConfig,
 )
-from nats.js.errors import InvalidKeyError, NotFoundError, NoKeysError
+from nats.js.errors import InvalidKeyError, NoKeysError, NotFoundError
 
 from . import acl
 from .config import Settings
 from .observations import OBSERVATIONS_BUCKET, TaskObservation
 from .schema import (
-    now_iso,
-    CAPABILITY_KEY,
     GRANT_BUCKET,
-    Capability,
-    GrantLevel,
-    GrantRecord,
-    Envelope,
-    Kind,
-    MODEL_REQUESTS_BUCKET,
     MODEL_REQUEST_KEY,
-    ModelRequest,
-    ModelReputation,
-    SUBJECT_MODEL_DECISION,
-    reputation_key,
+    MODEL_REQUESTS_BUCKET,
     REGISTRY_BUCKET,
     ROSTER_BUCKET,
     ROSTER_KEY,
     ROSTER_TTL,
-    Capability,
-    NodeInfo,
-    satisfies,
-    Role,
     SUBJECT_DLQ,
     SUBJECT_EVENTS,
+    SUBJECT_MODEL_DECISION,
     SUBJECT_RESULT,
-    TaskState,
+    TERMINAL_STATES,
     TRUST_ACCRUE,
     TRUST_BUCKET,
-    TERMINAL_STATES,
     TRUST_DECAY,
     TRUST_DEFAULT,
     TRUST_MAX,
     TRUST_MIN,
+    Capability,
+    Envelope,
+    GrantLevel,
+    GrantRecord,
+    Kind,
+    ModelReputation,
+    ModelRequest,
+    NodeInfo,
+    Role,
     TaskSnapshot,
+    TaskState,
     TrustEntry,
+    now_iso,
+    reputation_key,
+    satisfies,
 )
 
 # How long a capability record lives without a refresh. Short TTL = presence:
@@ -765,7 +763,7 @@ def SUBJECT_CMD_FOR(role: Role) -> str:
     return SUBJECT_CMD.format(role=role.value)
 
 
-async def emit_debate(bus: "Bus", snapshot: TaskSnapshot, role: Role) -> None:
+async def emit_debate(bus: Bus, snapshot: TaskSnapshot, role: Role) -> None:
     """T5: stream the coder/critic negotiation as readable events.
 
     Emits `debate.code` (coder summary + files) or `debate.critique`

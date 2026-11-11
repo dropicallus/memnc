@@ -20,6 +20,13 @@ from .fsutil import apply_artifacts
 from .mcp.client import MCPClient
 from .roles import PROMPT_VERSION, SYSTEM_PROMPTS, build_user_prompt
 from .schema import (
+    ROLE_OUTPUT as _OUTPUT_SCHEMA,
+)
+from .schema import (
+    SUBJECT_HEARTBEAT,
+    SUBJECT_RESULT,
+    SUBJECT_SUBMIT_NODE,
+    TERMINAL_STATES,
     CoderOutput,
     CriticIssue,
     Envelope,
@@ -28,20 +35,13 @@ from .schema import (
     NodeInfo,
     ResultPayload,
     Role,
-    SUBJECT_CMD,
-    SUBJECT_HEARTBEAT,
-    SUBJECT_RESULT,
-    SUBJECT_SUBMIT,
-    SUBJECT_SUBMIT_NODE,
     TaskSnapshot,
-    TaskSubmission,
     TaskState,
-    TERMINAL_STATES,
-    reputation_key,
-    should_propose_retirement,
+    TaskSubmission,
     model_pull_allowed,
     new_id,
-    ROLE_OUTPUT as _OUTPUT_SCHEMA,
+    reputation_key,
+    should_propose_retirement,
 )
 
 log = logging.getLogger(__name__)
@@ -498,7 +498,7 @@ class Worker:
                 result = await asyncio.wait_for(
                     self._run(envelope, snapshot), timeout=timeout_s + 5
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 result = ResultPayload(ok=False, error="worker timed out")
             except Exception as exc:  # noqa: BLE001
                 log.exception("agent run failed", extra={"task_id": envelope.task_id})
@@ -838,7 +838,7 @@ class Worker:
                 result = await asyncio.wait_for(
                     self._run(envelope, snapshot), timeout=timeout_s + 5
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 result = ResultPayload(ok=False, error="worker timed out")
             except Exception as exc:  # noqa: BLE001
                 log.exception("self pipeline run failed")
@@ -953,7 +953,7 @@ class Worker:
             )
             try:
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 evidence.append(f"py_compile {f.path}: TIMEOUT")
                 passed = False
@@ -974,7 +974,7 @@ class Worker:
             )
             try:
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 evidence.append(f"run {py_files[0].path}: TIMEOUT")
                 passed = False

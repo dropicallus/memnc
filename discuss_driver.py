@@ -12,7 +12,12 @@ Env: NATS_URL, NATS_TOKEN, DISCUSS_NODES, DISCUSS_SUBJECTS,
      DISCUSS_SUBJECT_FMT (default "discuss.{node}")
 Saves transcript to discussions/disc_<ts>.txt
 """
-import asyncio, json, os, sys, time
+import asyncio
+import json
+import os
+import sys
+import time
+
 import nats
 
 from discuss_common import Settings, roster_nodes
@@ -63,7 +68,7 @@ async def main():
 
     done_by = None
     for rnd in range(1, rounds + 1):
-        for subj, name in zip(subjects, names):
+        for subj, name in zip(subjects, names, strict=True):
             r = await ask(nc, subj, name, topic, transcript, timeout)
             text = r["text"].strip()
             transcript.append({"speaker": name, "text": text})

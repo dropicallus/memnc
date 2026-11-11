@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 
+from test_m11_claim import FakeKV, _snapshot
+
 from memnc.bus import Bus
 from memnc.config import Settings
 from memnc.schema import (
@@ -12,16 +14,14 @@ from memnc.schema import (
     CriticOutput,
     Envelope,
     FileArtifact,
-    PlanStep,
     PlannerOutput,
+    PlanStep,
     ResultPayload,
     Role,
     TaskSnapshot,
     TaskState,
 )
 from memnc.worker import Worker
-
-from test_m11_claim import FakeKV, _snapshot
 
 
 class SilentBus(Bus):

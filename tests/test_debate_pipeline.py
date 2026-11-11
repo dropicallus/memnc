@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import asyncio
 
+from test_m11_claim import _snapshot
+from test_m14 import SilentBus, _worker
+
 from memnc.config import Settings
 from memnc.schema import (
     CoderOutput,
     CriticOutput,
     FileArtifact,
-    PlanStep,
     PlannerOutput,
+    PlanStep,
     ResultPayload,
     Role,
     TaskState,
 )
-from memnc.worker import Worker
-
-from test_m14 import SilentBus, _worker
-from test_m11_claim import _snapshot
 
 
 def test_pipeline_streams_debate_events():

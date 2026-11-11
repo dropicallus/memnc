@@ -12,32 +12,31 @@ from . import acl
 from .acl import check_registry_write
 from .bus import Bus
 from .config import Settings, get_settings
-from .fsutil import apply_artifacts
 from .fsm import Event, transition
+from .fsutil import apply_artifacts
 from .observations import observation_from_snapshot
 from .schema import (
-    CoderOutput,
-    CriticOutput,
-    Envelope,
-    Kind,
-    PlannerOutput,
-    ResultPayload,
-    plan_model_request,
-    Role,
     SUBJECT_CMD,
     SUBJECT_CONTROL,
     SUBJECT_HEARTBEAT,
     SUBJECT_LEDGER,
-    SUBJECT_SUBMIT,
     SUBJECT_SUBMIT_NODE,
+    TERMINAL_STATES,
+    CoderOutput,
+    ControlCommand,
+    CriticOutput,
+    Envelope,
+    GrantLevel,
+    Kind,
+    PlannerOutput,
+    ResultPayload,
+    Role,
     TaskSnapshot,
     TaskState,
-    TERMINAL_STATES,
     TaskSubmission,
-    ControlCommand,
-    GrantLevel,
     new_id,
     now_iso,
+    plan_model_request,
 )
 
 log = logging.getLogger(__name__)
@@ -231,7 +230,7 @@ class Orchestrator:
                 await self.bus.put_snapshot(snapshot)
                 verdict = "approved" if cmd.approved else "rejected"
                 await self.bus.emit_event(
-                    snapshot, f"human.decision", f"{verdict} by {cmd.agent_id}"
+                    snapshot, "human.decision", f"{verdict} by {cmd.agent_id}"
                 )
                 await self._apply(
                     snapshot, Event("human_decision", approved=cmd.approved)

@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -187,7 +187,7 @@ def format_roster(nodes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def format_model_requests(requests: list["ModelRequest"]) -> str:
+def format_model_requests(requests: list[ModelRequest]) -> str:
     """Compact /mreqs view: one line per model request, newest first."""
     if not requests:
         return "no model requests"
@@ -211,7 +211,7 @@ class TelegramObserver:
     """NATS events -> Telegram; read commands plus the ONE gated write path
     (approve/reject on model requests, plan §14.7)."""
 
-    def __init__(self, settings: Settings, bot: "BotAPI"):
+    def __init__(self, settings: Settings, bot: BotAPI):
         self.settings = settings
         self.bot = bot
         self.bus = Bus(settings)
@@ -372,7 +372,7 @@ class TelegramObserver:
             return
         request.status = status
         request.decided_by = f"telegram:{chat}"
-        request.decided_at = datetime.now(timezone.utc).isoformat()
+        request.decided_at = datetime.now(UTC).isoformat()
         await self.bus.put_model_request(request)
         await self.bus.publish_model_decision(request)
         await self.bot.send_message(

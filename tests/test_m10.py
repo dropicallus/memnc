@@ -5,18 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 from memnc.config import Settings
 from memnc.orchestrator import Orchestrator
 from memnc.schema import (
+    SUBJECT_LEDGER,
     Envelope,
     Kind,
     PlannerOutput,
     ResultPayload,
     Role,
-    SUBJECT_LEDGER,
-    SUBJECT_SUBMIT,
     TaskSnapshot,
     TaskState,
 )
@@ -25,7 +22,7 @@ from memnc.schema import (
 class FakeNats:
     """Minimal nc stand-in: captures fan-out submissions on mesh.task.submit."""
 
-    def __init__(self, bus: "FakeBus"):
+    def __init__(self, bus: FakeBus):
         self.bus = bus
         self.submitted: list[dict] = []
         self._next_id = 1000
@@ -145,7 +142,7 @@ def test_fanout_aggregates_done_and_failed():
     orchestrator.bus.snapshots[snapshot.task_id] = snapshot
     asyncio.run(orchestrator._fanout(snapshot))
     states = [TaskState.DONE, TaskState.FAILED]
-    for sub_id, state in zip(snapshot.subtasks, states):
+    for sub_id, state in zip(snapshot.subtasks, states, strict=True):
         orchestrator.bus.snapshots[sub_id].state = state
     asyncio.run(orchestrator._check_fanouts())
     parent = orchestrator.bus.snapshots["p-fail"]
@@ -200,6 +197,5 @@ def test_snapshot_fanout_defaults():
 
 def test_ledger_subject_not_in_stream_coverage():
     """mesh.ledger must stay a core request/reply subject (see bus.py note)."""
-    from memnc.schema import SUBJECT_LEDGER
 
     assert SUBJECT_LEDGER == "mesh.ledger"

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import time
 import fnmatch
+import time
 import uuid
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -20,20 +20,20 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     PLANNER = "planner"
     CODER = "coder"
     CRITIC = "critic"
 
 
-class Kind(str, Enum):
+class Kind(StrEnum):
     COMMAND = "command"
     RESULT = "result"
     EVENT = "event"
     HEARTBEAT = "heartbeat"
 
 
-class TaskState(str, Enum):
+class TaskState(StrEnum):
     RECEIVED = "RECEIVED"
     PLANNING = "PLANNING"
     CODING = "CODING"
@@ -150,7 +150,7 @@ class NodeInfo(BaseModel):
     def key(self) -> str:
         return ROSTER_KEY.format(node_id=self.node_id)
 
-    def merge(self, other: "NodeInfo") -> "NodeInfo":
+    def merge(self, other: NodeInfo) -> NodeInfo:
         """Union of two heartbeat entries for the same node (multi-process)."""
         return NodeInfo(
             node_id=self.node_id,
@@ -315,7 +315,7 @@ GRANT_KEY = "grant.{agent_id}"
 SUBJECT_AGENT_INBOX = "mem.agent.{agent_id}.work"  # mem.*: outside MESH-stream coverage — core request/reply on stream-covered subjects is answered by the JetStream PubAck, never by the adapter
 
 
-class GrantLevel(str, Enum):
+class GrantLevel(StrEnum):
     """ormica permission chain: ROOT issues, CHAIN writes own records, AUTO = self-declared (never sufficient)."""
 
     ROOT = "root"
@@ -365,7 +365,7 @@ class Envelope(BaseModel):
         return value
 
 
-class StepStatus(str, Enum):
+class StepStatus(StrEnum):
     PENDING = "pending"
     READY = "ready"
     AUCTIONING = "auctioning"
@@ -396,7 +396,7 @@ class PlanStep(BaseModel):
     result: str = ""
 
     @model_validator(mode="after")
-    def _defaults(self) -> "PlanStep":
+    def _defaults(self) -> PlanStep:
         if not self.id:
             self.id = f"s{self.step}"
         if not self.skills:
@@ -553,7 +553,7 @@ class TaskSubmission(BaseModel):
     claimable: bool = False
     # T6 resource-aware claim: capability constraints a claiming node must
     # satisfy (see satisfies() below). None = unconstrained (legacy tasks).
-    needs: "TaskNeeds | None" = None
+    needs: TaskNeeds | None = None
     # T3 human approval gate carried over from the submission.
     gate: Literal["always", "fail", "never"] = "never"
 
@@ -598,7 +598,7 @@ class TaskSnapshot(BaseModel):
     # M15: node whose orchestrator owns this task (submit routing + reaping).
     origin_node: str = ""
     # T6: carried over from TaskSubmission so the claim gate sees the needs.
-    needs: "TaskNeeds | None" = None
+    needs: TaskNeeds | None = None
     # T4 (model-routing-visible): role -> "node:model" for every executed
     # step, recorded from the worker's result payloads. Shows which model
     # actually handled each pipeline stage.

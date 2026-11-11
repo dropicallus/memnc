@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
+
+import pytest
 
 from memnc.bus import Bus
 from memnc.config import Settings
@@ -110,6 +111,6 @@ def test_stale_revision_is_cas_conflict():
                 "task.t5", stale.model_dump_json().encode(), last=entry.revision
             )
         )
-        assert False, f"expected CAS rejection, got {result}"
+        pytest.fail(f"expected CAS rejection, got {result}")
     except Exception:
         pass

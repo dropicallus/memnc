@@ -81,7 +81,7 @@ async def run_shell(
         timed_out = False
         try:
             await asyncio.wait_for(process.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             timed_out = True
         finally:
             # kill+reap on timeout AND on task cancellation (zombie prevention)

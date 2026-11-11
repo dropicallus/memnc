@@ -22,10 +22,8 @@ reason) — never bare booleans, so denials are loggable/auditable.
 from __future__ import annotations
 
 import fnmatch
-
 import time
 from dataclasses import dataclass
-from enum import Enum
 
 from .schema import GrantLevel, GrantRecord
 

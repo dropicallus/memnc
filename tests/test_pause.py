@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 
+from test_control import _GRANTED, FakeBus, _FakeMsg
+from test_control import _orch as _control_orch
+
 from memnc.schema import ControlCommand, NodeInfo
 from memnc.worker import Worker
-
-from test_control import FakeBus, _GRANTED, _FakeMsg
-from test_control import _orch as _control_orch
-from test_gate import _orch
 
 
 class _NodeBus(FakeBus):
@@ -91,6 +90,7 @@ def test_worker_pause_check():
         node_id="n1", roles=["coder"], paused=True, updated_at="t"
     )
     import tempfile
+
     from memnc.config import Settings
 
     with tempfile.TemporaryDirectory() as tmp:

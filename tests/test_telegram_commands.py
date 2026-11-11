@@ -23,10 +23,10 @@ def test_summary_shows_active_first_then_recent():
     out = summarize_tasks(snaps, limit=5)
     lines = out.splitlines()
     # active task appears before any terminal one
-    idx_active = next(i for i, l in enumerate(lines) if "#new" in l)
-    idx_done = min(i for i, l in enumerate(lines) if "#old" in l)
+    idx_active = next(i for i, ln in enumerate(lines) if "#new" in ln)
+    idx_done = min(i for i, ln in enumerate(lines) if "#old" in ln)
     assert idx_active < idx_done
-    assert len([l for l in lines if l.startswith("#")]) == 6  # 1 active + 5 recent
+    assert len([ln for ln in lines if ln.startswith("#")]) == 6  # 1 active + 5 recent
 
 
 def test_summary_filter_state():
