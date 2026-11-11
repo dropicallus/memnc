@@ -11,8 +11,11 @@ from typing import Literal
 
 from .schema import TERMINAL_STATES, Role, TaskState
 
-EventType = Literal["start", "result", "failure", "timeout", "cancel", "human_decision"]
-ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule", "park"]
+EventType = Literal[
+    "start", "result", "failure", "timeout", "cancel", "human_decision",
+    "ask", "answer",
+]
+ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule", "park", "ask"]
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,7 @@ class Event:
     approved: bool | None = None
     reason: str = ""
     result_id: str | None = None
+    role: Role | None = None  # ask/answer: which role asked or is resumed
     # DAG scheduler hints. ``all_steps_done`` advances CODING -> CRITIQUE;
     # ``exhausted`` stops re-auctioning a failed step and fails the task.
     all_steps_done: bool = False
@@ -84,6 +88,30 @@ def transition(
             TaskState.CANCELLED,
             (Action("cancel", reason=event.reason or "cancelled"),),
         )
+
+    # An agent asked a clarifying question: park in WAIT_INPUT until a human
+    # answers (Event("answer")), regardless of the current pipeline stage.
+    if event.type == "ask":
+        if state is TaskState.WAIT_INPUT:
+            return Transition(state)
+        return Transition(
+            TaskState.WAIT_INPUT,
+            (Action("ask", role=event.role, reason=event.reason),),
+            attempt_reset=True,
+        )
+
+    if state is TaskState.WAIT_INPUT:
+        if event.type == "answer":
+            role = event.role or Role.PLANNER
+            resume = {
+                Role.PLANNER: TaskState.PLANNING,
+                Role.CODER: TaskState.CODING,
+                Role.CRITIC: TaskState.CRITIQUE,
+            }[role]
+            return Transition(
+                resume, (Action("dispatch", role),), attempt_reset=True
+            )
+        return Transition(state)
 
     if state is TaskState.RECEIVED:
         if event.type == "start":

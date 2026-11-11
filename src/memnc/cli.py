@@ -308,6 +308,29 @@ async def cmd_gate(args: argparse.Namespace, settings: Settings) -> int:
         await client.close()
 
 
+async def cmd_answer(args: argparse.Namespace, settings: Settings) -> int:
+    """Reply to a task parked in WAIT_INPUT (an agent asked a question)."""
+    client = await _connect(settings)
+    cmd = ControlCommand(
+        action="answer",
+        agent_id=args.by,
+        task_id=args.task_id.lstrip("#"),
+        text=" ".join(args.text),
+    )
+    try:
+        response = await client.request(
+            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
+        )
+        data = json.loads(response.data)
+        if "error" in data:
+            print(f"error: {data['error']}", file=sys.stderr)
+            return 1
+        print(f"{data['task_id']} answered -> {data['state']}")
+        return 0
+    finally:
+        await client.close()
+
+
 async def cmd_pause(args: argparse.Namespace, settings: Settings) -> int:
     """T4: pause or resume a node's claim loop."""
     client = await _connect(settings)
@@ -501,6 +524,14 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("task_id", help="parked task id (prefix not supported)")
     gate.add_argument("--by", default="meshctl")
     gate.set_defaults(func=cmd_gate)
+
+    answer = subparsers.add_parser(
+        "answer", help="reply to a task parked in WAIT_INPUT (agent asked)"
+    )
+    answer.add_argument("task_id", help="task id (prefix match)")
+    answer.add_argument("text", nargs="+", help="the human's reply")
+    answer.add_argument("--by", default="meshctl")
+    answer.set_defaults(func=cmd_answer)
 
     pause = subparsers.add_parser("pause", help="T4: stop a node from claiming work")
     pause.add_argument("node")

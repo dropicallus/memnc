@@ -886,6 +886,11 @@ class Worker:
                 output_model = _OUTPUT_SCHEMA[envelope.role]
                 output = output_model.model_validate(result.output)
                 self._store_output(snapshot, envelope.role, output)
+                question = snapshot.question_output(envelope.role)
+                if question:
+                    event = Event(
+                        "ask", reason=question, role=envelope.role
+                    )
                 # T5: stream the coder/critic debate as events + history
                 await emit_debate(self.bus, snapshot, envelope.role)
             except Exception as exc:  # noqa: BLE001
@@ -894,6 +899,7 @@ class Worker:
             if (
                 envelope.role is Role.CRITIC
                 and snapshot.critique is not None
+                and not snapshot.critique.question
             ):
                 # T7: record the verdict against the coder model (reputation)
                 # and raise a retirement proposal once the streak is long.
@@ -1117,6 +1123,19 @@ class Worker:
                 snapshot.next_role = ""
                 snapshot.claimable = False
                 snapshot.record("task.cancelled", action.reason)
+            elif action.type == "ask":
+                # M14 handoff: park until a human answers via meshctl answer.
+                snapshot.next_role = ""
+                snapshot.claimable = False
+                snapshot.question = action.reason
+                snapshot.question_role = action.role
+                snapshot.record("task.question", action.reason)
+                await self.bus.emit_event(
+                    snapshot,
+                    "task.question",
+                    f"question: {action.reason} — /answer {snapshot.task_id} "
+                    f"<text>",
+                )
             elif action.type == "park":
                 # T3 approval gate: park at CRITIQUE for a human decision.
                 snapshot.needs_human = True

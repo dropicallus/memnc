@@ -104,3 +104,45 @@ def test_unknown_event_is_noop():
     result = transition(TaskState.CODING, Event("start"))
     assert result.state is TaskState.CODING
     assert result.actions == ()
+
+
+def test_ask_parks_task_and_resets_attempt():
+    result = transition(
+        TaskState.PLANNING, Event("ask", reason="which db?", role=Role.PLANNER)
+    )
+    assert result.state is TaskState.WAIT_INPUT
+    assert result.attempt_reset is True
+    assert result.actions[0].type == "ask"
+    assert result.actions[0].role is Role.PLANNER
+    assert result.actions[0].reason == "which db?"
+
+
+def test_ask_is_absorbed_when_already_waiting():
+    result = transition(
+        TaskState.WAIT_INPUT, Event("ask", reason="again", role=Role.CODER)
+    )
+    assert result.state is TaskState.WAIT_INPUT
+    assert result.actions == ()
+
+
+def test_answer_resumes_to_asking_role():
+    result = transition(
+        TaskState.WAIT_INPUT,
+        Event("answer", reason="postgres", role=Role.CODER),
+    )
+    assert result.state is TaskState.CODING
+    assert result.actions[0].type == "dispatch"
+    assert result.actions[0].role is Role.CODER
+    assert result.attempt_reset is True
+
+
+def test_answer_defaults_to_planner():
+    result = transition(TaskState.WAIT_INPUT, Event("answer", reason="go on"))
+    assert result.state is TaskState.PLANNING
+    assert result.actions[0].role is Role.PLANNER
+
+
+def test_parked_task_ignores_other_events():
+    result = transition(TaskState.WAIT_INPUT, Event("result", ok=True))
+    assert result.state is TaskState.WAIT_INPUT
+    assert result.actions == ()
