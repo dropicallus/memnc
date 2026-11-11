@@ -7,7 +7,7 @@ import asyncio
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import nats
 
@@ -18,12 +18,11 @@ from .schema import (
     SUBJECT_CONTROL,
     SUBJECT_EVENTS,
     SUBJECT_LEDGER,
-    SUBJECT_SUBMIT,
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
+    ControlCommand,
     GrantLevel,
     TaskNeeds,
-    ControlCommand,
     TaskSubmission,
     model_pull_allowed,
 )
@@ -260,7 +259,7 @@ async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
             return 1
         request.status = status
         request.decided_by = args.by
-        request.decided_at = datetime.now(timezone.utc).isoformat()
+        request.decided_at = datetime.now(UTC).isoformat()
         await bus.put_model_request(request)
         await bus.publish_model_decision(request)
         print(f"{request.request_id} {status} ({request.model})")

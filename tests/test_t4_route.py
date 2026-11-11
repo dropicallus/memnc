@@ -11,19 +11,17 @@ from __future__ import annotations
 import asyncio
 import json
 
+from test_m10 import FakeBus, _FakeMsg, _result_envelope
+
 from memnc.config import Settings
 from memnc.orchestrator import Orchestrator
 from memnc.schema import (
-    Envelope,
-    Kind,
     ResultPayload,
     Role,
     TaskSnapshot,
     TaskState,
 )
 from memnc.worker import Worker
-
-from test_m10 import FakeBus, _FakeMsg, _result_envelope
 
 
 async def _capture_publish(self, subject, envelope):  # type: ignore[no-untyped-def]

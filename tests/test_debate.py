@@ -2,6 +2,8 @@
 
 import asyncio
 
+from test_control import FakeBus
+
 from memnc.bus import emit_debate
 from memnc.schema import (
     CoderOutput,
@@ -12,8 +14,6 @@ from memnc.schema import (
     TaskSnapshot,
 )
 from memnc.telegram import format_trace
-
-from test_control import FakeBus
 
 
 def _snap() -> TaskSnapshot:
@@ -92,7 +92,7 @@ def test_format_trace_truncates_long_entries():
     snap.record("debate.code", "x" * 500)
     out = format_trace(snap.model_dump())
     lines = out.splitlines()
-    assert all(len(l) <= 240 for l in lines)
+    assert all(len(ln) <= 240 for ln in lines)
 
 
 def test_format_trace_caps_entries():

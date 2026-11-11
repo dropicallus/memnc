@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 
+from test_control import FakeBus, _FakeMsg
+
 from memnc.config import Settings
 from memnc.fsm import Event, transition
 from memnc.orchestrator import Orchestrator
 from memnc.schema import GrantLevel, GrantRecord, TaskState
-
-from test_control import FakeBus, _FakeMsg
 
 _GRANTED = GrantRecord(
     agent_id="telegram-123", level=GrantLevel.CHAIN, granted_by="root"

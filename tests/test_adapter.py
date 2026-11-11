@@ -7,7 +7,6 @@ live bus belongs in tests/test_integration.py / test_worker.py.
 """
 
 import pytest
-from pydantic import ValidationError
 
 from memnc.adapter import AgentAdapter, _check_clean
 from memnc.schema import Capability

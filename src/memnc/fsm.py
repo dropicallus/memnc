@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .schema import Role, TERMINAL_STATES, TaskState
+from .schema import TERMINAL_STATES, Role, TaskState
 
 EventType = Literal["start", "result", "failure", "timeout", "cancel", "human_decision"]
 ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule", "park"]

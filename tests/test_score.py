@@ -1,14 +1,7 @@
-import pytest
-import asyncio
 from unittest.mock import MagicMock
 
-from memnc.schema import (
-    TrustEntry,
-    TRUST_DEFAULT,
-    TRUST_MAX,
-    TRUST_ACCRUE,
-    TRUST_DECAY,
-)
+import pytest
+
 from memnc.bus import Bus
 from memnc.scoring import Candidate, score_candidates
 

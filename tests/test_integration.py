@@ -20,7 +20,7 @@ from memnc.backends import ChatResult
 from memnc.bus import Bus
 from memnc.config import Settings
 from memnc.orchestrator import Orchestrator
-from memnc.schema import Role, SUBJECT_SUBMIT, TaskSubmission, TaskState
+from memnc.schema import SUBJECT_SUBMIT, Role, TaskState, TaskSubmission
 from memnc.worker import Worker
 
 NATS_URL = os.environ.get("MEMNC_TEST_NATS")

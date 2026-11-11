@@ -26,17 +26,18 @@ import asyncio
 import json
 import logging
 import socket
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from .bus import Bus
 from .config import Settings, get_settings
 from .schema import (
     SUBJECT_AGENT_INBOX,
+    SUBJECT_AGENT_WORK,
+    SUBJECT_HEARTBEAT,
     Capability,
     Envelope,
     Kind,
-    SUBJECT_AGENT_WORK,
-    SUBJECT_HEARTBEAT,
 )
 
 log = logging.getLogger(__name__)

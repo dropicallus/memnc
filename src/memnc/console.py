@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 from .bus import Bus
 from .cli import _connect
-from .config import get_settings
+from .config import Settings, get_settings
 from .schema import SUBJECT_CONTROL, TERMINAL_STATES, ControlCommand
 
 _REFRESH_MS = 3000
@@ -263,7 +263,7 @@ async def collect_state(settings) -> dict:
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):
-    settings: "Settings" = None  # type: ignore[assignment]  # injected in serve()
+    settings: Settings | None = None  # injected in serve()
 
     def log_message(self, format, *args):  # noqa: A002 - stdlib signature
         pass

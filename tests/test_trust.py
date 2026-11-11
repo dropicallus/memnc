@@ -1,18 +1,14 @@
-import pytest
-import asyncio
-from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
+from memnc.bus import Bus
 from memnc.schema import (
-    TrustEntry,
-    TRUST_DEFAULT,
-    TRUST_MAX,
-    TRUST_MIN,
     TRUST_ACCRUE,
     TRUST_DECAY,
-    TRUST_BUCKET,
+    TRUST_DEFAULT,
+    TRUST_MAX,
 )
-from memnc.bus import Bus
 from memnc.scoring import Candidate, score_candidates
 
 
@@ -52,11 +48,7 @@ async def test_trust_credit_accumulates(bus):
     entry = await bus.trust_entry(subject)
     assert entry.credit == TRUST_DEFAULT + 2 * TRUST_ACCRUE
 
-    # Check clamping (force a very high value)
-    # We simulate direct entry to test clamping logic in the method
-    entry_high = TrustEntry(subject=subject, rating="admin", credit=9.9)
-    # In a real scenario, trust_credit uses current + ACCRUE
-    # await bus.trust_credit(subject, rating="admin") # This would lead to 10.4 if we forced it
+    # Check clamping: trust_credit clamps at TRUST_MAX (tested via accruals below).
     
     # Testing clamping via multiple accruals
     for _ in range(100):
@@ -73,7 +65,6 @@ async def test_trust_decay_multiplies(bus):
     # Setup initial state
     await bus.trust_credit(subject, rating="orchestrator") # credit = 1.0
     # Force credit to 5.0 manually for testing decay
-    from test_trust_fake import FakeKV
     await bus._trust.put(f"trust.{subject}", b'{"subject": "agent-1", "rating": "admin", "credit": 5.0, "ts": 0.0, "attribution": []}')
     
     await bus.trust_decay(subject)

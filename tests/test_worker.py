@@ -1,9 +1,8 @@
-from pathlib import Path
 
 import pytest
 
 from memnc.config import Settings
-from memnc.schema import CoderOutput, Envelope, TaskSnapshot, TaskState
+from memnc.schema import CoderOutput, Envelope, TaskSnapshot
 from memnc.worker import (
     Worker,
     merge_written_files,

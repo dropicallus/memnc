@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+from test_m14 import SilentBus
+
 import memnc.worker as worker_mod
 from memnc.config import Settings
 from memnc.schema import (
     Envelope,
     Kind,
-    ModelRequest,
     ModelReputation,
+    ModelRequest,
     Role,
     model_pull_allowed,
     should_propose_retirement,
 )
 from memnc.worker import Worker
-
-from test_m11_claim import FakeKV
-from test_m14 import SilentBus
 
 
 def test_pull_whitelist_fnmatch():
@@ -173,7 +172,9 @@ async def test_retire_decision_marks_reputation(monkeypatch):
 
 async def test_claim_loop_skips_retired_model():
     bus = SilentBus(Settings(role="coder", mesh_claim=True))
-    w = Worker(Settings(role="coder", mesh_claim=True, claim_poll_s=0.01), bus=bus)
+    _ = Worker(  # noqa: F841 - construction registers handlers on the bus
+        Settings(role="coder", mesh_claim=True, claim_poll_s=0.01), bus=bus
+    )
     rep = ModelReputation(model="qwen3:8b", retired=True)
     await bus.kv.put("model_rep.qwen3_8b", rep.model_dump_json().encode())
     # get_reputation reads through the same FakeKV.

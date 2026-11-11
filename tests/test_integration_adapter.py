@@ -9,6 +9,7 @@ import uuid
 
 import nats
 import pytest
+
 from memnc.adapter import AgentAdapter
 from memnc.bus import Bus
 from memnc.config import Settings
@@ -93,7 +94,7 @@ async def test_agent_adapter_lifecycle():
             try:
                 if adapter_task:
                     await asyncio.wait_for(adapter_task, timeout=3.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 adapter_task.cancel()
         
         if bus and bus.nc:

@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from test_control import FakeBus
 
 from memnc.bus import Bus
 from memnc.config import Settings
@@ -12,7 +13,6 @@ from memnc.observations import (
     observation_from_snapshot,
 )
 from memnc.schema import CriticOutput, TaskSnapshot, TaskState
-from test_control import FakeBus
 
 
 def _snapshot(state: TaskState, route: dict[str, str]) -> TaskSnapshot:
@@ -163,7 +163,6 @@ class TestBusDeposit:
     async def test_deposit_and_list_roundtrip(self) -> None:
         from test_trust_fake import FakeKV
 
-        from memnc.observations import OBSERVATIONS_BUCKET
 
         bus = Bus(_bus_settings())
         bus.js = MagicMock()
@@ -184,7 +183,6 @@ class TestBusDeposit:
     async def test_deposit_creates_bucket_once(self) -> None:
         from test_trust_fake import FakeKV
 
-        from memnc.observations import OBSERVATIONS_BUCKET
 
         bus = Bus(_bus_settings())
         bus.js = MagicMock()
