@@ -98,7 +98,7 @@ class Bus:
                             "does not exist — refusing to fall back to the "
                             "shared token (fail closed)."
                         )
-                    await nats.connect(
+                    self.nc = await nats.connect(
                         self.settings.nats_url,
                         nkeys_seed=seed_path,
                         name=self.settings.nats_name or self.settings.node_name,
@@ -106,7 +106,7 @@ class Bus:
                         reconnect_time_wait=1,
                     )
                 else:
-                    await nats.connect(
+                    self.nc = await nats.connect(
                         self.settings.nats_url,
                         token=self.settings.nats_token or None,
                         name=self.settings.nats_name or self.settings.node_name,

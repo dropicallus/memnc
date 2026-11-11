@@ -1,0 +1,17 @@
+name: memnc
+
+version: 0.1.0
+
+author: The memnc authors
+
+description: >
+  Push tasks into a memnc mesh over NATS and observe them — submit a goal,
+  watch workers collaborate, inspect the task state, tail live events and
+  see the roster. Nodes that go down drop out of the rotation (reverse-proxy
+  style): the orchestrator stops routing to them until their heartbeats return.
+
+provides_tools:
+  - mesh_submit
+  - mesh_status
+  - mesh_state
+  - mesh_tail
