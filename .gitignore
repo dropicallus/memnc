@@ -9,3 +9,6 @@ dist/
 workspace/
 data/
 *.log
+
+# discussion transcripts (runtime output)
+discussions/
