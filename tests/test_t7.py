@@ -180,3 +180,20 @@ async def test_claim_loop_skips_retired_model():
     # get_reputation reads through the same FakeKV.
     fetched = await bus.get_reputation("qwen3:8b")
     assert fetched.retired
+
+
+async def test_get_reputation_defaults_on_nats_key_not_found():
+    # nats-py raises nats.js.errors.KeyNotFoundError (not KeyError) for a
+    # missing KV key; the reputation lookup must still default (regression:
+    # the claim loop crashed on the first claim with no reputation entry).
+    from nats.js.errors import KeyNotFoundError
+    from test_m11_claim import FakeKV
+
+    class BoomKV(FakeKV):
+        async def get(self, key):
+            raise KeyNotFoundError()
+
+    bus = SilentBus(Settings())
+    bus.kv = BoomKV()  # type: ignore[assignment]
+    rep = await bus.get_reputation("qwen3:8b")
+    assert rep.model == "qwen3:8b" and not rep.retired

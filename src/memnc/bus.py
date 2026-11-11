@@ -19,7 +19,12 @@ from nats.js.api import (
     RetentionPolicy,
     StreamConfig,
 )
-from nats.js.errors import InvalidKeyError, NoKeysError, NotFoundError
+from nats.js.errors import (
+    InvalidKeyError,
+    KeyNotFoundError,
+    NoKeysError,
+    NotFoundError,
+)
 
 from . import acl
 from .config import Settings
@@ -352,7 +357,7 @@ class Bus:
         try:
             entry = await self.kv.get(reputation_key(model))
             return ModelReputation.model_validate_json(entry.value)
-        except KeyError:
+        except (KeyError, KeyNotFoundError):
             return ModelReputation(model=model)
 
     async def record_reputation(
