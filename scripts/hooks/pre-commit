@@ -4,7 +4,7 @@
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 echo "pre-commit: ruff check ..."
-.venv/bin/ruff check src tests discuss_agent.py discuss_driver.py discuss_common.py || {
+.venv/bin/ruff check src tests || {
   echo "pre-commit: ruff failed (git commit --no-verify to skip)" >&2
   exit 1
 }
@@ -14,5 +14,15 @@ echo "pre-commit: pytest tests/ -q ..."
   echo "pre-commit: pytest failed (git commit --no-verify to skip)" >&2
   exit 1
 }
+
+echo "pre-commit: gitleaks detect ..."
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks detect --no-banner --redact || {
+    echo "pre-commit: gitleaks failed (git commit --no-verify to skip)" >&2
+    exit 1
+  }
+else
+  echo "pre-commit: gitleaks not installed, skipping"
+fi
 
 echo "pre-commit: ok"

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""discuss_driver.py — mediates a turn-based discussion over NATS (dynamic N).
+"""memnc.discuss.driver — mediates a turn-based discussion over NATS (dynamic N). mediates a turn-based discussion over NATS (dynamic N).
 
 Participants are discovered from the mesh roster KV — the same discovery the
-orchestrator uses (see discuss_common.roster_nodes). Only live, unpaused
+orchestrator uses (see memnc.discuss.common.roster_nodes). Only live, unpaused
 nodes participate. Participants can be pinned via DISCUSS_NODES
 (comma-separated node ids) or DISCUSS_SUBJECTS (subjects for nodes without a
 roster entry).
 
-Usage: discuss_driver.py <topic> [rounds] [timeout_s] [n_agents]
+Usage: memnc.discuss.driver <topic> [rounds] [timeout_s] [n_agents]
 Env: NATS_URL, NATS_TOKEN, DISCUSS_NODES, DISCUSS_SUBJECTS,
      DISCUSS_SUBJECT_FMT (default "discuss.{node}")
 Saves transcript to discussions/disc_<ts>.txt
@@ -20,7 +20,7 @@ import time
 
 import nats
 
-from discuss_common import Settings, roster_nodes
+from memnc.discuss.common import Settings, roster_nodes
 
 S = Settings()
 

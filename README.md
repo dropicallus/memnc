@@ -129,7 +129,6 @@ src/memnc/
   cli.py           # meshctl
   telegram.py      # Telegram observer + control commands
   console.py       # web task console
-training/          # optional: LoRA-EWC training pipeline (Unsloth, AMD; vendored from ki-station)
 docs/              # architecture, protocol, operations
 ```
 

@@ -1,7 +1,7 @@
 .PHONY: lint test ci
 
 lint:
-	.venv/bin/ruff check src tests discuss_agent.py discuss_driver.py discuss_common.py
+	.venv/bin/ruff check src tests
 
 test:
 	.venv/bin/python -m pytest tests/ -q

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""discuss_agent.py — NATS discussion responder (one per node).
+"""memnc.discuss.agent — NATS discussion responder (one per node). NATS discussion responder (one per node).
 
 Subscribes DISCUSS_SUBJECT (request/reply). Payload JSON:
   {"topic": str, "transcript": [ {"speaker": str, "text": str}, ... ]}
@@ -14,7 +14,7 @@ default none).
 Env: DISCUSS_AGENT, DISCUSS_SUBJECT, DISCUSS_STANCE, DISCUSS_LANG,
      DISCUSS_MAX_WORDS, DISCUSS_ROLE_OTHERS, DISCUSS_DONE_MARK,
      DISCUSS_PROMPT_FILE, OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
-     (NATS settings shared via discuss_common.Settings)
+     (NATS settings shared via memnc.discuss.common.Settings)
 """
 import asyncio
 import json
@@ -22,7 +22,7 @@ import os
 import time
 import urllib.request
 
-from discuss_common import Settings
+from memnc.discuss.common import Settings
 
 S = Settings()
 

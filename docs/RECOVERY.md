@@ -1,13 +1,13 @@
-# memnc — Verlorener Quellcode: Blaupause aus .pyc-Resten
+# memnc — Lost source code: blueprint from .pyc remnants
 
-**Stand:** Der MCP-/Backend-/Test-Quellcode in `src/memnc/{agent,bus,cli,config,fsutil,orchestrator,roles,worker}.py`,
-`src/memnc/backends/{ollama,openai}.py` und `src/memnc/mcp/{server,client,tools_fs,tools_shell}.py`
-wurde NIE commited und die `.py`-Quelldateien sind verloren. Gerettet wurden durch Extraktion aus
-`__pycache__/*.pyc` (Python 3.14, marshal): Docstrings + Funktions-/Klassensignaturen.
-Dies dient als Spezifikation fuer den Neuaufbau. Die .pyc selbst liegen in
-`~/memnc-recovery/` (Backup, nicht im git).
+**Note:** The MCP-/backend-/test source in `src/memnc/{agent,bus,cli,config,fsutil,orchestrator,roles,worker}.py`,
+`src/memnc/backends/{ollama,openai}.py` and `src/memnc/mcp/{server,client,tools_fs,tools_shell}.py`
+was never committed and the `.py` source files were lost. What was recovered through extraction
+from `__pycache__/*.pyc` (Python 3.14, marshal): docstrings + function/class signatures.
+This serves as a specification for the rebuild. The .pyc files themselves live in
+`~/memnc-recovery/` (backup, not in git).
 
-## Module (rekonstruiert)
+## Modules (reconstructed)
 - `config.py` — `Settings`, `get_settings()` — "Environment-driven configuration shared by orchestrator, workers and MCP."
 - `fsutil.py` — `PathEscapeError`, `safe_path()`, `read_text_limited()`, `atomic_write()`, `apply_artifacts()`, `list_tree()` — path-confined fs helpers.
 - `agent.py` — `run_agent()`, `extract_json()`, `parse_role_output()`, `AgentLimitError`, `AgentRun`, `assistant_message()`, `tool_message()` — provider-agnostic tool-calling loop + structured output.
@@ -22,11 +22,11 @@ Dies dient als Spezifikation fuer den Neuaufbau. Die .pyc selbst liegen in
 - `backends/ollama.py` — `OllamaBackend`, `_to_ollama_messages()` — native `/api/chat`.
 - `backends/openai.py` — `OpenAIBackend` — `/v1/chat/completions`.
 
-## Tests (verloren, geplant gewesen)
+## Tests (lost, planned)
 `test_agent, test_backends, test_fsm, test_fsutil, test_integration, test_mcp_stdio,
 test_roles, test_schema, test_tools, test_worker` (pytest 9.2.0).
 
-## Architekturziel (aus dem Plan, docs/memnc-mesh-plan.md)
-Mesh aus Orchestrator + N Workers ueber NATS JetStream; MCP (stdio) fuer fs/shell-Tools;
-Backends (Ollama/OpenAI) fuer LLM-Inference; Rollen (Planner/Coder/Critic); durabler
-Zustand ueber JetStream; es wird KEIN Modell geshippt — verbindet sich nur mit Inference-Endpoints.
+## Architecture goal (from the plan, docs/memnc-mesh-plan.md)
+Mesh of orchestrator + N workers over NATS JetStream; MCP (stdio) for fs/shell tools;
+backends (Ollama/OpenAI) for LLM inference; roles (Planner/Coder/Critic); durable
+state via JetStream; no model is shipped — it only connects to inference endpoints.
