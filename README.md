@@ -72,9 +72,22 @@ covered in [`docs/operations.md`](docs/operations.md).
 | Robustness: worker crash, timeout/requeue, orchestrator restart | 🚧 planned |
 | LAN model blob sharing between nodes | 🚧 planned |
 
-Design details and staged plan: [`docs/memnc-mesh-plan.md`](docs/memnc-mesh-plan.md) §14.
+Design details and staged plan: [`docs/roadmap.md`](docs/roadmap.md).
 Research-informed build order (26-paper corpus → build/prototype/observe triage,
-brownfield status): [`docs/memnc-mesh-plan.md`](docs/memnc-mesh-plan.md) §19/§19.1.
+brownfield status): [`docs/plan.md`](docs/plan.md) §19.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [`docs/plan.md`](docs/plan.md) | The specification: architecture, wire protocol, orchestrator, workers, deployment, security |
+| [`docs/roadmap.md`](docs/roadmap.md) | Built / next / later items and the experience-graph outlook |
+| [`docs/architecture.md`](docs/architecture.md) | Component and data-flow view |
+| [`docs/protocol.md`](docs/protocol.md) | NATS subjects and envelope format |
+| [`docs/operations.md`](docs/operations.md) | Running and operating the mesh |
+| [`docs/recovery.md`](docs/recovery.md) | How the codebase was rebuilt from `.pyc` remnants |
+
+New documentation is consolidated into these files, not added as new files.
 
 ## Configuration
 
