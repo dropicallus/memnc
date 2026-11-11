@@ -2,49 +2,79 @@
 """discuss_agent.py — NATS discussion responder (one per node).
 
 Subscribes DISCUSS_SUBJECT (request/reply). Payload JSON:
-  {"topic": str, "transcript": [ {"speaker": str, "text": str}, ... ], "round": int}
+  {"topic": str, "transcript": [ {"speaker": str, "text": str}, ... ]}
 Replies JSON: {"agent": str, "text": str, "done": bool}
 
-Env: DISCUSS_AGENT, DISCUSS_SUBJECT, NATS_URL, NATS_TOKEN,
-     OLLAMA_URL, OLLAMA_MODEL
+The transcript is rendered as real chat messages instead of one prompt blob:
+the agent's own earlier turns become assistant messages, other speakers
+become user messages. Speaker->role mapping is configurable via
+DISCUSS_ROLE_OTHERS (comma list of speakers to render as tool-role context,
+default none).
+
+Env: DISCUSS_AGENT, DISCUSS_SUBJECT, DISCUSS_STANCE, DISCUSS_LANG,
+     DISCUSS_MAX_WORDS, DISCUSS_ROLE_OTHERS, DISCUSS_DONE_MARK,
+     NATS_URL, NATS_TOKEN, OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
 """
-import asyncio, json, os, sys, time, urllib.request
+import asyncio, json, os, time, urllib.request
 
 AGENT = os.environ.get("DISCUSS_AGENT", "agent")
 SUBJECT = os.environ.get("DISCUSS_SUBJECT", "discuss.ping")
+STANCE = os.environ.get("DISCUSS_STANCE", "")
+LANG = os.environ.get("DISCUSS_LANG", "de")
+MAX_WORDS = int(os.environ.get("DISCUSS_MAX_WORDS", "130"))
+DONE_MARK = os.environ.get("DISCUSS_DONE_MARK", "[DONE]")
+# speakers rendered as {"role": "tool"} context instead of user turns
+ROLE_OTHERS = {s.strip() for s in os.environ.get("DISCUSS_ROLE_OTHERS", "").split(",") if s.strip()}
 NATS_URL = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
 NATS_TOKEN = os.environ.get("NATS_TOKEN", "dev-token")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-MAX_WORDS = int(os.environ.get("DISCUSS_MAX_WORDS", "130"))
+NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
 
-SYSTEM = (
-    f"Du bist '{AGENT}', ein KI-Agent in einer Diskussion mit einem anderen Agenten. "
-    "Diskutiere sachlich, bring eigene Punkte und reagiere konkret auf den letzten Beitrag. "
-    f"Antworte AUSSCHLIESSLICH mit deinem Beitrag, maximal {MAX_WORDS} Woerter, auf Deutsch, keine Einleitung. "
-    "Wenn du findest, dass das Thema fruchtbar behandelt wurde und du nichts Wesentliches mehr beitragen kannst, "
-    "haenge am Ende deines Beitrags die Marke [DONE] an."
+_SYSTEM = (
+    f"You are '{AGENT}', an AI agent in a multi-agent discussion. "
+    + (STANCE + " " if STANCE else "")
+    + "Discuss factually, contribute your own points and respond concretely "
+    "to the latest contributions. "
+    f"Reply EXCLUSIVELY with your contribution, at most {MAX_WORDS} words, "
+    f"in {LANG}, no preamble. "
+    f"If you consider the topic sufficiently covered and have nothing "
+    f"substantial left to add, append the mark {DONE_MARK} at the end of "
+    "your contribution."
 )
 
-def call_ollama(prompt: str) -> str:
+
+def build_messages(topic: str, transcript: list) -> list:
+    """Transcript -> chat messages. Own turns = assistant, others = user
+    (or tool context for speakers listed in DISCUSS_ROLE_OTHERS)."""
+    messages = [{"role": "system", "content": _SYSTEM}]
+    for entry in transcript:
+        speaker = entry.get("speaker", "?")
+        text = entry.get("text", "")
+        if speaker == AGENT:
+            messages.append({"role": "assistant", "content": text})
+        elif speaker in ROLE_OTHERS:
+            messages.append({"role": "tool", "tool_call_id": speaker,
+                             "name": speaker, "content": text})
+        else:
+            messages.append({"role": "user", "content": f"{speaker}: {text}"})
+    messages.append({"role": "user",
+                     "content": f"TOPIC: {topic}\n\nYour contribution as {AGENT}:"})
+    return messages
+
+
+def call_ollama(messages: list) -> str:
     payload = json.dumps({
         "model": MODEL,
-        "messages": [{"role": "system", "content": SYSTEM},
-                     {"role": "user", "content": prompt}],
+        "messages": messages,
         "stream": False,
-        "options": {"temperature": 0.7, "num_ctx": int(os.environ.get("OLLAMA_NUM_CTX", "16384"))},
+        "options": {"temperature": 0.7, "num_ctx": NUM_CTX},
     }).encode()
     req = urllib.request.Request(OLLAMA_URL + "/api/chat", data=payload,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=600) as r:
         return json.loads(r.read())["message"]["content"].strip()
 
-def build_prompt(topic: str, transcript: list) -> str:
-    lines = [f"THEMA: {topic}", "", "DISKUSSION BISHER:"]
-    for t in transcript:
-        lines.append(f"{t['speaker']}: {t['text']}")
-    lines += ["", f"Dein Beitrag als {AGENT}:"]
-    return "\n".join(lines)
 
 async def main():
     import nats
@@ -55,13 +85,13 @@ async def main():
         t0 = time.time()
         try:
             req = json.loads(msg.data.decode())
-            prompt = build_prompt(req["topic"], req.get("transcript", []))
-            text = call_ollama(prompt)
-            done = "[DONE]" in text
+            messages = build_messages(req["topic"], req.get("transcript", []))
+            text = call_ollama(messages)
+            done = DONE_MARK in text
             resp = {"agent": AGENT, "text": text, "done": done,
                     "dur_s": round(time.time() - t0, 1)}
         except Exception as e:
-            resp = {"agent": AGENT, "text": f"[FEHLER: {e!r}]", "done": True,
+            resp = {"agent": AGENT, "text": f"[ERROR: {e!r}]", "done": True,
                     "dur_s": round(time.time() - t0, 1)}
         await msg.respond(json.dumps(resp).encode())
         print(f"[{AGENT}] turn in {resp['dur_s']}s done={resp['done']}", flush=True)
@@ -70,6 +100,7 @@ async def main():
     await nc.flush()
     print(f"[{AGENT}] ready on {SUBJECT} (model={MODEL})", flush=True)
     await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
