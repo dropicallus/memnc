@@ -12,3 +12,5 @@ data/
 
 # discussion transcripts (runtime output)
 discussions/
+workspace/
+__pycache__/
