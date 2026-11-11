@@ -52,6 +52,18 @@ mechanical ones. Detailed, task-focused versions of these rules live in
 - Branch protection on `main`: required checks `CI / test` and
   `CI / gitleaks`, strict. Do not bypass them without the owner's say-so.
 
+## Copyright
+
+- Copyright belongs to the **commit author**, automatically: whoever makes a
+  commit owns its copyright — no manual bookkeeping anywhere.
+- **No per-file copyright headers.** They rot on every move/rename and get
+  rewritten by filter tooling. Authorship is proven with
+  `git log --follow <file>`, not by decorating files.
+- The single copyright statement lives in [LICENSE](LICENSE) as
+  `Copyright The memnc authors` — that is a collective reference to everyone
+  git history shows as author of the respective changes, not a separate
+  entity. Do not add year ranges or name lists to files.
+
 ## Secrets
 
 - Gitleaks runs in CI and pre-commit. If it flags a false positive, extend
