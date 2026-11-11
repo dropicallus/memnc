@@ -13,7 +13,7 @@ default none).
 
 Env: DISCUSS_AGENT, DISCUSS_SUBJECT, DISCUSS_STANCE, DISCUSS_LANG,
      DISCUSS_MAX_WORDS, DISCUSS_ROLE_OTHERS, DISCUSS_DONE_MARK,
-     OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
+     DISCUSS_PROMPT_FILE, OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
      (NATS settings shared via discuss_common.Settings)
 """
 import asyncio, json, os, time, urllib.request
@@ -36,16 +36,21 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
 
-_SYSTEM = (
-    f"You are '{AGENT}', an AI agent in a multi-agent discussion. "
-    + (STANCE + " " if STANCE else "")
-    + "Discuss factually, contribute your own points and respond concretely "
-    "to the latest contributions. "
-    f"Reply EXCLUSIVELY with your contribution, at most {MAX_WORDS} words, "
-    f"in {LANG}, no preamble. "
-    f"If you consider the topic sufficiently covered and have nothing "
-    f"substantial left to add, append the mark {DONE_MARK} at the end of "
-    "your contribution."
+# System prompt template, loaded from an English markdown file. Placeholders
+# are filled with str.format; the file can be overridden per agent via
+# DISCUSS_PROMPT_FILE.
+PROMPT_FILE = os.environ.get(
+    "DISCUSS_PROMPT_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "discuss_prompt.md"),
+)
+with open(PROMPT_FILE, encoding="utf-8") as f:
+    _SYSTEM_TEMPLATE = f.read()
+_SYSTEM = _SYSTEM_TEMPLATE.format(
+    agent=AGENT,
+    stance=STANCE or "Your stance follows from your assigned role.",
+    max_words=MAX_WORDS,
+    lang=LANG,
+    done_mark=DONE_MARK,
 )
 
 
