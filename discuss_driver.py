@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """discuss_driver.py — mediates a turn-based discussion over NATS (dynamic N).
 
-Participants are discovered from the mesh roster KV (bucket "roster",
-keys roster.<node_id>, NodeInfo JSON) — the same discovery the orchestrator
-uses. Only live, unpaused nodes participate. Participants can be pinned via
-DISCUSS_NODES (comma-separated node ids) or DISCUSS_SUBJECTS (subjects for
-nodes without a roster entry).
+Participants are discovered from the mesh roster KV — the same discovery the
+orchestrator uses (see discuss_common.roster_nodes). Only live, unpaused
+nodes participate. Participants can be pinned via DISCUSS_NODES
+(comma-separated node ids) or DISCUSS_SUBJECTS (subjects for nodes without a
+roster entry).
 
 Usage: discuss_driver.py <topic> [rounds] [timeout_s] [n_agents]
 Env: NATS_URL, NATS_TOKEN, DISCUSS_NODES, DISCUSS_SUBJECTS,
@@ -15,32 +15,9 @@ Saves transcript to discussions/disc_<ts>.txt
 import asyncio, json, os, sys, time
 import nats
 
-NATS_URL = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
-NATS_TOKEN = os.environ.get("NATS_TOKEN", "dev-token")
-SUBJ_FMT = os.environ.get("DISCUSS_SUBJECT_FMT", "discuss.{node}")
-ROSTER_BUCKET = "roster"
-ROSTER_PREFIX = "roster."
+from discuss_common import Settings, roster_nodes
 
-
-async def roster_subjects(js) -> list[str]:
-    """Live roster node ids -> discussion subjects (best-effort, may be [])."""
-    try:
-        kv = await js.key_value(ROSTER_BUCKET)
-        keys = await kv.keys()
-    except Exception:
-        return []
-    out = []
-    for key in sorted(keys):
-        if not key.startswith(ROSTER_PREFIX):
-            continue
-        node_id = key[len(ROSTER_PREFIX):]
-        try:
-            info = json.loads((await kv.get(key)).value.decode())
-        except Exception:
-            continue
-        if not info.get("paused"):
-            out.append(SUBJ_FMT.format(node=node_id))
-    return out
+S = Settings()
 
 
 async def ask(nc, subj, name, topic, transcript, timeout):
@@ -62,7 +39,7 @@ async def main():
     timeout = float(sys.argv[3]) if len(sys.argv) > 3 else 620
     n_want = int(sys.argv[4]) if len(sys.argv) > 4 else 2
 
-    nc = await nats.connect(servers=[NATS_URL], token=NATS_TOKEN,
+    nc = await nats.connect(servers=[S.nats_url], token=S.nats_token,
                             name="discuss-driver")
     js = nc.jetstream()
 
@@ -72,10 +49,10 @@ async def main():
         names = subjects
     elif os.environ.get("DISCUSS_NODES"):
         names = [n.strip() for n in os.environ["DISCUSS_NODES"].split(",") if n.strip()]
-        subjects = [SUBJ_FMT.format(node=n) for n in names]
+        subjects = [S.node_subject(n) for n in names]
     else:
-        subjects = (await roster_subjects(js))[:n_want]
-        names = [s.removeprefix("discuss.") for s in subjects]
+        subjects = [S.node_subject(n) for n in (await roster_nodes(js, S))[:n_want]]
+        names = subjects
     if not subjects:
         print("no participants — start workers or set DISCUSS_NODES/DISCUSS_SUBJECTS")
         return

@@ -13,9 +13,14 @@ default none).
 
 Env: DISCUSS_AGENT, DISCUSS_SUBJECT, DISCUSS_STANCE, DISCUSS_LANG,
      DISCUSS_MAX_WORDS, DISCUSS_ROLE_OTHERS, DISCUSS_DONE_MARK,
-     NATS_URL, NATS_TOKEN, OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
+     OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
+     (NATS settings shared via discuss_common.Settings)
 """
 import asyncio, json, os, time, urllib.request
+
+from discuss_common import Settings
+
+S = Settings()
 
 AGENT = os.environ.get("DISCUSS_AGENT", "agent")
 SUBJECT = os.environ.get("DISCUSS_SUBJECT", "discuss.ping")
@@ -25,8 +30,8 @@ MAX_WORDS = int(os.environ.get("DISCUSS_MAX_WORDS", "130"))
 DONE_MARK = os.environ.get("DISCUSS_DONE_MARK", "[DONE]")
 # speakers rendered as {"role": "tool"} context instead of user turns
 ROLE_OTHERS = {s.strip() for s in os.environ.get("DISCUSS_ROLE_OTHERS", "").split(",") if s.strip()}
-NATS_URL = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
-NATS_TOKEN = os.environ.get("NATS_TOKEN", "dev-token")
+NATS_URL = S.nats_url
+NATS_TOKEN = S.nats_token
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
