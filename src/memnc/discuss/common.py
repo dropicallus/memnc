@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""discuss_common.py — shared settings and helpers for the discussion harness.
+"""memnc.discuss.common — shared settings and helpers for the discussion harness. shared settings and helpers for the discussion harness.
 
 Single source of truth for NATS connection settings, roster discovery and
-subject naming; used by discuss_agent.py and discuss_driver.py.
+subject naming; used by memnc.discuss.agent and memnc.discuss.driver.
 """
 import os
 

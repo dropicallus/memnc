@@ -1,10 +1,10 @@
-"""Unit-Tests fuer meshctl registry (cmd_registry) — ohne NATS.
+"""Unit tests for meshctl registry (cmd_registry) — without NATS.
 
-cmd_registry instanziiert intern selbst `Bus(settings)`; daher wird
-`memnc.cli.Bus` hier per monkeypatch durch eine Fake-Klasse ersetzt,
-deren connect/close no-ops sind und list_capabilities eine vorgegebene
-Liste von Capability-Ojekten zurueckgibt. Die gedruckte Ausgabe wird
-ueber capsys geprueft.
+cmd_registry instantiates `Bus(settings)` internally; therefore
+`memnc.cli.Bus` is replaced via monkeypatch with a fake class whose
+connect/close are no-ops and whose list_capabilities returns a
+predefined list of Capability objects. The printed output is
+verified via capsys.
 """
 
 import pytest
@@ -14,7 +14,7 @@ from memnc.schema import Capability
 
 
 class FakeBus:
-    """No-op Bus, der eine vorbelegte Capability-Liste liefert."""
+    """No-op Bus that returns a predefined Capability list."""
 
     def __init__(self, settings=None):
         self.settings = settings
@@ -34,8 +34,8 @@ class FakeBus:
 
 
 def _make_settings():
-    # cmd_registry braucht nur die Settings als Argument; wir koennen ein
-    # einfaches Fake-Objekt nutzen, da FakeBus es nicht anfasst.
+    # cmd_registry only needs Settings as an argument; a simple fake
+    # object is fine because FakeBus never touches it.
     class _S:
         pass
 
@@ -74,7 +74,7 @@ async def test_registry_lists_sorted_records(monkeypatch, capsys):
     rc = await cli.cmd_registry(__import__("argparse").Namespace(), _make_settings())
     out = capsys.readouterr().out
     assert rc == 0
-    # sortiert nach (agent_id, skill): alpha vor beta
+    # sorted by (agent_id, skill): alpha before beta
     assert out.index("alpha") < out.index("beta")
     assert "beta" in out and "code" in out
     assert "gemma4" in out

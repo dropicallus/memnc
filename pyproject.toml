@@ -28,6 +28,8 @@ dev = [
 [project.scripts]
 meshctl = "memnc.cli:main"
 memnc-telegram = "memnc.telegram:main"
+discuss-agent = "memnc.discuss.agent:main"
+discuss-driver = "memnc.discuss.driver:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -35,6 +37,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
   "integration: requires a running NATS server (skipped when unavailable)",
 ]
