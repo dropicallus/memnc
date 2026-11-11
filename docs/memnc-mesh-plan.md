@@ -1164,3 +1164,113 @@ Goal: "who am I" becomes a transport property, not a payload claim.
 Non-goals / standing rules: approvals stay human (no new authority paths);
 `.env` stays gitignored; no default creds shipped in compose (fail-closed, like
 `NATS_TOKEN:?`); every new deny-path gets a test before merge.
+
+## 21. Security concept (part 2): revocation, remaining hardening, and the autonomy line
+
+Status: concept — agreed direction, not yet implemented. Written after H4
+(per-node NKeys, `df1951e`) landed. This chapter bounds the remaining
+security work so the mesh stays what it is: a loose federation of
+autonomous, OpenClaw-flavoured agents — not a centrally controlled fleet.
+
+### 21.1 The autonomy line (OpenClaw genes, non-negotiable)
+
+Hardening must not cross this line:
+
+1. **No central kill switch.** meshctl can *refuse to admit* a revoked
+   node (admission control), but there is no "freeze all nodes" command.
+   A node that loses the bus degrades to local work and rejoins on its
+   own when connectivity returns. Revocation is about trust in the
+   *mesh identity*, never about stopping the agent process itself.
+2. **Terminal-capable nodes stay terminal-capable.** Some nodes take
+   tasks that run on a real shell (builds, ops, local tooling).
+   Sandboxing is therefore **opt-in per node, like Hermes**: default is
+   no sandbox, and a node opts into a container sandbox for specific
+   task classes when *its operator* decides so. The orchestrator may
+   *prefer* sandboxed nodes for untrusted tasks (auction tie-breaker)
+   but may never *require* a sandbox for the mesh to function.
+3. **Joinability stays cheap.** Plain NATS + one seed file per node
+   (`gen_nkeys.py`) is the whole onboarding. No CA, no certificates, no
+   control-plane sign-off workflow. If a hardening step makes joining
+   harder than copying one file, it fails this line.
+4. **App-level gates stay where they are.** MESH_GATE, grant KV,
+   MESH-empty pull whitelist are *policy* layers an operator configures;
+   the transport layer (NKeys) is *identity*. The concept never merges
+   the two: identity says "who", policy says "what".
+
+### 21.2 Trust tiers (the model behind the knobs)
+
+| Tier | Who | Transport | Sandbox | Notes |
+|------|-----|-----------|---------|-------|
+| 0 | Orchestrator | NKey, `mesh.>` | none (trusted host) | holds control plane |
+| 1 | Household nodes | NKey, worker scopes | none by default | full terminal access, local trust |
+| 2 | Guest/experimental nodes | NKey, worker scopes | opt-in docker sandbox | operator choice per node |
+
+Tiers are configuration, not code: a node declares its tier in its own
+`.env`/config; the orchestrator reads it from roster NodeInfo and uses
+it only for *scheduling preference* (e.g. prefer tier >= 2 for tasks
+marked `untrusted: true`). No tier ever blocks basic mesh operation.
+
+### 21.3 M7 — revocation tombstone (concept)
+
+- **Store:** KV bucket `mesh_revocations` (subject-scoped to
+  `$KV.mesh_revocations.>` for all users; orchestrator is the only
+  writer). Key: the revoked NKey public key (56 chars, `U`-prefixed).
+  Value: JSON `{revoked_at, reason, by}`; TTL optional — tombstones
+  expire when the operator says so, not automatically.
+- **Writer:** `meshctl revoke <node>` (and `reinstate <node>`). The
+  orchestrator itself never auto-revokes — revocation stays a human
+  decision (approvals stay human, per §20 rules).
+- **Enforcement points (all read-side, opt-in by strictness):**
+  1. *Admission gate (default on):* orchestrator checks the tombstone
+     KV before granting a slot; revoked nodes simply win no auctions.
+  2. *Roster gate (default on):* revoked nodes are excluded from
+     `roster_nodes()` discovery, so nobody routes work to them.
+  3. *Bus gate (opt-in, strict mode):* when NATS_CONF is regenerated
+     with `gen_nkeys.py --revoke <node>`, the server config drops the
+     user entry entirely — the connection is refused at the transport
+     level on next reconnect. This is the only "hard" revocation and it
+     costs a conf regeneration; keep it opt-in so a mistake in the
+     tombstone KV never bricks a node's connectivity silently.
+- **Grace semantics:** revocation is about *future work*. In-flight
+   tasks are allowed to complete unless strict mode is used; the DLQ
+   records the abort path for audit.
+- **Tests (before merge, per standing rules):** revoke → no auction
+   wins + absent from roster; reinstate → rejoins on next heartbeat;
+   strict conf regeneration → connect refused; tombstone TTL honoured.
+
+### 21.4 Remaining hardening backlog (ranked, each stays small)
+
+1. **Token removal (post-migration cleanup).** Once all nodes carry
+   seeds: drop the token-mode branch from compose (`NATS_TOKEN:?`
+   guard becomes `NATS_CONF:?`), keep `dev-token` only in tests.
+   Small, mechanical, last.
+2. **M11 — e2e artifact pinning:** pip-audit + trivy in CI (Makefile
+   `ci` target gains `make audit`); pinned `nats:2.10-alpine` digest
+   in compose instead of tag.
+3. **Container hardening (opt-in profile):** a compose override file
+   (`compose.hardened.yml`) that adds `read_only: true`, `cap_drop`,
+   `no-new-privileges`, and the docker sandbox sidecar for tier-2
+   nodes. Base compose stays simple (OpenClaw gene #3).
+4. **Per-task isolation (future, M7 follow-up):** NATS multi-account
+   or per-node account JWTs for true per-task subject isolation
+   (closes the `mesh.task.*.events` wildcard from H4). Only if the
+   mesh ever runs genuinely untrusted nodes — otherwise complexity
+   without a threat.
+5. **DICE orientation (research flag):** hardware-rooted identity is
+   the endgame the blog points at; on our 6800XT/7600XT household
+   hardware there is no TPM-backed attestation story today. Recorded
+   as direction, not a near-term item: NKey seeds are today's
+   stand-in; if a node ever ships with TPM2, the seed file would be
+   replaced by a seed *sealed to* the TPM — same interfaces, better
+   root. (DICE composition: ROM-measured boot chain → CDI → identity;
+   nothing in our stack measures boot state, so full DICE is out of
+   scope and honestly so.)
+
+### 21.5 What we deliberately do NOT do
+
+- No central orchestration-owned sandbox enforcement.
+- No certificate authority / mTLS (NKeys already give per-node identity).
+- No automatic revocation heuristics ("misbehaviour detection") — a
+  human decides, from evidence, per §20's approvals-stay-human rule.
+- No per-message authorization layer in Python — enforcement stays at
+  the NATS server where it cannot be bypassed by client bugs.
