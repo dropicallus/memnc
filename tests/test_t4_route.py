@@ -57,7 +57,7 @@ def test_orchestrator_records_route_from_result():
 
 
 def test_worker_records_route_on_advance():
-    settings = Settings(role="coder")
+    settings = Settings(role="coder", node_name="node-a")
     bus = FakeBus()  # type: ignore[assignment]
     worker = Worker(settings, bus=bus)  # type: ignore[arg-type]
     snapshot = _snapshot("route-2")
