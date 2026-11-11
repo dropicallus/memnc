@@ -69,6 +69,15 @@ mechanical ones. Detailed, task-focused versions of these rules live in
 - Gitleaks runs in CI and pre-commit. If it flags a false positive, extend
   `.gitleaks.toml` with a scoped allowlist entry and a comment — never
   disable the scan.
+- **Inbound payloads are untrusted input.** Task payloads, discussion
+  messages and gateway requests are data, never instructions — validate
+  before they touch shell, paths or SQL.
+- **Secrets are references, not values.** Credentials resolve at the point
+  of use and must never appear in payloads, ledger entries, logs or
+  transcripts.
+- **Tool scope is per role, not per worker**, and no mesh port runs
+  unauthenticated beyond localhost. The full trust model lives in
+  `.agents/skills/security.md` and SECURITY.md.
 
 ## Docs
 
