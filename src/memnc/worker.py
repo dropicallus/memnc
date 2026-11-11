@@ -11,14 +11,21 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from .agent import parse_role_output, run_agent
+from . import clarify
+from .agent import extract_json, parse_role_output, run_agent
 from .backends import make_backend
 from .bus import Bus, emit_debate
 from .config import Settings, get_settings
 from .fsm import Event, transition
 from .fsutil import apply_artifacts
 from .mcp.client import MCPClient
-from .roles import PROMPT_VERSION, SYSTEM_PROMPTS, build_user_prompt
+from .roles import (
+    CONSULT_SYSTEM_PROMPT,
+    PROMPT_VERSION,
+    SYSTEM_PROMPTS,
+    build_consult_user_prompt,
+    build_user_prompt,
+)
 from .schema import (
     ROLE_OUTPUT as _OUTPUT_SCHEMA,
 )
@@ -28,6 +35,8 @@ from .schema import (
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
     CoderOutput,
+    ConsultAnswer,
+    ConsultRequest,
     CriticIssue,
     Envelope,
     FileArtifact,
@@ -45,6 +54,11 @@ from .schema import (
 )
 
 log = logging.getLogger(__name__)
+
+
+async def _no_tool(name: str, arguments: dict) -> str:  # pragma: no cover
+    """Consults run without tools; never called."""
+    raise RuntimeError("consult runs have no tools")
 
 MAX_TOOL_RESULT_CHARS = 8_000
 MAX_CHECKPOINTS = 32
@@ -540,9 +554,53 @@ class Worker:
         result.model = self.settings.model_for(envelope.role or self.role)
         return result
 
+    async def _run_consult(
+        self, envelope: Envelope, role: Role, model: str, consult: dict
+    ) -> ResultPayload:
+        """M16 mesh-clarify: answer a peer's question as a consult."""
+        try:
+            request = ConsultRequest.model_validate(consult)
+        except ValidationError as exc:
+            return ResultPayload(ok=False, error=f"invalid consult request: {exc}")
+        messages = [
+            {"role": "system", "content": CONSULT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": build_consult_user_prompt(role, envelope.payload or {}),
+            },
+        ]
+        try:
+            run = await run_agent(
+                backend=self.backend,
+                model=model,
+                messages=messages,
+                tools=[],
+                max_steps=0,
+                execute_tool=_no_tool,
+                temperature=0.2,
+                num_ctx=self.settings.num_ctx,
+                num_predict=self.settings.num_predict,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ResultPayload(ok=False, error=f"agent error: {exc}")
+        try:
+            answer = ConsultAnswer.model_validate(extract_json(run.content))
+        except (ValueError, ValidationError) as exc:
+            return ResultPayload(ok=False, error=f"invalid consult answer: {exc}")
+        log.info("consult %s -> %s: %s", request.question[:60], role.value, answer.answer[:80] if answer.answer else answer.cannot_answer[:80])
+        return ResultPayload(
+            ok=True,
+            output={"consult": answer.model_dump()},
+            prompt_version=PROMPT_VERSION,
+        )
+
     async def _run_impl(self, envelope: Envelope, snapshot: TaskSnapshot) -> ResultPayload:
         role = envelope.role or self.role
         model = self.settings.model_for(role)
+        # M16 mesh-clarify: this command is a peer consult, not a role run.
+        consult = (envelope.payload or {}).get("consult")
+        if consult:
+            return await self._run_consult(envelope, role, model, consult)
         self._written_files = {}
         tools = (
             list(self.tools.schemas)
@@ -1136,6 +1194,8 @@ class Worker:
                     f"question: {action.reason} — /answer {snapshot.task_id} "
                     f"<text>",
                 )
+                # M16 mesh-clarify: consult the peers before the human.
+                await clarify.start(self.bus, self.settings, snapshot)
             elif action.type == "park":
                 # T3 approval gate: park at CRITIQUE for a human decision.
                 snapshot.needs_human = True

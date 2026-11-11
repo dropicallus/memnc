@@ -141,3 +141,42 @@ def build_user_prompt(role: Role, payload: dict[str, Any]) -> str:
     if len(prompt) > MAX_PROMPT_CHARS * 2:
         prompt = prompt[: MAX_PROMPT_CHARS * 2] + "\n...[prompt truncated]"
     return prompt
+
+
+# M16 mesh-clarify: prompt for peer consults when a parked agent asks.
+CONSULT_SYSTEM_PROMPT = (
+    "You are a peer agent in a multi-agent software engineering mesh. "
+    "Another agent in the pipeline was blocked by a question about the task "
+    "and asks you to resolve it. Answer from the task context, your own "
+    "output, and general software engineering knowledge — do not guess at "
+    "facts you cannot know. Reply with ONLY a JSON object of the form:\n"
+    "{\"answer\": \"your best resolution of the question\"}\n"
+    "or, if the question needs the human's decision (a preference, a "
+    "credential, information nobody in the mesh has), reply with\n"
+    "{\"cannot_answer\": \"why\"}. No prose, no markdown fences."
+)
+
+
+def build_consult_user_prompt(role: Role, payload: dict[str, Any]) -> str:
+    """Render the consult command payload for one peer role."""
+    consult = payload.get("consult") or {}
+    parts = [
+        f"Question from the task's {consult.get('from_role', 'agent')}: "
+        + str(consult.get("question", "")),
+        "Task:\n" + str(payload.get("task", "")),
+    ]
+    if payload.get("context"):
+        parts.append("Context:\n" + str(payload["context"]))
+    own = {
+        Role.PLANNER: payload.get("plan"),
+        Role.CODER: payload.get("code"),
+        Role.CRITIC: payload.get("critique"),
+    }.get(role)
+    if own is not None:
+        parts.append(
+            f"Your {role.value} output on this task:\n" + json.dumps(own)
+        )
+    parts.append(
+        "Reply with ONLY the JSON object described in your instructions."
+    )
+    return "\n\n".join(parts)

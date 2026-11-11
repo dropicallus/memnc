@@ -8,7 +8,7 @@ import logging
 import time
 from pathlib import Path
 
-from . import acl
+from . import acl, clarify
 from .acl import check_registry_write
 from .bus import Bus
 from .config import Settings, get_settings
@@ -448,6 +448,14 @@ class Orchestrator:
                 "ignoring result for parked task", extra={"task_id": snapshot.task_id}
             )
             return
+        # M16 mesh-clarify: consult results from peers feed the clarify round
+        # and must not pass through the normal result handling.
+        if envelope.payload and (envelope.payload.get("output") or {}).get(
+            "consult"
+        ):
+            consult = envelope.payload["output"]["consult"]
+            await clarify.handle_consult(self.bus, snapshot, envelope, consult)
+            return
         if envelope.id in snapshot.seen_result_ids:
             return
         # M14: worker-driven pipeline — the claiming worker advances the
@@ -543,6 +551,8 @@ class Orchestrator:
             },
         )
         await self._apply(snapshot, event)
+        if event.type == "ask":  # M16 mesh-clarify: consult peers first
+            await clarify.start(self.bus, self.settings, snapshot)
         if envelope.node:
             # visibility for meshctl tail: which node executed this stage
             await self.bus.emit_event(

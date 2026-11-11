@@ -549,6 +549,26 @@ class ResultPayload(BaseModel):
     model: str | None = None
 
 
+class ConsultRequest(BaseModel):
+    """M16 mesh-clarify: a parked agent's question, sent to its peers."""
+
+    question: str
+    from_role: str
+
+
+class ConsultAnswer(BaseModel):
+    """M16 mesh-clarify: one peer's reply — an answer or a decline."""
+
+    answer: str = ""
+    cannot_answer: str = ""
+
+    @model_validator(mode="after")
+    def _one_of(self) -> ConsultAnswer:
+        if not self.answer and not self.cannot_answer:
+            raise ValueError("consult answer needs 'answer' or 'cannot_answer'")
+        return self
+
+
 class TaskSubmission(BaseModel):
     task: str
     context: str = ""
@@ -628,6 +648,11 @@ class TaskSnapshot(BaseModel):
     # WAIT_INPUT: the agent's clarifying question and the role that asked it.
     question: str = ""
     question_role: Role | None = None
+    # M16 mesh-clarify: peer consult bookkeeping for the parked question.
+    clarify_started: bool = False
+    clarify_round: int = 0
+    pending_consults: list[str] = Field(default_factory=list)
+    peer_answers: dict[str, str] = Field(default_factory=dict)
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None
