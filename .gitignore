@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+.ruff_cache/
 .env
 secrets/
 workspace/
@@ -13,6 +14,3 @@ data/
 
 # discussion transcripts (runtime output)
 discussions/
-workspace/
-__pycache__/
-.ruff_cache/
