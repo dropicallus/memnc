@@ -1,0 +1,14 @@
+# Normalize line endings
+* text=auto
+
+# Shell scripts
+*.sh text eol=lf
+*.py text eol=lf
+
+# Binary assets
+*.png binary
+*.svg text
+*.gguf binary
+
+# Linguist
+*.sh linguist-language=Shell
