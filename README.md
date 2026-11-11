@@ -64,12 +64,17 @@ covered in [`docs/operations.md`](docs/operations.md).
 | Model lifecycle: pull whitelist, reputation, retirement gate | ✅ shipped |
 | Model routing visible (`/trace` shows node:model per role) | ✅ shipped |
 | Roster advertises `disk_models` (Ollama `/api/tags`) | ✅ shipped |
+| Experience graph: observation deposits + trace query (§14.13 steps 0–2) | 🚧 in progress |
+| Role-specific LoRA adapters + Fisher-Merge (§19.1 B2/B4) | 🚧 planned |
+| Leader synthesis layer, MLPO pattern (§19.1 B3) | 🚧 planned |
 | Orchestrator model-demand planning → approval gate | 🚧 in progress |
 | Console v2: live view + problem surface (§14.10) | 🚧 planned |
 | Robustness: worker crash, timeout/requeue, orchestrator restart | 🚧 planned |
 | LAN model blob sharing between nodes | 🚧 planned |
 
 Design details and staged plan: [`docs/memnc-mesh-plan.md`](docs/memnc-mesh-plan.md) §14.
+Research-informed build order (26-paper corpus → build/prototype/observe triage,
+brownfield status): [`docs/memnc-mesh-plan.md`](docs/memnc-mesh-plan.md) §19/§19.1.
 
 ## Configuration
 
@@ -124,6 +129,7 @@ src/memnc/
   cli.py           # meshctl
   telegram.py      # Telegram observer + control commands
   console.py       # web task console
+training/          # optional: LoRA-EWC training pipeline (Unsloth, AMD; vendored from ki-station)
 docs/              # architecture, protocol, operations
 ```
 
