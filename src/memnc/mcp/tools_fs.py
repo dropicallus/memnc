@@ -62,11 +62,16 @@ def search_text(
         regex = re.compile(pattern)
         matches: list[dict[str, Any]] = []
         scanned = 0
+        glob_path = Path(glob)
+        if glob_path.is_absolute() or ".." in glob_path.parts:
+            raise ValueError("glob must be relative and stay inside the workspace")
         for file_path in root.glob(glob):
             if not file_path.is_file() or file_path.is_symlink():
                 continue
             if ".git" in file_path.parts or "__pycache__" in file_path.parts:
                 continue
+            if not file_path.resolve().is_relative_to(root):
+                continue  # e.g. a symlinked parent escaped the root
             scanned += 1
             if scanned > 5000:
                 break

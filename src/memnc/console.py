@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -342,8 +343,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 def serve(port: int) -> None:
     settings = get_settings()
     ConsoleHandler.settings = settings
-    server = ThreadingHTTPServer(("0.0.0.0", port), ConsoleHandler)
-    print(f"mesh console: http://localhost:{port}  (broker {settings.nats_url})")
+    # Loopback by default: the console has no HTTP auth and forwards requests
+    # as the trusted "console" identity. Remote access requires a reverse
+    # proxy with auth (set CONSOLE_HOST deliberately).
+    host = os.environ.get("CONSOLE_HOST", "127.0.0.1")
+    server = ThreadingHTTPServer((host, port), ConsoleHandler)
+    print(f"mesh console: http://{host}:{port}  (broker {settings.nats_url})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

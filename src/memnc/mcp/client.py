@@ -32,7 +32,13 @@ class MCPClient:
         return self._available
 
     async def start(self) -> None:
-        env = dict(os.environ)
+        # Minimal env: never pass the full os.environ to the MCP server
+        # subprocess — it must not inherit NATS_TOKEN, INFERENCE_API_KEY etc.
+        env = {
+            k: os.environ[k]
+            for k in ("PATH", "HOME", "LANG", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV")
+            if k in os.environ
+        }
         env.update(
             {
                 "WORKSPACE_ROOT": str(Path(self.settings.workspace_root).resolve()),

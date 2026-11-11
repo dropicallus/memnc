@@ -34,34 +34,66 @@ async def run_shell(
             workdir = Path(root).resolve()
         timeout = min(timeout_s if timeout_s > 0 else 120, 3600)
 
+        # Minimal env: model-driven shell commands must not inherit secrets
+        # like NATS_TOKEN or INFERENCE_API_KEY from os.environ.
+        shell_env = {
+            k: os.environ[k]
+            for k in ("PATH", "HOME", "LANG", "TERM", "TMPDIR")
+            if k in os.environ
+        }
         process = await asyncio.create_subprocess_exec(
             "bash",
             "-c",
             cmd,
             cwd=str(workdir),
+            env=shell_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
-        timed_out = False
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            timed_out = True
+
+        def _kill() -> None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            stdout, stderr = await process.communicate()
 
-        def clip(data: bytes) -> tuple[str, bool]:
-            truncated = len(data) > max_output_bytes
-            return data[:max_output_bytes].decode("utf-8", errors="replace"), truncated
+        # Bounded incremental reads: never buffer unbounded process output.
+        async def _read_stream(stream, limit) -> tuple[bytes, bool]:
+            chunks: list[bytes] = []
+            truncated = False
+            while True:
+                chunk = await stream.read(65536)
+                if not chunk:
+                    break
+                if len(chunks) * 65536 < limit:
+                    room = limit - sum(len(c) for c in chunks)
+                    chunks.append(chunk[:room])
+                    if len(chunk) > room:
+                        truncated = True
+                else:
+                    truncated = True
+                # keep draining to EOF, discarding beyond the cap
+            return b"".join(chunks), truncated
 
-        out, out_truncated = clip(stdout or b"")
-        err, err_truncated = clip(stderr or b"")
+        stdout_task = asyncio.ensure_future(_read_stream(process.stdout, max_output_bytes))
+        stderr_task = asyncio.ensure_future(_read_stream(process.stderr, max_output_bytes))
+        timed_out = False
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            timed_out = True
+        finally:
+            # kill+reap on timeout AND on task cancellation (zombie prevention)
+            if process.returncode is None:
+                _kill()
+                try:
+                    await process.wait()
+                except Exception:  # noqa: BLE001
+                    pass
+        stdout, out_truncated = await stdout_task
+        stderr, err_truncated = await stderr_task
+
         duration_ms = int((time.monotonic() - started) * 1000)
         log.info(
             "shell",
@@ -77,8 +109,8 @@ async def run_shell(
             {
                 "ok": not timed_out,
                 "exit_code": process.returncode,
-                "stdout": out,
-                "stderr": err,
+                "stdout": stdout.decode("utf-8", errors="replace"),
+                "stderr": stderr.decode("utf-8", errors="replace"),
                 "truncated": out_truncated or err_truncated,
                 "timed_out": timed_out,
                 "duration_ms": duration_ms,

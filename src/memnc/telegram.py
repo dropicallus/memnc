@@ -200,6 +200,13 @@ def format_model_requests(requests: list["ModelRequest"]) -> str:
     return "\n".join(lines)
 
 
+def _redact(text: str, token: str) -> str:
+    """Strip the bot token out of exception strings (URLs leak it)."""
+    if not token:
+        return text
+    return text.replace(token, "[REDACTED]")
+
+
 class TelegramObserver:
     """NATS events -> Telegram; read commands plus the ONE gated write path
     (approve/reject on model requests, plan §14.7)."""
@@ -216,8 +223,12 @@ class TelegramObserver:
         for chat in sorted(self.chats):
             try:
                 await self.bot.send_message(chat, text)
-            except Exception:  # noqa: BLE001 - observer must never disturb the mesh
-                log.warning("telegram send to %s failed", chat, exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - observer must never disturb the mesh
+                log.warning(
+                    "telegram send to %s failed: %s",
+                    chat,
+                    _redact(str(exc), getattr(self.bot, "token", "")),
+                )
 
     # -- inbound: NATS events ---------------------------------------------
     async def on_event(self, msg: Msg) -> None:
@@ -392,8 +403,8 @@ class TelegramObserver:
                 text = message.get("text", "")
                 try:
                     await self.handle_command(chat, text)
-                except Exception:  # noqa: BLE001
-                    log.warning("command failed", exc_info=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("command failed: %s", _redact(str(exc), self.bot.token))
                     await self.bot.send_message(chat, "error handling command")
 
     async def run(self) -> None:
@@ -426,9 +437,9 @@ class BotAPI:
                 )
                 r.raise_for_status()
                 return r.json().get("result", [])
-            except Exception:  # noqa: BLE001 - retry with backoff
+            except Exception as exc:  # noqa: BLE001 - retry with backoff
                 if attempt == 2:
-                    log.warning("getUpdates failed, backing off", exc_info=True)
+                    log.warning("getUpdates failed, backing off: %s", _redact(str(exc), self.token))
                     await asyncio.sleep(5.0)
                     return []
                 await asyncio.sleep(1.0 * (attempt + 1))
