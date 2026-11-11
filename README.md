@@ -134,4 +134,6 @@ docs/              # architecture, protocol, operations
 
 ## Contributing & License
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Apache License 2.0 — see [LICENSE](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Apache License 2.0 — see
+[LICENSE](LICENSE). Copyright in each contribution belongs to its commit
+author, recorded automatically in git history; there are no per-file headers.
