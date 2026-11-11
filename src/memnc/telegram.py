@@ -217,6 +217,9 @@ class TelegramObserver:
         self.bus = Bus(settings)
         self.chats = allowed_chats(settings.telegram_allow)
         self._seen_tasks: set[str] = set()
+        self._last_state: dict[str, str] = {}
+        self._announced: set[tuple[str, str, str]] = set()
+        self._seen_nodes: set[str] = set()
 
     # -- outbound ----------------------------------------------------------
     async def broadcast(self, text: str) -> None:
@@ -244,9 +247,57 @@ class TelegramObserver:
                 await self.broadcast(
                     "New task:\n" + format_task(snapshot.model_dump())
                 )
-        line = format_event(envelope)
-        if line is not None:
-            await self.broadcast(line)
+        if self._digest_event(envelope):
+            line = format_event(envelope)
+            if line is not None:
+                await self.broadcast(line)
+
+    def _digest_event(self, envelope: dict[str, Any]) -> bool:
+        """True when this event is worth announcing: a task STATE TRANSITION
+        (claimed / debate / done / failed) or a NEW failure detail. Routine
+        per-step chatter (dispatch, result.executed_on, retries inside the
+        same state) is suppressed so the channel stays a digest."""
+        if getattr(self.settings, "telegram_verbose", False):
+            return True
+        payload = envelope.get("payload") or {}
+        state = payload.get("state") or envelope.get("state") or "?"
+        task_id = envelope.get("task_id", "")
+        if not task_id:
+            return False
+        if state != self._last_state.get(task_id):
+            self._last_state[task_id] = state
+            detail = (payload.get("detail", "") or "").strip()
+            if state in ("FAILED", "ERROR") and detail:
+                self._announced.add((task_id, state, detail[:120]))
+            return True
+        detail = (payload.get("detail", "") or "").strip()
+        if state in ("FAILED", "ERROR") and detail:
+            key = (task_id, state, detail[:120])
+            if key not in self._announced:
+                self._announced.add(key)
+                return True
+        return False
+
+    async def run_roster(self) -> None:
+        """Poll the node roster and announce mesh membership changes."""
+        await self.bus.connect()
+        while True:
+            try:
+                nodes = await self.bus.list_nodes()
+                current = {n.node_id for n in nodes}
+                joined = sorted(current - self._seen_nodes)
+                left = sorted(self._seen_nodes - current)
+                if self._seen_nodes and (joined or left):
+                    parts = []
+                    if joined:
+                        parts.append("joined: " + ", ".join(joined))
+                    if left:
+                        parts.append("left: " + ", ".join(left))
+                    await self.broadcast("mesh: " + "; ".join(parts))
+                self._seen_nodes = current
+            except Exception as exc:  # noqa: BLE001 - observer must never disturb the mesh
+                log.warning("roster poll failed: %s", _redact(str(exc), getattr(self.bot, "token", "")))
+            await asyncio.sleep(max(self.settings.telegram_poll_s, 5))
 
     # -- inbound: commands --------------------------------------------------
     async def handle_command(self, chat: str, text: str) -> None:
@@ -410,7 +461,7 @@ class TelegramObserver:
     async def run(self) -> None:
         if not self.chats:
             raise SystemExit("TELEGRAM_ALLOW is empty - no chats to mirror to")
-        await asyncio.gather(self.run_events(), self.run_commands())
+        await asyncio.gather(self.run_events(), self.run_commands(), self.run_roster())
 
 
 class BotAPI:

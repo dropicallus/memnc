@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_allow: str = ""
     telegram_poll_s: int = 25
+    telegram_verbose: bool = False
 
     def model_for(self, role: Role) -> str:
         return {

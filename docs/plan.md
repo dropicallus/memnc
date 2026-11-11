@@ -767,3 +767,99 @@ Concrete audit hook: before any PR that adds a *listening* surface
 the PR description must state bind address, auth requirement, and which
 §21 rule applies — same weight as the existing every-deny-path-gets-a-
 test rule from §20.
+## 22. Model-to-model file exchange and shared code repos (design only)
+
+The mesh currently moves *information* (task envelopes, results) but not
+*bytes*. Two concrete wants: (a) a model produces a file another model
+needs (coder writes a patch, planner wants to read it; critic wants the
+diff, not a summary), and (b) multi-step coding tasks need a shared
+working tree several models can build on — a repo, not a message.
+
+### 22.1 File exchange over the bus (M17 concept)
+
+Design: a KV-backed artifact store with chunking, no new services.
+
+- **Bucket, not subject.** A `memnc-artifacts` KV bucket (NKey-scoped,
+  same pattern as the roster bucket) holds file manifests + chunks.
+  Subjects stay control-plane only; bulk bytes live in the KV, like the
+  roster and task ledger already do.
+- **Manifest + chunks.** Producer publishes `artifact.publish` with a
+  manifest: `artifact_id` (hash of content), `sha256`, `size`,
+  `mime/name`, `task_id`, `produced_by`. Content goes into KV keys
+  `a/<artifact_id>/chunk/<n>` (e.g. 256 KiB chunks). Content-addressing
+  gives free dedupe and integrity: consumers verify the hash, always.
+- **Capability line, not global read.** Artifacts are task-scoped: only
+  nodes holding a claim on the task (or the orchestrator) are granted
+  KV access to that artifact prefix. This is §21's trust tiers applied
+  to data: default-deny on read, and a revoked node (M7 tombstone) sees
+  nothing — its NKey no longer authenticates.
+- **Size ceiling.** Hard cap per artifact (start: 50 MB) and per task
+  (start: 200 MB total). KV is not a CDN; anything bigger belongs in
+  the repo-sharing path (§22.2), not the bus.
+- **Delivery flow.** `artifact.publish` (manifest) -> claim-holder
+  pulls chunks -> `artifact.ack` with sha256 verification result ->
+  reputation bookkeeping (a wrong-hash publish counts against the
+  publisher's model reputation — same ledger the claim loop already
+  uses).
+- **Worker integration.** `artifact fetch <id>` / `artifact put <path>`
+  as meshctl verbs + agent tools, so a coder can hand its patch to the
+  critic without ever touching the Telegram channel or the host
+  filesystem. Workspace stays the execution sandbox; the bus is the
+  transport.
+- **Deliberately NOT (§21.5 spirit):** no resumable multi-day
+  transfers, no pub/sub streaming of binaries, no third-party object
+  storage dependency. KV with TTL cleanup covers the mesh's scale.
+
+### 22.2 Shared repos for coding tasks (M18 concept, research first)
+
+The real want behind "models send each other files": several roles
+working in one repo across task steps. Three candidate architectures,
+to be evaluated against mesh constraints (no central service beyond
+NATS, NKey auth, loopback defaults, every node may go away):
+
+1. **Task-local git on the claiming node (recommended starting
+   point).** The node that claims a CODING task hosts a bare repo for
+   the task's lifetime (plain `git init --bare` in its workspace, plus
+   `git daemon`/`git http-backend` bound to the host's docker network
+   only — never a public port, §21 rule 2). Other nodes clone via an
+   authenticated per-task URL; the claim ledger doubles as the
+   authority for "who may push". On DONE, the final tree is packaged
+   as an artifact (§22.1) or the repo URL is recorded in the task
+   result. Pro: zero new infrastructure, follows the claim model,
+   fails with the node (task fails with it, consistent with retries).
+   Con: cross-node *concurrent* edits need task decomposition that
+   avoids two writers on one tree — a planning constraint, not a
+   transport one.
+2. **Node-hosted long-lived git server.** One designated node (or the
+   host) runs a persistent git server (e.g. `git daemon` or
+   soft-serve/gitea) for all tasks. Pro: repos survive task retries,
+   natural place for cross-task memory of code. Con: a central
+   service to keep alive, an authority question (who owns the repo?
+   who may push? — needs the ACL ledger, not ad-hoc), and it breaks
+   the "no new listening surfaces without a §21 audit hook" rule
+   unless designed as one (bind address, auth, tier).
+3. **Peer-to-peer git (git-remote-helper over the bus, e.g. a
+   `nats://` remote helper).** Git's remote-helper interface lets any
+   transport back a repo; a helper that tunnels `git send-pack` /
+   `fetch-pack` over NATS request-reply would make *the bus itself*
+   the git network. Pro: no extra service at all, pure mesh. Con:
+   most moving parts, hardest to secure (pack negotiation is a
+   protocol inside our protocol), and the mesh's reliability model
+   (retries, revocation) does not map cleanly onto a live pack
+   session. Interesting for later; not for first build.
+
+**Decision framework (for the implement step):** concurrency (do two
+roles ever edit the same tree simultaneously? if the orchestrator
+serializes CODING per task, option 1 is sufficient), persistence
+(how long must a repo outlive a task?), blast radius (what does a
+malicious push destroy?), and operational cost (what new process must
+stay healthy?). Start with option 1 + §22.1 artifacts; option 2 only
+if cross-task repo memory becomes a real want; option 3 remains
+research reading (git-remote-helper docs, `gitremote-helpers(7)`),
+not implementation.
+
+Security notes carried from §21: repo/auth transport rides NKey
+authentication, push rights derive from the claim ledger (no new
+credential class, §21 rule 5), the git surface binds to the docker
+network only, and artifact hashing (sha256) plus reputation apply the
+same "bad actor degrades" model the claim loop already enforces.
