@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -29,6 +30,22 @@ from .schema import (
 
 
 async def _connect(settings: Settings):
+    # H4: NKey mode mirrors bus.py — the seed replaces the token and the
+    # configured seed path must exist (fail closed, no token fallback).
+    if settings.nats_nkeys_seed:
+        seed_path = settings.nats_nkeys_seed
+        if not os.path.isfile(seed_path):
+            raise RuntimeError(
+                f"NATS_NKEYS_SEED set to {seed_path!r} but the file does not "
+                "exist — refusing to fall back to the shared token (fail closed)."
+            )
+        return await nats.connect(
+            settings.nats_url,
+            nkeys_seed=seed_path,
+            name=f"meshctl-{settings.node_name}",
+            max_reconnect_attempts=2,
+            connect_timeout=5,
+        )
     return await nats.connect(
         settings.nats_url,
         token=settings.nats_token or None,

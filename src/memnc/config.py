@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     node_gpu: str = ""
     nats_url: str = "nats://127.0.0.1:4222"
     nats_token: str | None = None
+    # H4: per-node NKey identity. When set, this seed file replaces the
+    # shared token entirely (transport-level identity binding); the token
+    # is then ignored. Fail closed: a configured seed path must exist.
+    nats_nkeys_seed: str | None = None
     stream_name: str = "MESH"
     kv_bucket: str = "workflow_state"
     nats_name: str | None = None

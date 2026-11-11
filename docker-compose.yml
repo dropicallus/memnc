@@ -4,6 +4,10 @@ name: memnc
 x-mesh-env: &mesh-env
   NATS_URL: ${NATS_URL:-nats://nats:4222}
   NATS_TOKEN: ${NATS_TOKEN:?NATS_TOKEN must be set (e.g. in .env) — a shared token IS the mesh auth, never ship a default}
+  # H4: per-node NKey seed (path to file on the mounted ./secrets volume).
+  # When set it REPLACES the token as transport identity; the bus fails
+  # closed if the file is missing. Example: /secrets/node-b.nk
+  NATS_NKEYS_SEED: ${NATS_NKEYS_SEED:-}
   WORKSPACE_ROOT: /workspace
   INFERENCE_PROVIDER: ${INFERENCE_PROVIDER:-ollama}
   INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://host.docker.internal:11434}
@@ -57,6 +61,9 @@ x-mesh-service: &mesh-service
     - ALL
   volumes:
     - ./workspace:/workspace
+    # H4: per-node NKey seeds live here (secrets/<node>.nk, mode 0600,
+    # never committed). Point NATS_NKEYS_SEED at /secrets/<node>.nk.
+    - ./secrets:/secrets:ro
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
@@ -64,19 +71,29 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
+    # H4: NKey mode (NATS_CONF set) uses per-node identities from
+    # secrets/nats.conf; token mode keeps the H3 shared-token guard.
+    entrypoint: /bin/sh
     command:
-      - "-js"
-      - "-sd"
-      - "/data"
-      - "--http_port"
-      - "8222"
-      - "--auth"
-      - "${NATS_TOKEN:?NATS_TOKEN must be set}"
+      - "-c"
+      - |
+        if [ -n "$$NATS_CONF" ]; then
+          exec nats-server -js -sd /data --http_port 8222 --config /cfg/nats.conf
+        fi
+        if [ -z "$$NATS_TOKEN" ]; then
+          echo "FATAL: neither NATS_CONF (NKey mode) nor NATS_TOKEN (token mode) is set" >&2
+          exit 1
+        fi
+        exec nats-server -js -sd /data --http_port 8222 --auth "$$NATS_TOKEN"
+    environment:
+      NATS_CONF: ${NATS_CONF:-}
+      NATS_TOKEN: ${NATS_TOKEN:-}
     ports:
       - "4222:4222"
       - "127.0.0.1:8222:8222"  # monitoring: loopback only, no auth on :8222
     volumes:
       - nats-data:/data
+      - ./secrets:/cfg:ro
     healthcheck:
       test:
         - "CMD-SHELL"
