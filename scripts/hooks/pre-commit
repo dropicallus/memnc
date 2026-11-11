@@ -1,0 +1,18 @@
+#!/bin/bash
+# Pre-commit: same checks as CI (.github/workflows/ci.yml)
+# Skip with: git commit --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+echo "pre-commit: ruff check ..."
+.venv/bin/ruff check src tests discuss_agent.py discuss_driver.py discuss_common.py || {
+  echo "pre-commit: ruff failed (git commit --no-verify to skip)" >&2
+  exit 1
+}
+
+echo "pre-commit: pytest tests/ -q ..."
+.venv/bin/python -m pytest tests/ -q || {
+  echo "pre-commit: pytest failed (git commit --no-verify to skip)" >&2
+  exit 1
+}
+
+echo "pre-commit: ok"
