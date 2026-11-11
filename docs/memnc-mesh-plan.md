@@ -1039,3 +1039,67 @@ The same role split applies to the open pieces derived from the references (§0.
 
 Boundary: the subagent **never** gets the NATS dev token (not plaintext, not given to children); the parent performs all live NATS connection tests as soon as a test instance is available (4223, or 4222 with token).
 
+
+## 19. Research-informed orchestration priorities (26-paper corpus, 2026-11-11)
+
+Source: `~/research-papers/analysis_priors_proposal.md`; full synthesis with LoRA/memory priorities in `~/research-papers/synthesis.md` §5.
+
+- **P0 — Leader-Worker orchestration (MLPO, 2507):** a leader policy synthesizes/corrects worker outputs and routes subtasks to maximize global reward. Maps onto the orchestrator grant/authorization design (§18) and the T7 trust ledger: trust scores weight the leader's per-worker reward credit.
+- **P0/Mesh+Memory crossover — Role-specific LoRA adapters (MoRSE, 2608_09251):** distinct weight-level adapters for Planner/Coder/Critic roles instead of one shared adapter; subspace-divergence check before merging adapters (`memnc/workers/` + Fisher-Merge pipeline).
+- **P1 — Latent communication (preprints_202609_1298):** exchange low-dimensional hidden states/KV-cache summaries between agents instead of raw text; NATS-transportable, token-cheap.
+- **P1 — Neutral consensus prompts (04_majority_following):** trust-weighted voting in the ledger (`w_i ∝ β_i`); neutral, shuffled option labels when collecting worker votes; 2–3 debate rounds suffice for capable participants.
+- **P2 — Incentive governance (2605_25815):** complexity-weighted evaluation metrics (logical depth over file counts) to prevent score inflation in self-evolving worker populations (`memnc/evaluation/`).
+
+### 19.1 Build order: research → mesh integration (triage 2026-11-11)
+
+Triage of the 26-paper corpus against the current roadmap. Ordering rule: the
+experience-graph steps 1–5 (§14.13) come first because they produce the
+training data everything below depends on. Repo stays English (Frank's rule);
+extend → test → harden → continue.
+
+**BUILD (P0, committed to the plan):**
+
+| # | Item | What | Where |
+|---|---|---|---|
+| B1 | Experience-graph steps 1–4 (§14.13) | Observation deposits, trace query, team-synergy aggregation, similarity + ranked attention. This IS the AgentNet edge layer on our KV ledger — no external graph DB needed. | §14.13 Steps 1–4 (Step 0 done, commit d6cb4fb) |
+| B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists and is vendored under `training/`** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) + `training/` |
+| B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
+| B4 | Fisher-Merge pipeline | mergekit-based merge of role adapters with a subspace-divergence check (principal angles) before merging; naive averaging is known to degrade (MoRSE result). | §19 P0 + synthesis.md §5 |
+
+**PROTOTYPE ONLY (P1, experiment, no mesh commit until proven):**
+
+| # | Item | Test design | Gate to build |
+|---|---|---|---|
+| T1 | Latent KV-communication (preprints_202609_1298) | One NATS message carries a KV-cache summary / hidden-state digest instead of text between coder→critic; measure critic quality delta. | Survey-level research, no protocol exists; only build a protocol if the delta is real |
+| T2 | Neutral consensus + trust voting (04_majority_following) | Shuffle option labels, neutral phrasing, trust-weighted vote `w_i ∝ β_i` in the critique step; 2–3 rounds max (critical group size N_c: bigger swarms freeze in partial consensus). | Cheap S4-adjacent experiment; adopt if vote variance drops |
+| T3 | CORY training loop (Harry67Hu/CORY, TRL-based) | Pioneer/observer pairs on the B2 role adapters, role exchange every 5 iterations, collective reward. | Only after B1 collected enough trajectories; pointless without a dataset |
+
+**OBSERVE ONLY (P2, revisit later):**
+
+- Incentive governance (2605_25815): complexity-weighted metrics against score
+  inflation — relevant once workers self-evaluate or preen results. Plugin in
+  `memnc/evaluation/`, not before.
+- Growing-LoRA / rank growth (PE-MA shared+personal adapters, arXiv 2506.11803):
+  the PE-MA mixture (μ·y_personal + (1−μ)·y_shared, ~50 lines) is adopted inside
+  B2 from day one; actual rank growth waits until role adapters are stable.
+  Personal adapter never leaves the node; only shared-adapter deltas cross the
+  mesh (~87% less traffic than full-model sync).
+
+**Brownfield status (verified 2026-11-11):**
+
+- AgentNet (github.com/zoe-yyx/AgentNet, NeurIPS 2025): public code for the
+  dynamically evolving DAG topology — use as reference for B1 data structures
+  and update rules; map onto NATS KV, do not import the framework.
+- CORY (github.com/Harry67Hu/CORY): official TRL-based implementation — the
+  recipe for T3 when we get there.
+- MLPO: no public repo found; B3 is our own implementation of the described
+  pattern (GRPO + difficulty filtering + synthetic backtracking traces only if
+  we later move to actual leader RL).
+- LangGraph/AutoGen/CrewAI: NOT brownfield for us — they re-centralize
+  orchestration as a graph interpreter, the opposite of the peer-to-peer NATS
+  design. Anthropic's orchestrator-worker engineering write-up is a design
+  reference for M16, not a dependency.
+
+**Sequencing:** finish §14.13 Steps 1–4 → Step 5 routing feedback → B3 leader
+prompt layer → B2 role-LoRA training from observations → B4 merges. T1 runs as
+a time-boxed side experiment; T2 rides along with S4; T3 after B2.
