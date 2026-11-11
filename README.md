@@ -134,4 +134,4 @@ docs/              # architecture, protocol, operations
 
 ## Contributing & License
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md). Apache License 2.0 — see [LICENSE](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Apache License 2.0 — see [LICENSE](LICENSE).
