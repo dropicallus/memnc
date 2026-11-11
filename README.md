@@ -2,7 +2,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-34d399?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-22d3ee?style=flat-square)](pyproject.toml)
-[![Tests](https://img.shields.io/CI-badge.svg?branch=main&label=tests&style=flat-square)](https://github.com/dropicallus/memnc/actions/workflows/ci.yml)
+[![Tests](https://github.com/dropicallus/memnc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dropicallus/memnc/actions/workflows/ci.yml)
 [![No cloud required](https://img.shields.io/badge/cloud-never-fb7185?style=flat-square)](#security-model)
 
 **A multi-agent mesh that runs entirely on your own hardware.**
