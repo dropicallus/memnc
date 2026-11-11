@@ -39,6 +39,9 @@ class TaskState(StrEnum):
     CODING = "CODING"
     CRITIQUE = "CRITIQUE"
     REVISE = "REVISE"
+    # An agent asked a clarifying question back (the mesh "asks" instead of
+    # guessing). Parked until a human answers via meshctl answer / Telegram.
+    WAIT_INPUT = "WAIT_INPUT"
     DONE = "DONE"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -110,14 +113,15 @@ class ControlCommand(BaseModel):
     """T2: one human intervention command, issued via an approved channel."""
 
     action: Literal[
-        "submit", "cancel", "retry", "stop_worker", "decide",
+        "submit", "cancel", "retry", "stop_worker", "decide", "answer",
         "pause_node", "resume_node",
     ]
     agent_id: str  # who acts — grant-checked against the M9 registry
     task: str = ""  # submit only
-    task_id: str = ""  # cancel / retry / decide only
+    task_id: str = ""  # cancel / retry / decide / answer only
     node: str = ""  # stop_worker / pause_node / resume_node only
     approved: bool | None = None  # decide only
+    text: str = ""  # answer only: the human's reply to the agent's question
     gate: str = ""  # submit only: "always" | "fail" | "never"
     reason: str = ""
 
@@ -405,13 +409,14 @@ class PlanStep(BaseModel):
 
 
 class PlannerOutput(BaseModel):
+    question: str = ""  # non-empty: the planner asks back instead of planning
     plan: list[PlanStep] = Field(default_factory=list)
     notes: str = ""
 
     @field_validator("plan")
     @classmethod
-    def _non_empty(cls, value: list[PlanStep]) -> list[PlanStep]:
-        if not value:
+    def _non_empty(cls, value: list[PlanStep], info) -> list[PlanStep]:
+        if not value and not info.data.get("question"):
             raise ValueError("plan must contain at least one step")
         return value
 
@@ -499,6 +504,7 @@ class FileArtifact(BaseModel):
 
 
 class CoderOutput(BaseModel):
+    question: str = ""  # non-empty: the coder asks back instead of coding
     summary: str = ""
     files: list[FileArtifact] = Field(default_factory=list)
     commands: list[str] = Field(default_factory=list)
@@ -513,9 +519,16 @@ class CriticIssue(BaseModel):
 
 
 class CriticOutput(BaseModel):
-    approved: bool
+    approved: bool = False
+    question: str = ""  # non-empty: the critic asks back instead of verdicting
     summary: str = ""
     issues: list[CriticIssue] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _needs_verdict_or_question(self) -> CriticOutput:
+        if not self.summary and not self.question:
+            raise ValueError("critic output needs a summary or a question")
+        return self
 
 
 ROLE_OUTPUT: dict[Role, type[BaseModel]] = {
@@ -612,6 +625,9 @@ class TaskSnapshot(BaseModel):
     # T3: set while the task sits parked at the CRITIQUE gate awaiting a
     # human approve/reject (meshctl gate or Telegram /approve /reject).
     needs_human: bool = False
+    # WAIT_INPUT: the agent's clarifying question and the role that asked it.
+    question: str = ""
+    question_role: Role | None = None
     plan: PlannerOutput | None = None
     code: CoderOutput | None = None
     critique: CriticOutput | None = None
@@ -627,6 +643,17 @@ class TaskSnapshot(BaseModel):
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
     error: str | None = None
+
+    def question_output(self, role: Role) -> str:
+        """The clarifying question the role's latest output asks, if any."""
+        output = {
+            Role.PLANNER: self.plan,
+            Role.CODER: self.code,
+            Role.CRITIC: self.critique,
+        }.get(role)
+        if output is None:
+            return ""
+        return getattr(output, "question", "") or ""
 
     def record(self, event: str, detail: str = "") -> None:
         self.history.append(HistoryEntry(state=self.state, event=event, detail=detail))

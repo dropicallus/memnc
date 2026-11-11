@@ -42,9 +42,19 @@ def test_coder_output_roundtrip():
 
 
 def test_critic_output_defaults():
-    output = CriticOutput.model_validate({"approved": False})
+    output = CriticOutput.model_validate({"approved": True, "summary": "ok"})
     assert output.issues == []
-    assert output.approved is False
+    assert output.approved is True
+
+
+def test_critic_output_requires_verdict_or_question():
+    with pytest.raises(ValidationError):
+        CriticOutput.model_validate({"issues": []})
+
+
+def test_critic_output_question_only():
+    output = CriticOutput.model_validate({"question": "which variant?"})
+    assert output.question == "which variant?"
 
 
 def test_submission_rejects_blank_task():

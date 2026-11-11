@@ -245,6 +245,44 @@ class Orchestrator:
                         }
                     ).encode()
                 )
+            elif cmd.action == "answer":
+                snapshot = await self._human_task_op(cmd)
+                if not cmd.text:
+                    raise ValueError("answer requires text")
+                if snapshot.state is not TaskState.WAIT_INPUT:
+                    raise ValueError(
+                        f"task {snapshot.task_id} is not waiting for input "
+                        f"({snapshot.state.value})"
+                    )
+                # Feed the answer back into the prompt the agent will see on
+                # re-dispatch — otherwise it would just ask again.
+                snapshot.task = (
+                    f"{snapshot.task}\n\nHuman answered the question "
+                    f'"{snapshot.question}" with: {cmd.text}'
+                )
+                snapshot.question = ""
+                snapshot.record(
+                    "human.answered", f"by={cmd.agent_id}: {cmd.text}"
+                )
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(
+                    snapshot, "human.answered", f"answered by {cmd.agent_id}"
+                )
+                await self._apply(
+                    snapshot,
+                    Event(
+                        "answer", reason=cmd.text, role=snapshot.question_role
+                    ),
+                )
+                await message.respond(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "task_id": snapshot.task_id,
+                            "state": snapshot.state.value,
+                        }
+                    ).encode()
+                )
             elif cmd.action in ("pause_node", "resume_node"):
                 # T4: human pause — the node's claim loop stops pulling work
                 # until resume (heartbeat refreshes keep the flag).
@@ -460,7 +498,18 @@ class Orchestrator:
                 self._store_output(snapshot, envelope.role, payload.output)
             except Exception as exc:  # noqa: BLE001
                 event = Event("result", ok=False, reason=f"invalid output: {exc}")
-            if envelope.role is Role.CRITIC and snapshot.critique is not None:
+            # An agent can ask a clarifying question instead of producing
+            # output: park the task until a human answers it.
+            if event.ok and snapshot.question_output(envelope.role):
+                question = snapshot.question_output(envelope.role)
+                event = Event(
+                    "ask", reason=question, role=envelope.role
+                )
+            if (
+                envelope.role is Role.CRITIC
+                and snapshot.critique is not None
+                and not snapshot.critique.question
+            ):
                 event = Event(
                     "result",
                     ok=True,
@@ -477,7 +526,7 @@ class Orchestrator:
             ):
                 await self._fanout(snapshot)
                 return
-            if event.ok:
+            if event.ok and event.type == "result":
                 # T5: stream the coder/critic debate as events + history so
                 # the negotiation is readable live (Telegram observer) and
                 # replayable via /trace or `meshctl trace`.
@@ -621,6 +670,19 @@ class Orchestrator:
                     "task.parked",
                     f"critic {verdict}; {action.reason} — /approve or /reject "
                     f"{snapshot.task_id} | {summary}",
+                )
+
+            elif action.type == "ask":
+                # Agent asked a clarifying question: surface it to the human.
+                snapshot.question = action.reason
+                snapshot.question_role = action.role
+                snapshot.record("task.question", action.reason)
+                await self.bus.put_snapshot(snapshot)
+                await self.bus.emit_event(
+                    snapshot,
+                    "task.question",
+                    f"question: {action.reason} — /answer {snapshot.task_id} "
+                    f"<text>",
                 )
 
         if result.state is TaskState.REVISE:
