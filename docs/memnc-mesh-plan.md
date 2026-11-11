@@ -1274,3 +1274,42 @@ marked `untrusted: true`). No tier ever blocks basic mesh operation.
   human decides, from evidence, per §20's approvals-stay-human rule.
 - No per-message authorization layer in Python — enforcement stays at
   the NATS server where it cannot be bypassed by client bugs.
+
+### 21.6 Lesson from OpenClaw: autonomy is not an attack surface
+
+OpenClaw nearly died because convenience shipped as an unauthenticated
+surface: open tool/webhook endpoints, missing auth by default, sandboxing
+as an afterthought — "open" was treated as a feature. §21.1 protects the
+mesh's genes; this section makes sure that protection cannot be abused as
+an excuse. The rule set:
+
+1. **Autonomy limits *control*, never *authentication*.** Nothing in
+   §21.1 relaxes who may talk to the bus. Every ingress is NKey-
+   authenticated (H4, done). "No central kill switch" means no remote
+   process control — it never means unauthenticated entry points.
+2. **Every listening surface is loopback-bound by default.** The
+   terminal-facing agent services (HTTP/monitoring/CLI sockets) bind
+   `127.0.0.1` on the host (H2 pattern). Anything reachable beyond
+   localhost requires an explicit, reviewed config change — same rule
+   that already forced `NATS_TOKEN:?` (H3) and the empty pull
+   whitelist (secure-by-default).
+3. **Optional sandboxing is per *deployment*, not per *mood*.** A node
+   that declares tier 1 (full terminal) does so in its own config,
+   consciously, once. There is no code path where the agent "just
+   disables" a sandbox to get a task done. If a task class keeps
+   failing under the sandbox, that is a bug report, not a bypass.
+4. **Tool exposure follows the same default-deny.** Terminal-capable
+   nodes expose their tools over the mesh subject map only (scoped in
+   §21.2); there are no side HTTP APIs for tools, no webhook surface.
+   If we ever need one, it inherits rule 2 (loopback + auth) before it
+   ships.
+5. **Secrets never leave the seed-file + `.env` pattern.** No new
+   credential class gets invented per feature; anything that needs
+   one, reuses NKey identity or a gitignored file with a fail-closed
+   load path.
+
+Concrete audit hook: before any PR that adds a *listening* surface
+(HTTP, socket, webhook, new bus subject accepting external payloads),
+the PR description must state bind address, auth requirement, and which
+§21 rule applies — same weight as the existing every-deny-path-gets-a-
+test rule from §20.
