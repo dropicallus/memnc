@@ -1103,3 +1103,64 @@ extend → test → harden → continue.
 **Sequencing:** finish §14.13 Steps 1–4 → Step 5 routing feedback → B3 leader
 prompt layer → B2 role-LoRA training from observations → B4 merges. T1 runs as
 a time-boxed side experiment; T2 rides along with S4; T3 after B2.
+
+## 20. Mesh security: secure-by-design (AAOS SDV principles)
+
+Source: Android Developers Blog, "AAOS SDV – Secure by Design" (2026-08-24,
+android-developers.googleblog.com). Reference: issue #2 deferred items (H4, M7,
+M11, L14). Mapping principle-by-principle; build order at the end.
+
+### 20.1 Principle mapping
+
+| AAOS SDV principle | memnc status | Gap → item |
+|---|---|---|
+| **Isolation is default, sharing explicit** (VM per domain) | DONE: every mesh service runs its own container (read-only rootfs, `cap_drop: ALL`, `no-new-privileges`, host-matched user, workspace-only bind mount, no docker socket) — already hardened in compose | MCP shell tools stay inside the same container; acceptable, shell env is curated (39ca961) |
+| **Deny-by-default process/communication permissions** (UID + SELinux) | HALF: grant gate for control commands (M7/#2), pull whitelist `[]` default, curated subprocess env | The same posture is missing at the NATS transport: one shared token, identity is *claimed*, not *proven* → **H4** |
+| **Layered access control** | Grant ledger (ROOT/CHAIN, deny-by-default) gates high-level actions | Transport-level subject scoping per node; **M7 revocation tombstone** so a withdrawn node is cut immediately, not at roster TTL |
+| **Integrity: secure software delivery** (signed images, verified boot) | Pull path human-gated + whitelisted (T7); CI on push/PR | Base images pinned by tag, not digest; e2e artifact check is text-based → **M11**: SHA256 artifact pinning + digest-pinned base images; T8 LAN GGUF sharing must add checksum-before-load |
+| **Vulnerability management lifecycle** (scanning, bulletins, triage) | CI runs ruff + pytest (L14 done) | **L12**: `pip-audit` + `trivy image scan` in CI, Dependabot for the few deps, findings get severity + tracking issue; monthly security review slot (like the per-paper cron) |
+| **Memory-safe development** (Rust) | Python | Honest non-goal: rewriting in Python-land pays nothing at 3 nodes. The Python equivalents of the memory-safety bug class are exactly the 39ca961 invariants: bounded reads, killed process groups, no env inheritance. Optional: mypy strict in CI |
+
+### 20.2 H4 design: transport-level identity binding (P0)
+
+Goal: "who am I" becomes a transport property, not a payload claim.
+
+- **Server**: replace `--auth <token>` with a mounted `nats.conf` defining one
+  account `MESH` with per-node **users**, each with its own NKey seed and
+  explicit allow-lists. Permissions follow the subject map in `schema.py`:
+  - orchestrator user: full `mesh.>` control (submit, grants, control, DLQ)
+  - worker user `<node>`: sub `mesh.agent.<role>.cmd`, `mesh.task.>`,
+    `mem.agent.<node>.work`; pub `mesh.agent.<role>.result`,
+    `mesh.node.<node>.>`, `mesh.bid.>`; KV/JS via account-scoped exports
+  - deny-by-default: no user gets `mesh.>` wholesale
+- **Client**: `bus.connect()` uses `user_credentials=` (nsc `.creds` file)
+  mounted per container; shared `NATS_TOKEN` is removed from compose once all
+  nodes are migrated (flag `MESH_AUTH_MODE=creds|token` for the transition).
+- **Key storage**: per-node seed files live in gitignored `secrets/` (one
+  `<node>.creds` per node); generation via `nsc` or `nkeys` at deploy time,
+  never committed. Loss = re-generate + redeploy that node.
+- **Verification**: with creds, a spoofed envelope claiming node `<x>` from
+  another connection is impossible at the transport; the capability gate then
+  only needs to authorize *actions*, not *identities*.
+
+### 20.3 M7 design: revocation tombstone (P0, small)
+
+- KV bucket `mesh_revocation` (no dots), key `revoked.<agent_id>`, value =
+  reason + timestamp, written by orchestrator on `stop_worker` / grant withdraw.
+- `acl.check_*` and the capability gate read the tombstone first: a revoked
+  agent is refused on the next message, not at the next roster TTL expiry.
+- Un-revoke is a human action (delete the key via meshctl, never via Telegram).
+
+### 20.4 Build order
+
+1. **P0**: H4 creds migration (§20.2) — biggest single win; do as one commit
+   with a transition flag so running nodes keep working until they sync.
+2. **P0**: M7 tombstone (§20.3) — small, lands on the existing gate.
+3. **P1**: M11 slice — SHA256 artifact verification in e2e + digest-pinned
+   base images in compose; `pip-audit` + trivy in CI (L12 remainder).
+4. **P2**: T8 checksum-before-load when the offline node returns; mypy strict
+   as a stretch goal.
+
+Non-goals / standing rules: approvals stay human (no new authority paths);
+`.env` stays gitignored; no default creds shipped in compose (fail-closed, like
+`NATS_TOKEN:?`); every new deny-path gets a test before merge.
