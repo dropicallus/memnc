@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 
 import nats
@@ -86,13 +87,32 @@ class Bus:
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                self.nc = await nats.connect(
-                    self.settings.nats_url,
-                    token=self.settings.nats_token or None,
-                    name=self.settings.nats_name or self.settings.node_name,
-                    max_reconnect_attempts=-1,
-                    reconnect_time_wait=1,
-                )
+                # H4: an NKey seed replaces the shared token entirely —
+                # the seed is the node's transport identity, proven by a
+                # challenge-response signature handshake at connect time.
+                seed_path = self.settings.nats_nkeys_seed
+                if seed_path:
+                    if not os.path.isfile(seed_path):
+                        raise RuntimeError(
+                            f"NATS_NKEYS_SEED set to {seed_path!r} but the file "
+                            "does not exist — refusing to fall back to the "
+                            "shared token (fail closed)."
+                        )
+                    await nats.connect(
+                        self.settings.nats_url,
+                        nkeys_seed=seed_path,
+                        name=self.settings.nats_name or self.settings.node_name,
+                        max_reconnect_attempts=-1,
+                        reconnect_time_wait=1,
+                    )
+                else:
+                    await nats.connect(
+                        self.settings.nats_url,
+                        token=self.settings.nats_token or None,
+                        name=self.settings.nats_name or self.settings.node_name,
+                        max_reconnect_attempts=-1,
+                        reconnect_time_wait=1,
+                    )
                 break
             except Exception as exc:  # noqa: BLE001 - retry any connect failure
                 last_error = exc
