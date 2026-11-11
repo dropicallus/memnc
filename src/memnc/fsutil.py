@@ -41,7 +41,9 @@ def safe_path(root: Path, relative: str) -> Path:
 
 
 def read_text_limited(path: Path, max_bytes: int) -> tuple[str, bool]:
-    data = path.read_bytes()
+    # Bounded incremental read: never loads the whole (possibly huge) file.
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
     truncated = len(data) > max_bytes
     if truncated:
         data = data[:max_bytes]
