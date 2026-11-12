@@ -113,3 +113,9 @@ def test_score_favors_higher_capacity_trust():
     
     scores = score_candidates([c1, c2])
     assert scores[0][0] == "high"
+
+
+def test_trust_key_rejects_colon_subjects():
+    """M8 regression: ':' is illegal in NATS KV keys — sanitizer must strip it."""
+    from memnc.bus import Bus
+    assert Bus._trust_key("node-a-coder:coder") == "trust.node-a-coder.coder"
