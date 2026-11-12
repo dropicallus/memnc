@@ -8,7 +8,7 @@ milestone (working name: **M11 — Mesh API / Control Plane**).
 Today every interaction goes through a specific host: `meshctl` must run on the
 node that hosts the orchestrator, Telegram talks to the Telegram observer, and
 llauncher is controlled per-host. That breaks once the mesh runs on several
-machines (`.124`, `.180`, …): "which node am I on?" is the wrong question.
+machines: "which node am I on?" is the wrong question.
 
 kubectl analogy: one stable CLI verb set (`kubectl get/scale/logs`) that works
 no matter where the cluster endpoints live. The mesh equivalent: one **Mesh
@@ -170,7 +170,7 @@ convention, not new state.
 - `node detail` aggregates: heartbeat, presence, queue depth, model routes,
   GPU VRAM (from llancherer), reputation (T4).
 - `node drain` + `worker scale` give the mesh basic self-management: drain
-  before shutdown (as practiced manually with the .124 teardown), scale
+  before shutdown, scale
   workers up when the queue grows.
 - Optional guardrail: a warning when a node's task failure rate spikes
   (reputation already tracks this; the API only surfaces it).
