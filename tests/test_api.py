@@ -1,13 +1,25 @@
-"""Tests for the M11a mesh API read server (src/memnc/api.py)."""
+"""Tests for the M11a/M11b/M11c mesh API server (src/memnc/api.py)."""
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 
 import pytest
 
 from memnc.api import WRITE_VERBS, ApiServer
-from memnc.schema import SUBJECT_CONTROL, ControlCommand, NodeInfo, TaskSnapshot, TaskState
+from memnc.schema import (
+    SUBJECT_CONTROL,
+    Capability,
+    ControlCommand,
+    GrantLevel,
+    GrantRecord,
+    NodeInfo,
+    TaskSnapshot,
+    TaskState,
+    TrustEntry,
+)
 
 
 def _snap(
@@ -245,3 +257,56 @@ def test_format_node_detail_shows_content():
     assert "1 tasks:" in out
     assert "#1a1d166832a5 CODING by node-a-coder:coder" in out
     assert "Write a one-line haiku about mesh" in out
+
+
+# -- M11c: resource / governance read verbs (console proxy) -------------------
+
+
+class FakeRegBus(FakeBus):
+    """Adds the governance reads the console collect_state proxies."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cap = [Capability(agent_id="a1", skill="coder", node="node-a")]
+        self.grants = [GrantRecord(agent_id="a1", level=GrantLevel.ROOT)]
+        self.trust = [TrustEntry(subject="a1", credit=0.9, rating="GOOD")]
+        self.ledger = {"tasks": 3, "grants": 1}
+
+    async def list_capabilities(self):
+        return self.cap
+
+    async def list_grants(self):
+        return self.grants
+
+    async def list_trust(self):
+        return self.trust
+
+    async def read_ledger(self):
+        return self.ledger
+
+
+def test_read_verbs_expose_governance_state():
+    from memnc.config import Settings
+
+    srv = ApiServer(Settings(node_name="n"), FakeRegBus())  # type: ignore[arg-type]
+    caps = asyncio.run(srv.dispatch("cap.list", {}))
+    grants = asyncio.run(srv.dispatch("grant.list", {}))
+    trust = asyncio.run(srv.dispatch("trust.list", {}))
+    ledger = asyncio.run(srv.dispatch("ledger.read", {}))
+    assert caps[0]["agent_id"] == "a1" and caps[0]["skill"] == "coder"
+    assert grants[0]["level"] == "root"
+    assert trust[0]["credit"] == 0.9
+    assert ledger == {"tasks": 3, "grants": 1}
+
+
+def test_console_write_actions_map_to_api_verbs():
+    from memnc.console import ConsoleHandler
+
+    src = inspect.getsource(ConsoleHandler._control)
+    for action, verb in [
+        ("cancel", "task.cancel"),
+        ("retry", "task.retry"),
+        ("pause_node", "node.pause_node"),
+        ("resume_node", "node.resume_node"),
+    ]:
+        assert f'"{action}": "{verb}"' in src

@@ -739,9 +739,14 @@ M11b writes + Telegram API client: DONE (2026-11-12) — WRITE_VERBS in
 api.py forward every mutating call over mesh.control (orchestrator stays
 single writer, grant-check + human.* ledger unchanged); Telegram
 `/submit|/cancel|/retry|/gate|/stop worker|/pause|/resume` goes through
-api_request now. Next: M11c web UI proxy + resources, M11d NL agent.
-Channels/human-as-peer from 5a feed into S4 (approval gate) —
-S4 and M11b merge.
+api_request now.
+M11c console proxy + resources: DONE (2026-11-12) — the web console is an
+API client too: collect_state/task detail/control POST go through
+api_request (reads: task.list/node.list + new cap.list/grant.list/
+trust.list/ledger.read verbs; fallback to direct Bus reads if the API
+server is down); node load is part of the resource view.
+Next: M11d NL agent. Channels/human-as-peer from 5a feed into S4
+(approval gate) — S4 and M11b merge.
 
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art

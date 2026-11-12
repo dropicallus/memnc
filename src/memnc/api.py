@@ -103,6 +103,20 @@ class ApiServer:
             return {"node": node.model_dump(), "tasks": tasks}
         if verb in WRITE_VERBS:
             return await self._write(verb, args)
+        if verb == "cap.list":
+            return [
+                c.model_dump()
+                for c in sorted(await self.bus.list_capabilities(), key=lambda c: c.agent_id)
+            ]
+        if verb == "grant.list":
+            return [
+                g.model_dump()
+                for g in sorted(await self.bus.list_grants(), key=lambda g: g.agent_id)
+            ]
+        if verb == "trust.list":
+            return [t.model_dump() for t in await self.bus.list_trust()]
+        if verb == "ledger.read":
+            return await self.bus.read_ledger()
         raise ValueError(f"unknown verb {verb!r}")
 
     # -- M11b: write path ----------------------------------------------------
