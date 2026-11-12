@@ -516,11 +516,16 @@ class Bus:
             )
             log.info("created trust KV bucket %s", TRUST_BUCKET)
 
+    @staticmethod
+    def _trust_key(subject: str) -> str:
+        """NATS KV keys reject ':' — sanitize worker identities."""
+        return f"trust.{subject.replace(':', '.')}"
+
     async def trust_entry(self, subject: str) -> TrustEntry | None:
         """Return the current trust entry for an agent, or None if absent."""
         assert self._trust is not None
         try:
-            entry = await self._trust.get(f"trust.{subject}")
+            entry = await self._trust.get(self._trust_key(subject))
         except (KeyError, NotFoundError):
             return None
         return TrustEntry.model_validate_json(entry.value)
@@ -539,7 +544,7 @@ class Bus:
             credit=credit,
             attribution=list(attribution or []),
         )
-        await self._trust.put(f"trust.{subject}", entry.model_dump_json().encode())
+        await self._trust.put(self._trust_key(subject), entry.model_dump_json().encode())
         return entry
 
     async def trust_decay(self, subject: str) -> TrustEntry:
@@ -554,7 +559,7 @@ class Bus:
             credit=credit,
             attribution=list(current.attribution if current else []),
         )
-        await self._trust.put(f"trust.{subject}", entry.model_dump_json().encode())
+        await self._trust.put(self._trust_key(subject), entry.model_dump_json().encode())
         return entry
 
     async def list_trust(self) -> list[TrustEntry]:
