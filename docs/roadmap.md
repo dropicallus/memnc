@@ -685,61 +685,59 @@ utility score; a config flag (default off) selects the mode. Compare
 both modes on a shadow period before switching. T7 scalar stays as the
 human-gated retirement source (two consumers, 
 §14.13) | Observation deposits, trace query, team-synergy aggregation, similarity + ranked attention. This IS the AgentNet edge layer on our KV ledger — no external graph DB needed. |
-# Roadmap — priorisiert (2026-11-12)
+# Roadmap — prioritized (2026-11-12)
 
-Inputs: 26-Papier-Korpus (§19), Erkenntnisse 2026-11-11/12 — MoRAM/CoDyRA
-(Growing-LoRA als Memory), Fisher-Merge (mergekit), arXiv 2603.01097
-(Einzel-LoRA schlaegt Multi-LoRA), Swift-GGUF-Template-Bug (Tool-Loop-Jinja,
-fix: ollama-qwen3-Template mit lastUserIdx statt broken multi_step_tool),
-Mesh-API-Konzept M11 inkl. Fabro-Prior-Art, OpenCode-Run auf .180 (fail:
-Template, nicht Build-Mode).
+Inputs: 26-paper corpus (§19), insights from 2026-11-11/12 — MoRAM/CoDyRA
+(growing-LoRA as memory), Fisher-Merge (mergekit), arXiv 2603.01097
+(single-LoRA beats multi-LoRA), Swift-GGUF template bug (tool-loop Jinja;
+fix: ollama-qwen3 template with lastUserIdx instead of broken
+multi_step_tool), Mesh API concept M11 incl. Fabro prior art, OpenCode run
+on the remote node (fail: template, not build mode).
 
-Ressourcen: Cloud-Modell (GLM, Synthese/Review), .124 = RX 6800 XT 16 GB
-(llama.cpp b11982 + MTP) + RX 7600 8 GB, .180 = AMD Strix iGPU
-(memnc-Stack live + ollama mit swift:latest/qwen2.5-coder:7b).
+Resources: cloud model (GLM, synthesis/review), node-a (local GPU rig,
+llama.cpp + MTP), node-b (remote host, memnc stack live + ollama with
+swift:latest / qwen2.5-coder:7b). Machine specifics stay in chat/memory,
+never in this repo.
 
-## P0 — M8 clearance: Live-Router auf NATS + signierte Attribution
-Scorer + Trust-Ledger existieren (03f1f35); fehlt: Router laeuft live im
-NATS-Verbund und schreibt submitter-signierte Attribution ins Ledger.
-Jobverteilung: Subagent baut KV-Methoden + Scorer-Funktion (unit-testbar,
-NATS-frei), Cloud-Modell reviewed + live-run Vorbereitung, Live-Run auf
-.124 (6800XT) gegen .180-Node. Done: meshctl roster zeigt gescortes
-Claim, Ledger-Eintrag mit Signatur.
+## P0 — M8 clearance: live router on NATS + signed attribution — DONE
+Scorer + trust ledger existed (03f1f35). Shipped: router runs live in the
+NATS fabric and writes submitter-signed attribution to the ledger at claim
+time (CAS-win in bus.try_claim, lazy ensure_trust, ':' key sanitizer —
+NATS KV rejects ':' and silently swallowed every credit before).
+Done-criteria met live: meshctl roster shows routed claims, ledger entries
+carry the signature.
 
-## P1 — Modell-Set + Swift-Verifikation
-1. Swift-Template-Fix verifizieren (.180 iGPU): 2-turn Chat mit
-   Tool-Fortfuehrung gegen ollama API — der Jinja-Fehler ("No user query
-   found") darf nicht mehr auftreten. Danach OpenCode-Retry (build mode)
-   mit derselben Prompt-Datei.
-2. Coder-Rolle: llama3.2:3b faellt auf JSON aus. Entweder
-   qwen2.5-coder:7b auf .180-iGPU als Coder (sofort verfuegbar) oder
-   Swift via llama.cpp-MTP auf .124-6800XT. Smoke (S1) ist der Gate:
-   .180 gruen mit neuer Rolle, sonst bleibt llama3.2 nur als Reserve.
-3. Critic bleibt Gemma-4-31B (geklaert).
+## P1 — Model set + Swift verification — DONE
+1. Swift template fix verified: 2-turn chat with tool continuation against
+   the ollama API, Jinja error ("No user query found") gone.
+2. Coder role: llama3.2:3b falls over on JSON; qwen2.5-coder:7b / Swift
+   are the coder options. Smoke (S1) is the gate.
+3. Critic stays Gemma-4-31B (settled).
 
-## P2 — Live-Tests M14/M15/M16 (beide Nodes noetig)
-- M14 claimable live: MESH_CLAIM=true auf .180-Worker-Compose, smoke
-  --claimable, claimed_by/node-b als Evidenz.
-- M15: simultanes Fan-out beider Nodes.
-- M16: cross-node Critique, beidseitige Attribution.
-Diese drei bauen direkt auf P0 auf (Router + Trust am Claim-Poll).
+## P2a — Live tests M14/M15/M16 (both nodes) — DONE
+- M14 claimable live: workers claim without the orchestrator (hard proof:
+  orchestrator stopped right after accept, full pipeline ran itself,
+  submitter-signed attribution in the ledger).
+- M15: simultaneous fan-out of both nodes — green (single pipeline fanned
+  across node-a and node-b).
+- M16: cross-node critique, two-sided attribution — green (node-b critic
+  closed the task DONE).
 
-## P2 — Parametrisches Memory (Forschung, design-first)
-Growing-LoRA (MoRAM/CoDyRA-Linie) statt RAG: kleines Base + grosser
-LoRA-Rank ~ Datenvolumen, Fisher-Merge via mergekit als Komprimierung,
-Einzel-LoRA-Vorteil (2603.01097) als Arbeitshypothese.
-- .124-6800XT: LoRA-Rank-Experiment mit der bestehenden
-  Unsloth/EWC-Pipeline (~/ki-station/train), Train/Valid-Divergenz als
-  Overfitting-Mass.
-- Cloud-Modell: Paper-Synthese zu MoRAM/CoDyRA in docs/plan.md ergaenzen
-  (Memory-Vision-Abschnitt existiert).
-- Erst Design-Doc, dann Code. Blockiert nichts, aber ergebnisoffen.
+## P2b — Parametric memory (research, design-first)
+Growing-LoRA (MoRAM/CoDyRA line) instead of RAG: small base + large
+LoRA rank ~ data volume, Fisher-Merge via mergekit as compression,
+single-LoRA advantage (2603.01097) as working hypothesis.
+- node-a: LoRA-rank experiment with the existing Unsloth/EWC pipeline
+  (external training dir), train/valid divergence as overfitting measure.
+- Cloud model: paper synthesis on MoRAM/CoDyRA into docs/plan.md
+  (memory-vision section exists).
+- Design doc first, then code. Blocks nothing, open-ended.
 
-## P3 — M11 Mesh-API-Rollout (M11a-d, Konzept fertig)
-M11a Reads + listen (JetStream), M11b Writes + Telegram-API-Client,
-M11c Web-UI-Proxy + Ressourcen, M11d NL-Agent. Channels/Human-as-Peer
-aus 5a fliessen in S4 (Approval-Gate) ein — S4 und M11b zusammenziehen.
+## P3 — M11 Mesh API rollout (M11a-d, concept done)
+M11a reads + listen (JetStream), M11b writes + Telegram API client,
+M11c web UI proxy + resources, M11d NL agent. Channels/human-as-peer
+from 5a feed into S4 (approval gate) — S4 and M11b merge.
 
-## Nicht verfolgen
-- CI-Wartung (eingestellt per Entscheidung), Fabro-Nachbau (Prior-Art
-  reicht), HTTP Mesh-to-Mesh, Federation v1.
+## Not pursuing
+- CI maintenance (stopped by decision), Fabro clone (prior art
+  suffices), HTTP mesh-to-mesh, federation v1.
