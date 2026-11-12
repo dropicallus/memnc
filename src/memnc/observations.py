@@ -70,6 +70,31 @@ class TaskObservation(BaseModel):
         return f"obs.{self.task_id}.{self.schema_version}"
 
 
+def format_observations(
+    observations: list[TaskObservation],
+    model_filter: str | None = None,
+    limit: int = 10,
+) -> str:
+    """Human trace view (14.13 step 2): latest observations, newest first.
+
+    model_filter keeps only observations where the model served in any role.
+    """
+    if model_filter:
+        needle = model_filter.lower()
+        observations = [
+            o for o in observations if needle in [m.lower() for m in o.model_names()]
+        ]
+    if not observations:
+        return "no observations"
+    out = ["task | outcome | route | rev | at"]
+    for o in sorted(observations, key=lambda o: o.observed_at, reverse=True)[:limit]:
+        route = ",".join(f"{role}:{o.route[role]}" for role in sorted(o.route)) or "-"
+        out.append(
+            f"{o.task_id} | {o.outcome} | {route} | {o.revisions} | {o.observed_at}"
+        )
+    return "\n".join(out)
+
+
 def observation_from_snapshot(snapshot: TaskSnapshot) -> TaskObservation | None:
     """Build an observation from a terminal task snapshot.
 

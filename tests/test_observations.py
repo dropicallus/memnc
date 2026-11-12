@@ -10,6 +10,7 @@ from memnc.config import Settings
 from memnc.observations import (
     OBSERVATION_SCHEMA_VERSION,
     TaskObservation,
+    format_observations,
     observation_from_snapshot,
 )
 from memnc.schema import CriticOutput, TaskSnapshot, TaskState
@@ -293,3 +294,44 @@ class TestOrchestratorDeposit:
         snap.critique = CriticOutput(approved=True, summary="ok")
         await orch._apply(snap, Event("result", ok=True, approved=True))
         assert orch.bus.snapshots["t1"].state is TaskState.DONE
+
+
+class TestFormatObservations:
+    def _obs(self, task_id: str, route: dict[str, str], at: str) -> TaskObservation:
+        return TaskObservation(
+            task_id=task_id,
+            trace_id=f"tr-{task_id}",
+            task="x",
+            outcome="done",
+            route=route,
+            observed_at=at,
+        )
+
+    def test_empty(self) -> None:
+        assert format_observations([]) == "no observations"
+
+    def test_newest_first_and_limit(self) -> None:
+        obs = [
+            self._obs("t1", {"coder": "n:llama"}, "2026-01-01T00:00:00Z"),
+            self._obs("t2", {"coder": "n:llama"}, "2026-01-02T00:00:00Z"),
+            self._obs("t3", {"coder": "n:gemma"}, "2026-01-03T00:00:00Z"),
+        ]
+        out = format_observations(obs, limit=2)
+        lines = out.splitlines()
+        assert lines[0] == "task | outcome | route | rev | at"
+        assert "t3 " in lines[1] or "t3 |" in lines[1]
+        assert "t2" in lines[2]
+        assert "t1" not in out
+
+    def test_model_filter_case_insensitive(self) -> None:
+        obs = [
+            self._obs("t1", {"coder": "node-a:LLAMA"}, "2026-01-01T00:00:00Z"),
+            self._obs("t2", {"coder": "n:gemma"}, "2026-01-02T00:00:00Z"),
+        ]
+        out = format_observations(obs, model_filter="llama")
+        assert "t1" in out
+        assert "t2" not in out
+
+    def test_filter_no_match(self) -> None:
+        obs = [self._obs("t1", {"coder": "n:llama"}, "2026-01-01T00:00:00Z")]
+        assert format_observations(obs, model_filter="gemma") == "no observations"

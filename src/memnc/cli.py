@@ -207,6 +207,20 @@ async def cmd_tasks(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
+    """14.13 step 2: latest deposited observations, optional model filter."""
+    from memnc.observations import format_observations
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        observations = await bus.list_observations()
+        print(format_observations(observations, args.model, args.limit))
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
     """T6: list live node roster entries (capabilities + presence)."""
     bus = Bus(settings)
@@ -545,6 +559,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     roster = subparsers.add_parser("roster", help="T6: list live node capabilities")
     roster.set_defaults(func=cmd_roster)
+
+    obslast = subparsers.add_parser(
+        "obslast", help="14.13 step 2: latest deposited task observations"
+    )
+    obslast.add_argument("--model", default=None, help="only tasks served by MODEL")
+    obslast.add_argument("--limit", type=int, default=10)
+    obslast.set_defaults(func=cmd_obslast)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
     tail.add_argument("task_id")
