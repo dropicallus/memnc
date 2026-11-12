@@ -701,6 +701,7 @@ class Bus:
         # the moment the CAS claim wins, because the orchestrator referee loop
         # ticks every 5s and loses the race against a fast worker otherwise.
         try:
+            await self.ensure_trust()
             await self.trust_credit(
                 worker_id,
                 "claim",
