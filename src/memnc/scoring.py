@@ -56,3 +56,35 @@ def score_candidates(
         scored.append((c.agent_id, score))
 
     return sorted(scored, key=lambda x: x[1], reverse=True)
+
+def router_candidates(nodes, trust: dict[str, float]):
+    """M8: build SwarmHarness Candidates from T6 roster + trust ledger.
+
+    Pure function so the live router can be unit-tested without NATS.
+    Paused nodes are skipped (human pause wins over any utility score).
+    """
+
+    out = []
+    for n in nodes:
+        if n.paused:
+            continue
+        out.append(
+            Candidate(
+                agent_id=n.node_id,
+                skill=",".join(n.roles) or "any",
+                capacity=max(1, int(n.vram_gb or 1)),
+                load=min(1.0, max(0.0, n.load or 0.0)),
+                latency=0.0,
+                trust=trust.get(n.node_id, 0.0),
+            )
+        )
+    return out
+
+
+def signed_attribution(snapshot) -> str:
+    """M8: one ledger entry = task, submitting node (the signature) + claimer."""
+    return (
+        f"task_{snapshot.task_id}"
+        f":submit={getattr(snapshot, 'origin_node', '')}"
+        f":claim={snapshot.claimed_by}"
+    )

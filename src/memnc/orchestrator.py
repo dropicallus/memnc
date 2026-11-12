@@ -38,8 +38,13 @@ from .schema import (
     now_iso,
     plan_model_request,
 )
+from .scoring import router_candidates, score_candidates, signed_attribution
 
 log = logging.getLogger(__name__)
+
+# M8: live router cadence + subject for published rankings.
+ROUTER_INTERVAL = 10.0
+ROUTER_SUBJECT = "mesh.router.scores"
 
 
 class Orchestrator:
@@ -53,6 +58,7 @@ class Orchestrator:
 
     async def start(self) -> None:
         await self.bus.connect()
+        self._router_task = asyncio.create_task(self._router_loop())
         Path(self.settings.workspace_root).mkdir(parents=True, exist_ok=True)
         assert self.bus.nc is not None
         self._submit_sub = await self.bus.nc.subscribe(
@@ -84,6 +90,8 @@ class Orchestrator:
         self._stop.set()
 
     async def aclose(self) -> None:
+        if hasattr(self, '_router_task'):
+            self._router_task.cancel()
         self._stop.set()
         await self.bus.close()
 
@@ -912,6 +920,12 @@ class Orchestrator:
                         "claimed_by": snapshot.claimed_by,
                     },
                 )
+                # M8: submitter-signed attribution into the trust ledger.
+                await self.bus.trust_credit(
+                    snapshot.claimed_by,
+                    "claim",
+                    attribution=[signed_attribution(snapshot)],
+                )
                 snapshot.record("task.claimed", snapshot.claimed_by)
                 await self.bus.put_snapshot(snapshot)
                 await self._apply(snapshot, Event("start"))
@@ -935,6 +949,46 @@ class Orchestrator:
                     "recovered in-flight task",
                     extra={"task_id": snapshot.task_id, "state": snapshot.state.value},
                 )
+
+
+
+    async def _router_loop(self) -> None:
+        """M8: live utility router over NATS.
+
+        Every ROUTER_INTERVAL: build the Candidate list from the T6 roster
+        (presence) + trust ledger, score it with the SwarmHarness scorer
+        and publish the ranking on ROUTER_SUBJECT. LLM-free (DEALS-style):
+        routing evidence comes from presence + trust metadata only.
+        """
+
+        while not self._stop.is_set():
+            try:
+                nodes = await self.bus.list_nodes()
+                trust = {
+                    t.subject: t.credit for t in await self.bus.list_trust()
+                }
+                candidates = router_candidates(nodes, trust)
+                ranking = score_candidates(candidates)
+                if ranking:
+                    await self.bus.nc.publish(
+                        ROUTER_SUBJECT,
+                        json.dumps(
+                            {
+                                "ts": now_iso(),
+                                "scores": [
+                                    {"agent": a, "score": round(s, 4)}
+                                    for a, s in ranking
+                                ],
+                            }
+                        ).encode(),
+                    )
+                    log.info(
+                        "router ranking published",
+                        extra={"top": ranking[0][0]},
+                    )
+            except Exception:  # noqa: BLE001 - the router must never die
+                log.exception("router loop error")
+            await asyncio.sleep(ROUTER_INTERVAL)
 
 
 async def _main() -> None:
