@@ -141,7 +141,22 @@ Design note: this only adds channel addressing and a human identity to the
 envelope — no new transport, no new consensus. A channel is a subject-namespace
 convention, not new state.
 
-## 6. Security
+## 6. Prior art
+
+- **Fabro** (github.com/fabro-sh/fabro, "dark software factory") - the
+  inspiration for human participation and channel UX. Takes: deterministic
+  DOT workflow graphs with hexagon approval gates, interview steps and
+  mid-turn steering (our `mediate`/`join` modes); CSS-like model routing
+  per node with fallback chains; durable event streams + REST/SSE runs
+  board (our `listen` + web UI); Git checkpointing per stage. Difference:
+  Fabro is a single central orchestrator (one binary, cloud sandboxes) -
+  no NATS mesh, no worker nodes with own GPUs, no reputation claim loop.
+  Our M11 is the decentralized counterpart: same interaction surface
+  (gates, channels, observability) over a NATS mesh.
+- **Buzz** - second reference for multi-channel human participation UX
+  (to be compared in a follow-up pass).
+
+## 7. Security
 
 - Reuse the existing ACL (`acl.py`, `meshctl grant`): every request envelope
   carries the sender identity; M8's submitter-signed attribution (D3) signs
@@ -150,7 +165,7 @@ convention, not new state.
   Telegram observer identity: read + a whitelist of writes.
 - No new credentials: NATS token + existing identities.
 
-## 7. Resource management (v2)
+## 8. Resource management (v2)
 
 - `node detail` aggregates: heartbeat, presence, queue depth, model routes,
   GPU VRAM (from llancherer), reputation (T4).
@@ -160,7 +175,7 @@ convention, not new state.
 - Optional guardrail: a warning when a node's task failure rate spikes
   (reputation already tracks this; the API only surfaces it).
 
-## 8. Non-goals
+## 9. Non-goals
 
 - No scheduler/resource-bin-packing of *tasks* (the claim loop stays
   reputation/trust-driven). The API observes and controls backends, it does
@@ -168,7 +183,7 @@ convention, not new state.
 - No new transport (no HTTP mesh-to-mesh, no gRPC): NATS is the bus.
 - No cross-mesh federation in v1.
 
-## 9. Rollout sketch
+## 10. Rollout sketch
 
 1. **M11a**: API server (anycast read path) + `node list/detail`, `listen`
    via JetStream consumer; meshctl routed through it. NATS-free unit tests
