@@ -38,7 +38,7 @@ from .schema import (
     now_iso,
     plan_model_request,
 )
-from .scoring import router_candidates, score_candidates, signed_attribution
+from .scoring import router_candidates, score_candidates
 
 log = logging.getLogger(__name__)
 
@@ -920,12 +920,7 @@ class Orchestrator:
                         "claimed_by": snapshot.claimed_by,
                     },
                 )
-                # M8: submitter-signed attribution into the trust ledger.
-                await self.bus.trust_credit(
-                    snapshot.claimed_by,
-                    "claim",
-                    attribution=[signed_attribution(snapshot)],
-                )
+                # M8: attribution is written by bus.try_claim at CAS win.
                 snapshot.record("task.claimed", snapshot.claimed_by)
                 await self.bus.put_snapshot(snapshot)
                 await self._apply(snapshot, Event("start"))

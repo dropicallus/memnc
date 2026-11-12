@@ -64,6 +64,7 @@ from .schema import (
     reputation_key,
     satisfies,
 )
+from .scoring import signed_attribution
 
 # How long a capability record lives without a refresh. Short TTL = presence:
 # dead/hung agents fall out of the registry on their own (plan §0.5, D5).
@@ -696,6 +697,17 @@ class Bus:
             )
         except Exception:  # noqa: BLE001 - CAS conflict: someone else was faster
             return None
+        # M8: submitter-signed attribution into the trust ledger — written at
+        # the moment the CAS claim wins, because the orchestrator referee loop
+        # ticks every 5s and loses the race against a fast worker otherwise.
+        try:
+            await self.trust_credit(
+                worker_id,
+                "claim",
+                attribution=[signed_attribution(snapshot)],
+            )
+        except Exception:  # noqa: BLE001 - the ledger is best-effort
+            pass
         return snapshot
 
     async def list_tasks(self) -> list[TaskSnapshot]:
