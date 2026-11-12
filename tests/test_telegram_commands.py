@@ -1,5 +1,7 @@
 """Pure-logic tests for the improved Telegram command formatting."""
 
+import pytest
+
 from memnc.telegram import format_roster, format_task, summarize_tasks
 
 
@@ -19,7 +21,9 @@ def test_summary_header_counts_by_state():
 
 
 def test_summary_shows_active_first_then_recent():
-    snaps = [snap(f"old{i}", "DONE") for i in range(20)] + [snap("new", "CRITIQUE", "node-a-critic:critic")]
+    snaps = [snap(f"old{i}", "DONE") for i in range(20)] + [
+        snap("new", "CRITIQUE", "node-a-critic:critic")
+    ]
     out = summarize_tasks(snaps, limit=5)
     lines = out.splitlines()
     # active task appears before any terminal one
@@ -61,7 +65,9 @@ def test_format_roster_lines():
     ]
     out = format_roster(nodes)
     assert "1 nodes:" in out
-    assert "node-a-coder roles=coder models=llama3.2:3b vram=16GB gpu=test-gpu-a" in out  # leakscan:ok
+    assert (
+        "node-a-coder roles=coder models=llama3.2:3b vram=16GB gpu=test-gpu-a" in out
+    )  # leakscan:ok
 
 
 def test_format_roster_empty():
@@ -72,3 +78,89 @@ def test_format_task_shows_title():
     out = format_task(snap("abc123", "DONE", claimed_by="node-a-critic:critic"))
     assert "#abc123 DONE" in out
     assert "do the thing" in out
+
+
+# ---- /nodes list via the mesh API (M11a) ------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_nodes_command_uses_mesh_api(monkeypatch):
+    import types
+
+    from memnc.telegram import TelegramObserver
+
+    sent = []
+    nodes = [
+        {
+            "node_id": "node-a-coder",
+            "roles": ["coder"],
+            "models": ["llama3.2:3b"],
+            "vram_gb": 16.0,
+            "gpu": "test-gpu-a",
+        }
+    ]
+
+    async def fake_api_request(bus, verb, **kwargs):
+        assert verb == "node.list"
+        return {"ok": True, "data": nodes}
+
+    monkeypatch.setattr("memnc.api.api_request", fake_api_request)
+
+    class FakeBot:
+        async def send_message(self, chat, text):
+            sent.append(text)
+
+    obs = types.SimpleNamespace(bot=FakeBot(), bus=None, allowed=set())
+    await TelegramObserver.handle_command(obs, "chat1", "/nodes")  # type: ignore[attr-defined]
+    out = sent[0]
+    assert "1 nodes:" in out
+    assert "node-a-coder roles=coder" in out  # leakscan:ok
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_node_without_arg_lists_too(monkeypatch):
+    import types
+
+    from memnc.telegram import TelegramObserver
+
+    sent = []
+
+    async def fake_api_request(bus, verb, **kwargs):
+        assert verb == "node.list"
+        return {"ok": True, "data": []}
+
+    monkeypatch.setattr("memnc.api.api_request", fake_api_request)
+
+    class FakeBot:
+        async def send_message(self, chat, text):
+            sent.append(text)
+
+    obs = types.SimpleNamespace(bot=FakeBot(), bus=None)
+    await TelegramObserver.handle_command(obs, "chat1", "/node")  # type: ignore
+    assert sent == ["no nodes in roster"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_node_with_name_still_details(monkeypatch):
+    import types
+
+    from memnc.telegram import TelegramObserver
+
+    sent = []
+
+    async def fake_api_request(bus, verb, **kwargs):
+        assert verb == "node.detail" and kwargs == {"node_id": "node-a-coder"}
+        return {"ok": True, "data": {"node": {"node_id": "node-a-coder"}, "tasks": []}}
+
+    monkeypatch.setattr("memnc.api.api_request", fake_api_request)
+
+    class FakeBot:
+        async def send_message(self, chat, text):
+            sent.append(text)
+
+    obs = types.SimpleNamespace(bot=FakeBot(), bus=None)
+    await TelegramObserver.handle_command(obs, "chat1", "/node node-a-coder")  # type: ignore
+    assert "node node-a-coder" in sent[0]
