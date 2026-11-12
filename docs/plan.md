@@ -556,6 +556,25 @@ Source: `~/research-papers/analysis_priors_proposal.md`; full synthesis with LoR
 - **P1 — Neutral consensus prompts (04_majority_following):** trust-weighted voting in the ledger (`w_i ∝ β_i`); neutral, shuffled option labels when collecting worker votes; 2–3 debate rounds suffice for capable participants.
 - **P2 — Incentive governance (2605_25815):** complexity-weighted evaluation metrics (logical depth over file counts) to prevent score inflation in self-evolving worker populations (`memnc/evaluation/`).
 
+### 19.2 New insights 2026-11-11/12 (research + competition check)
+
+- **P1 — DEALS (2609.33768):** decentralized routing without LLM calls —
+  direct prior art for M8's utility scorer: score candidates from
+  presence/trust metadata only, no model call in the routing path.
+  Validation: our scorer (03f1f35) already follows this shape; keep it
+  LLM-free permanently.
+- **P1 — ToolSched (2611.05269):** resource-aware shell scheduling for
+  shared local hosts (+148% resource utilization) — informs T6 needs-
+  constraints (roster advertises RAM/VRAM/load) and M11c resource verbs.
+- **P2 — Single-LoRA dominance (2603.01097):** one consolidated LoRA beats
+  a portfolio of specialized LoRAs — counter-pressure on B2/B4: merge role
+  adapters aggressively (Fisher-Merge), do not accumulate adapters per
+  role long-term.
+- **P2 — MoRAM/CoDyRA line:** Growing-LoRA as parametric memory (large
+  rank ~ data volume, untrained capacity = overfitting risk, measured via
+  train/valid divergence) — design-first track in roadmap P2b, replaces
+  RAG for the memory vision.
+
 ### 19.1 Build order: research → mesh integration (triage )
 
 Triage of the 26-paper corpus against the current roadmap. Ordering rule: the
