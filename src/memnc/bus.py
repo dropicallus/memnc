@@ -64,6 +64,7 @@ from .schema import (
     reputation_key,
     satisfies,
 )
+from .scoring import signed_attribution
 
 # How long a capability record lives without a refresh. Short TTL = presence:
 # dead/hung agents fall out of the registry on their own (plan §0.5, D5).
@@ -515,11 +516,16 @@ class Bus:
             )
             log.info("created trust KV bucket %s", TRUST_BUCKET)
 
+    @staticmethod
+    def _trust_key(subject: str) -> str:
+        """NATS KV keys reject ':' — sanitize worker identities."""
+        return f"trust.{subject.replace(':', '.')}"
+
     async def trust_entry(self, subject: str) -> TrustEntry | None:
         """Return the current trust entry for an agent, or None if absent."""
         assert self._trust is not None
         try:
-            entry = await self._trust.get(f"trust.{subject}")
+            entry = await self._trust.get(self._trust_key(subject))
         except (KeyError, NotFoundError):
             return None
         return TrustEntry.model_validate_json(entry.value)
@@ -538,7 +544,7 @@ class Bus:
             credit=credit,
             attribution=list(attribution or []),
         )
-        await self._trust.put(f"trust.{subject}", entry.model_dump_json().encode())
+        await self._trust.put(self._trust_key(subject), entry.model_dump_json().encode())
         return entry
 
     async def trust_decay(self, subject: str) -> TrustEntry:
@@ -553,7 +559,7 @@ class Bus:
             credit=credit,
             attribution=list(current.attribution if current else []),
         )
-        await self._trust.put(f"trust.{subject}", entry.model_dump_json().encode())
+        await self._trust.put(self._trust_key(subject), entry.model_dump_json().encode())
         return entry
 
     async def list_trust(self) -> list[TrustEntry]:
@@ -696,6 +702,18 @@ class Bus:
             )
         except Exception:  # noqa: BLE001 - CAS conflict: someone else was faster
             return None
+        # M8: submitter-signed attribution into the trust ledger — written at
+        # the moment the CAS claim wins, because the orchestrator referee loop
+        # ticks every 5s and loses the race against a fast worker otherwise.
+        try:
+            await self.ensure_trust()
+            await self.trust_credit(
+                worker_id,
+                "claim",
+                attribution=[signed_attribution(snapshot)],
+            )
+        except Exception:  # noqa: BLE001 - the ledger is best-effort
+            pass
         return snapshot
 
     async def list_tasks(self) -> list[TaskSnapshot]:

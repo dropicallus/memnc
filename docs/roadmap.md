@@ -18,9 +18,9 @@ Goal: both nodes are **architecturally identical** — every node can submit, pl
 
 | Step | Content | Done criterion |
 |---|---|---|
-| **M12 — M11 live, both nodes** | Rebuild Node A with M11 code; bring Node B (maco) up to the current state (`docker-compose.node.yml`); `mesh_claim=true` on Node-B workers; live test: `meshctl submit --claimable` → Node-B worker claims via CAS and runs the pipeline | Task submitted on A, claimed+DONE by B; second run in reverse (B submits → A claims) | **[DONE ]** |
+| **M12 — M11 live, both nodes** | Rebuild Node A with M11 code; bring Node B up to the current state (`docker-compose.node.yml`); `mesh_claim=true` on Node-B workers; live test: `meshctl submit --claimable` → Node-B worker claims via CAS and runs the pipeline | Task submitted on A, claimed+DONE by B; second run in reverse (B submits → A claims) | **[DONE ]** |
 | **M13 — Agent as live submitter** | Coder/planner agent calls `mesh_submit` from inside a running task; the subtask lands in the mesh and is claimed by the *other* node | Proof: task on A creates a subtask, B works it off (and vice versa); `meshctl ledger` shows both nodes as submitter+claimer | **[DONE ]** |
-| **M14 — Orchestrator-less dispatch** | Claimable tasks get `next_role`; only the matching role can claim (CAS role gate); the claiming worker continues the pipeline **itself** (reuses FSM `transition`) and makes the next step claimable (RECEIVED→PLANNING→CODING→CRITIQUE→DONE). Orchestrator remains a pure spectator; `_dispatch_claimed` optional | Submit with the orchestrator stopped: task is still claimed and executed; orchestrator restart only aggregates | **[CODE DONE , commit b49e142: next_role field, role-gated CAS claim, worker starts the pipeline itself (reuses FSM `transition`), orchestrator skips worker-driven tasks; 124 unit tests green. LIVE TEST STILL OPEN: deploy images, claimable submission, verify the pipeline without orchestrator dispatch]** |
+| **M14 — Orchestrator-less dispatch** | Claimable tasks get `next_role`; only the matching role can claim (CAS role gate); the claiming worker continues the pipeline **itself** (reuses FSM `transition`) and makes the next step claimable (RECEIVED→PLANNING→CODING→CRITIQUE→DONE). Orchestrator remains a pure spectator; `_dispatch_claimed` optional | Submit with the orchestrator stopped: task is still claimed and executed; orchestrator restart only aggregates | **[CODE DONE , commit b49e142: next_role field, role-gated CAS claim, worker starts the pipeline itself (reuses FSM `transition`), orchestrator skips worker-driven tasks; 124 unit tests green. LIVE TEST DONE: claimable run (task 1a1cf0) submitted, orchestrator stopped immediately after accept; workers ran the full pipeline themselves (planner -> coder -> critic -> DONE) and every claim wrote its submitter-signed attribution entry to the trust ledger. Earlier claimable smoke runs with the orchestrator up also green (referee spectator role confirmed)]** |
 | **M15 — Symmetric topology** | Node B runs its own orchestrator (responsible only for its own submissions/fan-out); one broker (NATS A) or leaf nodes; both nodes config-identical except models | Both nodes submit fan-out tasks simultaneously without collision (CAS/KV protects); docs §3 updated | **[CODE DONE /03, commits 86fc593 + 928e2ed: owner-routed submit subjects, origin_node, ownership guards, worker-side fanout split, Node-B orchestrator service, wildcard submit subscription + per-node durable names + legacy node-a acceptance; LIVE TEST STILL OPEN: simultaneous fan-out run of both nodes]** |
 | **M16 — Demo: real peer orchestration** | A task is placed on B, B plans, fan-out lands symmetrically on A+B, both models (different Ollamas) work each other's shares, cross-node critique | End-to-end run with alternating direction ×2 (A→B and B→A shares), `task.done` with bidirectional attribution in the ledger |
 
@@ -35,10 +35,10 @@ This stage comes **after** M16 (real peer orchestration live) and turns the mesh
 
 | Step | Content | Done criterion |
 |---|---|---|
-| **S1 — Smoke gate** | Make `scripts/smoke.sh` hard: submit → poll `state` until DONE/FAILED with timeout (instead of a blind `tail --limit`); assert on end state DONE, exit code 0/1 (CI-capable); modes `--claimable` (referee mode: orchestrator accepts but does not distribute — workers with `MESH_CLAIM=true` claim on their own = M14 proof) and `--fanout`; runnable against both the Ollama AND the OpenAI backend (`INFERENCE_PROVIDER` parameter) | `./scripts/smoke.sh` ends green on maco and on .180; red exit when the task FAILED/times out; smoke reused for the M14/M15/M16 live tests |
+| **S1 — Smoke gate** | Make `scripts/smoke.sh` hard: submit → poll `state` until DONE/FAILED with timeout (instead of a blind `tail --limit`); assert on end state DONE, exit code 0/1 (CI-capable); modes `--claimable` (referee mode: orchestrator accepts but does not distribute — workers with `MESH_CLAIM=true` claim on their own = M14 proof) and `--fanout`; runnable against both the Ollama AND the OpenAI backend (`INFERENCE_PROVIDER` parameter) | `./scripts/smoke.sh` ends green on both nodes; red exit when the task FAILED/times out; smoke reused for the M14/M15/M16 live tests |
 
-**S1 result ():** green on maco (pipeline PLANNING→CODING→CRITIQUE→DONE in 39 s, commit `39be633`). Observations: mannix tool-schema jitter (4/7 calls with wrong argument names), critic laxity (`hello from memnc` instead of `hello from the mesh` passed) — both S2/S4-relevant. On .180 the gate correctly went red: llama3.2:3b attempted 6/7 tool calls with wrong argument nesting (`p:` instead of `pattern:`, `f:` instead of `path:`) and wrote a 6-byte-truncated hello.py → FAILED/exit 1 (gate behavior correct); qwen2.5-coder:7b failed as planner ("no JSON object found"), while a direct Ollama probe with a minimal prompt immediately produced perfect JSON → the problem is the long planner prompt/context situation on the CPU box, not the model in general. **M14 `--claimable` live: pending** — submitting works (task lands RECEIVED/claimable), but no claim happens because `MESH_CLAIM=false` on all workers of both nodes; next step: `MESH_CLAIM=true` on the .180 worker compose, repeat the smoke test with `--claimable`, document the claim transitions (claimed_by/node-b) as evidence.
-| **S2 — Swift as default backend** | Worker compose to `INFERENCE_PROVIDER=openai`, `INFERENCE_BASE_URL=http://host.docker.internal:8097/v1`, `MODEL_*` to Swift-1.5 (Qwen3.8-27B GSQ, llama-server :8097); mannix 27b gets offloaded from the 6800XT (VRAM: Swift ~13 GB + mannix 16 GB do not fit together); mannix stays the reserve model for discussion rounds | Smoke (S1) green with Swift; `meshctl doctor` shows Swift latency; no thinking leaks (Swift thinks briefly, the num_ctx budget holds) |
+**S1 result ():** green (pipeline PLANNING→CODING→CRITIQUE→DONE in 39 s, commit `39be633`). Observations: mannix tool-schema jitter (4/7 calls with wrong argument names), critic laxity (`hello from memnc` instead of `hello from the mesh` passed) — both S2/S4-relevant. On node-b the gate correctly went red: llama3.2:3b attempted 6/7 tool calls with wrong argument nesting (`p:` instead of `pattern:`, `f:` instead of `path:`) and wrote a 6-byte-truncated hello.py → FAILED/exit 1 (gate behavior correct); qwen2.5-coder:7b failed as planner ("no JSON object found"), while a direct Ollama probe with a minimal prompt immediately produced perfect JSON → the problem is the long planner prompt/context situation on the CPU box, not the model in general. **M14 `--claimable` live: pending** — submitting works (task lands RECEIVED/claimable), but no claim happens because `MESH_CLAIM=false` on all workers of both nodes; next step: `MESH_CLAIM=true` on the node-b worker compose, repeat the smoke test with `--claimable`, document the claim transitions (claimed_by/node-b) as evidence.
+| **S2 — Swift as default backend** | Worker compose to `INFERENCE_PROVIDER=openai`, `INFERENCE_BASE_URL=http://host.docker.internal:8097/v1`, `MODEL_*` to Swift-1.5 (Qwen3.8-27B GSQ, llama-server :8097); the 27b coder gets offloaded when VRAM is contended (Swift ~13 GB + coder ~16 GB do not fit together); mannix stays the reserve model for discussion rounds | Smoke (S1) green with Swift; `meshctl doctor` shows Swift latency; no thinking leaks (Swift thinks briefly, the num_ctx budget holds) |
 | **S3 — UI (mesh console)** | Local web console (small HTTP server, no framework obligation): task list + state colors, ledger view (registry/grants/trust), live `tail` (SSE or polling), node roster with load/latency; read-only — writes nothing | `http://localhost:<port>` shows live the same state as `meshctl ledger`/`tasks`; works from both nodes (Node-B renders against its own broker) | — **IMPLEMENTED :** `src/memnc/console.py` (stdlib `ThreadingHTTPServer`, polling frontend 3 s, tasks/caps/grants/trust/ledger, task-detail snapshot via `/api/task/<id>`; `python -m memnc.console --port 8790`)
 | **S4 — Human-in-the-loop (steering)** | Approval gate in the critique step: task parks in CRITIQUE with the `needs_human=true` flag (KV), console/Telegram shows diff+verdict, human approves/rejects → FSM continues; Telegram bot as the second interface (submit, approve, tail); grants remain the authorization layer (M9) | End-to-end: task with a criticism-worthy patch parks, human rejects → revision loop, approves → DONE; everything operable from Telegram too |
 
@@ -685,3 +685,59 @@ utility score; a config flag (default off) selects the mode. Compare
 both modes on a shadow period before switching. T7 scalar stays as the
 human-gated retirement source (two consumers, 
 §14.13) | Observation deposits, trace query, team-synergy aggregation, similarity + ranked attention. This IS the AgentNet edge layer on our KV ledger — no external graph DB needed. |
+# Roadmap — prioritized (2026-11-12)
+
+Inputs: 26-paper corpus (§19), insights from 2026-11-11/12 — MoRAM/CoDyRA
+(growing-LoRA as memory), Fisher-Merge (mergekit), arXiv 2603.01097
+(single-LoRA beats multi-LoRA), Swift-GGUF template bug (tool-loop Jinja;
+fix: ollama-qwen3 template with lastUserIdx instead of broken
+multi_step_tool), Mesh API concept M11 incl. Fabro prior art, OpenCode run
+on the remote node (fail: template, not build mode).
+
+Resources: cloud model (GLM, synthesis/review), node-a (local GPU rig,
+llama.cpp + MTP), node-b (remote host, memnc stack live + ollama with
+swift:latest / qwen2.5-coder:7b). Machine specifics stay in chat/memory,
+never in this repo.
+
+## P0 — M8 clearance: live router on NATS + signed attribution — DONE
+Scorer + trust ledger existed (03f1f35). Shipped: router runs live in the
+NATS fabric and writes submitter-signed attribution to the ledger at claim
+time (CAS-win in bus.try_claim, lazy ensure_trust, ':' key sanitizer —
+NATS KV rejects ':' and silently swallowed every credit before).
+Done-criteria met live: meshctl roster shows routed claims, ledger entries
+carry the signature.
+
+## P1 — Model set + Swift verification — DONE
+1. Swift template fix verified: 2-turn chat with tool continuation against
+   the ollama API, Jinja error ("No user query found") gone.
+2. Coder role: llama3.2:3b falls over on JSON; qwen2.5-coder:7b / Swift
+   are the coder options. Smoke (S1) is the gate.
+3. Critic stays Gemma-4-31B (settled).
+
+## P2a — Live tests M14/M15/M16 (both nodes) — DONE
+- M14 claimable live: workers claim without the orchestrator (hard proof:
+  orchestrator stopped right after accept, full pipeline ran itself,
+  submitter-signed attribution in the ledger).
+- M15: simultaneous fan-out of both nodes — green (single pipeline fanned
+  across node-a and node-b).
+- M16: cross-node critique, two-sided attribution — green (node-b critic
+  closed the task DONE).
+
+## P2b — Parametric memory (research, design-first)
+Growing-LoRA (MoRAM/CoDyRA line) instead of RAG: small base + large
+LoRA rank ~ data volume, Fisher-Merge via mergekit as compression,
+single-LoRA advantage (2603.01097) as working hypothesis.
+- node-a: LoRA-rank experiment with the existing Unsloth/EWC pipeline
+  (external training dir), train/valid divergence as overfitting measure.
+- Cloud model: paper synthesis on MoRAM/CoDyRA into docs/plan.md
+  (memory-vision section exists).
+- Design doc first, then code. Blocks nothing, open-ended.
+
+## P3 — M11 Mesh API rollout (M11a-d, concept done)
+M11a reads + listen (JetStream), M11b writes + Telegram API client,
+M11c web UI proxy + resources, M11d NL agent. Channels/human-as-peer
+from 5a feed into S4 (approval gate) — S4 and M11b merge.
+
+## Not pursuing
+- CI maintenance (stopped by decision), Fabro clone (prior art
+  suffices), HTTP mesh-to-mesh, federation v1.

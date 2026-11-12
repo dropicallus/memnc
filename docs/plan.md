@@ -493,7 +493,7 @@ scripts/
 
 §0.5) | An external harness (Hermes/pi, then Claude Code) joins the mesh via `memnc.agent`, advertises skills in `mesh.registry` KV, receives anycast work, replies; **adapter+registry done (commit 374fa3e); meshctl registry view is the remaining M7-CLR clearance** |
 | M8 | Utility routing + presence + trust (§0.5) | Router scores `U=w1·cap+w2·(1−load)+w3·(1−lat)+w4·trust` over presence KV (TTL); `meshctl` shows live roster + load; **trust ledger, submitter-signed attribution, >1 concurrent router work (SwarmHarness)**; multi-machine topology documented in §3; **trust ledger + utility scorer done (commit 03f1f35); live router on NATS + submitter-signed attribution is the remaining M8 clearance** |
-| M9 | Subject identity + ACLs + capability gate (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; **registry write authorized via orchestrator grant, deny-by-default (ormica permission-chain)**; documented in §5.2 + architecture.md; **grant ledger + gate (acl.py, deny-by-default) + meshctl grant/grants/revoke done (M9); LIVE GATED 2-NODE RUN PASSED : node B ([REDACTED], maco) deployed via docker-compose.node.yml against node A NATS, heartbeat-bootstrap grant + registry verified, meshctl submit completed end-to-end across node-a/node-b planner/coder/critic (task.done); broker-side JWT/user-ACL config remains optional hardening** |
+| M9 | Subject identity + ACLs + capability gate (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; **registry write authorized via orchestrator grant, deny-by-default (ormica permission-chain)**; documented in §5.2 + architecture.md; **grant ledger + gate (acl.py, deny-by-default) + meshctl grant/grants/revoke done (M9); LIVE GATED 2-NODE RUN PASSED : node B ([REDACTED], node-b) deployed via docker-compose.node.yml against node A NATS, heartbeat-bootstrap grant + registry verified, meshctl submit completed end-to-end across node-a/node-b planner/coder/critic (task.done); broker-side JWT/user-ACL config remains optional hardening** |
 | M10 | Queryable mesh ledger + fan-out tool-call (§0.5) | `meshctl registry` + presence/state readable as a ledger any agent queries; orchestrator emits subtasks as `mesh.task.submit` fan-out and returns immediately, anycast workers claim them (hive run_worker shape); **DONE : `mesh.ledger` request/reply + `meshctl ledger` (orchestrator answers, Bus fallback) + `submit --fanout` decomposition (≥2 plan steps → independent subtasks, parent parks in CODING, `_check_fanouts` aggregates DONE/FAILED); live: 2 subtasks emitted on submit, 1 DONE / 1 failed (worker tool-step limit, not M10), aggregation correct; broker-side JWT/user-ACL remains optional hardening** |
 
 Each milestone is independently demoable; M2 is the checkpoint that proves the mesh before any model is involved.
@@ -555,6 +555,25 @@ Source: `~/research-papers/analysis_priors_proposal.md`; full synthesis with LoR
 - **P1 — Latent communication (preprints_202609_1298):** exchange low-dimensional hidden states/KV-cache summaries between agents instead of raw text; NATS-transportable, token-cheap.
 - **P1 — Neutral consensus prompts (04_majority_following):** trust-weighted voting in the ledger (`w_i ∝ β_i`); neutral, shuffled option labels when collecting worker votes; 2–3 debate rounds suffice for capable participants.
 - **P2 — Incentive governance (2605_25815):** complexity-weighted evaluation metrics (logical depth over file counts) to prevent score inflation in self-evolving worker populations (`memnc/evaluation/`).
+
+### 19.2 New insights 2026-11-11/12 (research + competition check)
+
+- **P1 — DEALS (2609.33768):** decentralized routing without LLM calls —
+  direct prior art for M8's utility scorer: score candidates from
+  presence/trust metadata only, no model call in the routing path.
+  Validation: our scorer (03f1f35) already follows this shape; keep it
+  LLM-free permanently.
+- **P1 — ToolSched (2611.05269):** resource-aware shell scheduling for
+  shared local hosts (+148% resource utilization) — informs T6 needs-
+  constraints (roster advertises RAM/VRAM/load) and M11c resource verbs.
+- **P2 — Single-LoRA dominance (2603.01097):** one consolidated LoRA beats
+  a portfolio of specialized LoRAs — counter-pressure on B2/B4: merge role
+  adapters aggressively (Fisher-Merge), do not accumulate adapters per
+  role long-term.
+- **P2 — MoRAM/CoDyRA line:** Growing-LoRA as parametric memory (large
+  rank ~ data volume, untrained capacity = overfitting risk, measured via
+  train/valid divergence) — design-first track in roadmap P2b, replaces
+  RAG for the memory vision.
 
 ### 19.1 Build order: research → mesh integration (triage )
 
@@ -711,7 +730,7 @@ marked `untrusted: true`). No tier ever blocks basic mesh operation.
    mesh ever runs genuinely untrusted nodes — otherwise complexity
    without a threat.
 5. **DICE orientation (research flag):** hardware-rooted identity is
-   the endgame the blog points at; on our 6800XT/7600XT household
+   the endgame the blog points at; on current consumer
    hardware there is no TPM-backed attestation story today. Recorded
    as direction, not a near-term item: NKey seeds are today's
    stand-in; if a node ever ships with TPM2, the seed file would be
@@ -743,7 +762,7 @@ an excuse. The rule set:
    process control — it never means unauthenticated entry points.
 2. **Every listening surface is loopback-bound by default.** The
    terminal-facing agent services (HTTP/monitoring/CLI sockets) bind
-   `127.0.0.1` on the host (H2 pattern). Anything reachable beyond
+   `LAN-IP` on the host (H2 pattern). Anything reachable beyond
    localhost requires an explicit, reviewed config change — same rule
    that already forced `NATS_TOKEN:?` (H3) and the empty pull
    whitelist (secure-by-default).
@@ -863,3 +882,42 @@ authentication, push rights derive from the claim ledger (no new
 credential class, §21 rule 5), the git surface binds to the docker
 network only, and artifact hashing (sha256) plus reputation apply the
 same "bad actor degrades" model the claim loop already enforces.
+
+## 23. Mesh API / control plane (design only)
+
+kubectl-style mesh API: one verb surface (`task list/detail/submit/cancel`,
+`node list/detail/drain`, `discuss`, `listen`, `channel *`, `trace follow`,
+`llauncher *`, `grant`) reachable from every frontend — `meshctl`, Telegram,
+web UI, later a model-mediated NL agent. See
+`docs/mesh-api-concept.md` for the full concept.
+
+Key shape:
+
+- **Topology**: hybrid — reads answered by any node via NATS anycast
+  (queue-group `mesh-api`), writes forwarded to the orchestrator as single
+  writer. Failover via presence-KV (M8), no leader election; round-robin
+  master election only a later optimization (CAS-KV).
+- **Channels / teams**: `mesh.api.channel.<team>.*` subject namespaces;
+  channel context per frontend (`/channel <team>`), per-team `discuss` and
+  `listen`.
+- **Human as peer**: the human joins a channel with a `role: human` identity
+  (observe / join / mediate), reuses the ask/WAIT_INPUT path (`mesh.clarify`);
+  human messages are ordinary channel events agents can react to.
+- **Trace following**: `trace follow <task>` streams reasoning steps/verdicts
+  from trace-proxy records through the API to any frontend.
+- **Subjects (additive)**: `mesh.api.request.<verb>` (anycast),
+  `mesh.api.reply.<request_id>`, `mesh.api.events` (JetStream), channel
+  namespaces. Same `MeshEnvelope` (+ `request_id`, `reply_subject`,
+  `served_by`).
+- **Security**: existing ACL; verbs classified read/write/admin; M8 D3
+  submitter-signature on mutating calls; no new credentials.
+- **Resource management (v2)**: `node detail` aggregates heartbeat/queue/GPU
+  (llancherer)/reputation; `node drain` + worker scale for graceful
+  maintenance.
+
+Non-goals: no task placement by VRAM math (claim loop stays
+reputation-driven), no HTTP mesh-to-mesh, no federation in v1.
+
+Rollout sketch: M11a reads + `listen` via JetStream consumer; M11b write path
++ Telegram as API client; M11c web UI proxy + resource views; M11d
+model-mediated API agent.

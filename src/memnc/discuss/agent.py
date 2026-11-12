@@ -35,7 +35,7 @@ DONE_MARK = os.environ.get("DISCUSS_DONE_MARK", "[DONE]")
 # speakers rendered as {"role": "tool"} context instead of user turns
 ROLE_OTHERS = {s.strip() for s in os.environ.get("DISCUSS_ROLE_OTHERS", "").split(",") if s.strip()}
 NATS_URL = S.nats_url
-NATS_TOKEN = S.nats_token
+NATS_TOKEN = S.nats_token  # leakscan:ok
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))

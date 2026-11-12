@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -88,9 +89,20 @@ async def run_agent(
 
 
 def extract_json(text: str) -> Any:
-    """Pull the first JSON object/array out of possibly chatty model output."""
+    """Pull the first JSON object/array out of possibly chatty model output.
+
+    Tries fenced code blocks first (models often wrap JSON in ```json fences),
+    then scans the raw text for the first parseable object or array.
+    """
 
     decoder = json.JSONDecoder()
+    for block in re.findall(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL):
+        try:
+            value, _ = decoder.raw_decode(block.strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return value
     for index, char in enumerate(text):
         if char not in "{[":
             continue

@@ -30,6 +30,11 @@ _FakeMsg = _m10._FakeMsg
 class DispatchFakeBus(FakeBus):
     """FakeBus + publish_envelope stub (needed by the dispatch pipeline)."""
 
+    async def trust_credit(self, subject, rating, attribution=None):
+        """M8: fake ledger write — claim path credits trust on every claim."""
+        self.trust_calls = getattr(self, "trust_calls", [])
+        self.trust_calls.append((subject, rating, attribution))
+
     async def publish_envelope(self, subject, envelope):
         self.events.append(("published", subject))
 
