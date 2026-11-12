@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     node_gpu: str = ""
     nats_url: str = "nats://127.0.0.1:4222"
     nats_token: str | None = None
+    # M11d: model-mediated API agent. Backend is pluggable — any
+    # OpenAI-compatible /v1 endpoint works (local llauncher, trace-proxy,
+    # LM Studio, cloud). agent_allowed_verbs is the fail-closed allowlist.
+    agent_llm_base_url: str = "http://127.0.0.1:4000/v1"
+    agent_llm_model: str = "local"
+    agent_allowed_verbs: str = (
+        "task.list,task.detail,node.list,node.detail,"
+        "cap.list,grant.list,trust.list,ledger.read,task.submit"
+    )
     # H4: per-node NKey identity. When set, this seed file replaces the
     # shared token entirely (transport-level identity binding); the token
     # is then ignored. Fail closed: a configured seed path must exist.
