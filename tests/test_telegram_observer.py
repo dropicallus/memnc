@@ -135,3 +135,70 @@ async def test_digest_verbose_always_broadcasts():
 def test_digest_ignores_non_task_events():
     obs = _observer()
     assert obs._digest_event({"task_id": "", "payload": {}}) is False
+
+
+# -- status digest (14.11 P0) -------------------------------------------------
+
+def test_format_status_full():
+    from memnc.observations import TaskObservation
+    from memnc.telegram import format_status
+
+    snapshots = [
+        {"task_id": "1a1aaaaa", "state": "CODING", "claimed_by": "node-b-coder", "task": "write docs"},
+        {"task_id": "1a1bbbbb", "state": "DONE", "claimed_by": "", "task": "x"},
+        {"task_id": "1a1ccccc", "state": "FAILED", "claimed_by": "", "task": "y"},
+    ]
+    nodes = [{"node_id": "node-a", "roles": ["coder"], "models": ["m"]}]
+    obs = TaskObservation(
+        task_id="1a1ccccc", trace_id="t", task="y", outcome="failed",
+        route={"coder": "node-a:m"},
+    )
+    out = format_status(snapshots, nodes, [], [obs])
+    assert "3 tasks:" in out
+    assert "DONE=1" in out
+    assert "FAILED=1" in out
+    assert "CODING=1" in out
+    assert "active: #1a1aaaaa CODING (node-b-coder)" in out
+    assert "nodes: node-a" in out
+    assert "model requests: none pending" in out
+    assert "recent failures:" in out
+    assert "1a1ccccc failed" in out
+
+
+def test_format_status_empty_mesh():
+    from memnc.telegram import format_status
+
+    out = format_status([], [], [], [])
+    assert "0 tasks:" in out
+    assert "active: none" in out
+    assert "nodes: none (mesh empty)" in out
+    assert "recent failures: none" in out
+
+
+async def test_on_event_failed_broadcasts_card_with_retry_hint():
+
+    obs = _observer()
+    sent = []
+
+    async def fake_broadcast(text):
+        sent.append(text)
+
+    async def fake_snapshot(task_id):
+        class S:
+            task = "Write docs/p2b_design.md:\nmore text"
+
+            def model_dump(self):
+                return {"task": self.task}
+
+        return S()
+
+    obs.broadcast = fake_broadcast
+    obs._seen_tasks = set()
+    obs.bus = type("B", (), {"get_snapshot": staticmethod(fake_snapshot)})()
+    env = envelope(payload={"event": "failed", "detail": "permission denied", "state": "FAILED", "revisions": 1})
+    msg = type("M", (), {"data": __import__("json").dumps(env).encode()})()
+    await obs.on_event(msg)
+    card = sent[-1]
+    assert "FAILED #1a1ad82fd5e" in card
+    assert "cause: permission denied" in card
+    assert "/retry 1a1ad82fd5e07764bfe0756" in card

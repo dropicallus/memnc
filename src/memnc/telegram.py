@@ -31,6 +31,7 @@ from nats.aio.msg import Msg
 
 from .bus import Bus
 from .config import Settings
+from .observations import TaskObservation  # noqa: F401  (format_status typing)
 from .schema import (
     SUBJECT_CONTROL,
     SUBJECT_EVENTS,
@@ -170,6 +171,50 @@ def summarize_tasks(snapshots: list[dict[str, Any]], filter_state: str = "", lim
     return "\n".join(lines)
 
 
+def format_status(
+    snapshots: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    requests: list[ModelRequest],
+    observations: list[TaskObservation],
+) -> str:
+    """14.11 P0 one-shot digest: is everything okay?"""
+    counts: dict[str, int] = {}
+    for s in snapshots:
+        counts[s.get("state", "?")] = counts.get(s.get("state", "?"), 0) + 1
+    lines = [f"{len(snapshots)} tasks: " + " ".join(
+        f"{state}={n}" for state, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    )]
+    active = [s for s in snapshots if s.get("state") not in ("DONE", "FAILED", "CANCELLED")]
+    if active:
+        parts = [
+            f"#{str(s.get('task_id', '?'))[:12]} {s.get('state', '?')}"
+            f" ({s.get('claimed_by') or 'unclaimed'})"
+            for s in active[:5]
+        ]
+        lines.append("active: " + "; ".join(parts))
+    else:
+        lines.append("active: none")
+    if nodes:
+        lines.append("nodes: " + ", ".join(n.get("node_id", "?") for n in nodes[:8]))
+    else:
+        lines.append("nodes: none (mesh empty)")
+    open_reqs = [r for r in requests if getattr(r, "status", "") == "pending"]
+    lines.append(
+        f"model requests: {len(open_reqs)} pending"
+        if open_reqs
+        else "model requests: none pending"
+    )
+    recent_failed = [o for o in observations if o.outcome != "done"]
+    if recent_failed:
+        lines.append("recent failures:")
+        for o in sorted(recent_failed, key=lambda o: o.observed_at, reverse=True)[:3]:
+            route = ",".join(f"{role}:{o.route[role]}" for role in sorted(o.route)) or "-"
+            lines.append(f"  {o.task_id[:12]} {o.outcome} | {route} | {o.observed_at}")
+    else:
+        lines.append("recent failures: none")
+    return "\n".join(lines)
+
+
 def format_roster(nodes: list[dict[str, Any]]) -> str:
     """Compact /roster view: one line per live node entry."""
     if not nodes:
@@ -250,7 +295,23 @@ class TelegramObserver:
         if self._digest_event(envelope):
             line = format_event(envelope)
             if line is not None:
-                await self.broadcast(line)
+                payload = envelope.get("payload") or {}
+                state = (payload.get("state") or envelope.get("state") or "").upper()
+                if state in ("FAILED", "ERROR") and task_id:
+                    snapshot = await self.bus.get_snapshot(task_id)
+                    title = ""
+                    if snapshot is not None:
+                        title = (snapshot.task or "").strip().splitlines()[0][:70]
+                    detail = (payload.get("detail", "") or "").strip()
+                    card = f"FAILED #{task_id[:12]}"
+                    if title:
+                        card += f"\n{title}"
+                    if detail:
+                        card += f"\ncause: {detail}"
+                    card += f"\nretry: /retry {task_id}"
+                    await self.broadcast(card)
+                else:
+                    await self.broadcast(line)
 
     def _digest_event(self, envelope: dict[str, Any]) -> bool:
         """True when this event is worth announcing: a task STATE TRANSITION
@@ -305,7 +366,21 @@ class TelegramObserver:
         if not parts:
             return
         cmd = parts[0].lstrip("/").lower()
-        if cmd == "tasks":
+        if cmd == "status":
+            snapshots = await self.bus.list_tasks()
+            nodes = await self.bus.list_nodes()
+            requests = await self.bus.list_model_requests()
+            observations = await self.bus.list_observations()
+            await self.bot.send_message(
+                chat,
+                format_status(
+                    [s.model_dump() for s in snapshots],
+                    [n.model_dump() for n in nodes],
+                    requests,
+                    observations,
+                ),
+            )
+        elif cmd == "tasks":
             snapshots = await self.bus.list_tasks()
             filter_state = parts[1].strip() if len(parts) >= 2 else ""
             await self.bot.send_message(
@@ -366,7 +441,7 @@ class TelegramObserver:
             await self._control(chat, "stop_worker", parts[2])
         else:
             await self.bot.send_message(
-                chat, "commands: tasks [state] | roster | obslast [model] | "
+                chat, "commands: status | tasks [state] | roster | obslast [model] | "
                 "state <task-id> "
                 "| trace <task-id> | mreqs | mrep | approve|reject <request-id> | gate approve|reject "
                 "<task-id> | submit <task> "
