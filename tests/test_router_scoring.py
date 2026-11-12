@@ -39,9 +39,7 @@ def test_router_candidates_clamps_load():
 
 
 def test_signed_attribution_carries_task_submitter_claimer():
-    snap = TaskSnapshot(
-        task_id="t1", trace_id="tr1", task="do", origin_node="node-b"
-    )
+    snap = TaskSnapshot(task_id="t1", trace_id="tr1", task="do", origin_node="node-b")
     snap.claimed_by = "node-a"
     entry = signed_attribution(snap)
     assert entry == "task_t1:submit=node-b:claim=node-a"

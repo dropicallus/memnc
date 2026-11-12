@@ -33,9 +33,7 @@ from .bus import Bus
 from .config import Settings
 from .observations import TaskObservation  # noqa: F401  (format_status typing)
 from .schema import (
-    SUBJECT_CONTROL,
     SUBJECT_EVENTS,
-    ControlCommand,
     ModelRequest,
     model_pull_allowed,
 )
@@ -476,32 +474,48 @@ class TelegramObserver:
                 "| cancel <task-id> | retry <task-id> | stop worker <node>",
             )
 
-    # -- T2: human intervention via the orchestrator control gate ------------
+    # -- T2: human intervention — Telegram is an M11b API client --------------
     async def _control(self, chat: str, action: str, argument: str) -> None:
-        """Publish a ControlCommand; the orchestrator grant-checks and acts."""
-        # NOTE: KV keys reject ':', so the grantable agent id uses a hyphen.
-        cmd = ControlCommand(
-            action=action,
-            agent_id=f"telegram-{chat}",  # type: ignore[arg-type]
-            task=argument if action == "submit" else "",
-            task_id=argument.split()[0].lstrip("#") if action == "decide" else "",
-            approved=(argument.split()[1] == "approve")
-            if action == "decide" and len(argument.split()) >= 2
-            else None,
-            node=argument if action == "stop_worker" else "",
-        )
+        """Send the command through the mesh API write path.
+
+        The API server forwards it to the orchestrator's mesh.control gate
+        (grant-checked there, deny-by-default). This keeps Telegram a pure
+        API client — one verb surface for every frontend.
+        """
+        from .api import api_request
+
+        verb = {
+            "submit": "task.submit",
+            "cancel": "task.cancel",
+            "retry": "task.retry",
+            "decide": "task.decide",
+            "stop_worker": "node.stop_worker",
+            "pause_node": "node.pause_node",
+            "resume_node": "node.resume_node",
+        }[action]
+        args: dict[str, Any] = {
+            "agent_id": f"telegram-{chat}",  # KV keys reject ':'
+        }
+        if action == "submit":
+            args["task"] = argument
+        elif action == "stop_worker":
+            args["node"] = argument
+        elif action == "decide":
+            words = argument.split()
+            args["task_id"] = words[0].lstrip("#") if words else ""
+            args["approved"] = len(words) >= 2 and words[1] == "approve"
+        elif action in ("cancel", "retry"):
+            args["task_id"] = argument.split()[0].lstrip("#")
+        else:
+            args["node"] = argument
         try:
-            assert self.bus.nc is not None
-            reply = await self.bus.nc.request(
-                SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-            )
-            resp = json.loads(reply.data)
-            if "error" in resp:
-                await self.bot.send_message(chat, f"denied: {resp['error']}")
-            elif action == "submit":
-                await self.bot.send_message(chat, f"submitted: #{resp['task_id']}")
+            resp = await api_request(self.bus, verb, timeout=20, **args)
+            if action == "submit":
+                await self.bot.send_message(chat, f"submitted: #{resp.get('task_id')}")
             else:
                 await self.bot.send_message(chat, f"{action} ok")
+        except RuntimeError as exc:
+            await self.bot.send_message(chat, f"denied: {exc}")
         except Exception as exc:  # noqa: BLE001
             await self.bot.send_message(chat, f"control failed: {exc}")
 

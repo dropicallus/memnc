@@ -12,9 +12,7 @@ from memnc.fsm import Event, transition
 from memnc.orchestrator import Orchestrator
 from memnc.schema import GrantLevel, GrantRecord, TaskState
 
-_GRANTED = GrantRecord(
-    agent_id="telegram-123", level=GrantLevel.CHAIN, granted_by="root"
-)
+_GRANTED = GrantRecord(agent_id="telegram-123", level=GrantLevel.CHAIN, granted_by="root")
 
 
 def _orch() -> Orchestrator:
@@ -37,6 +35,7 @@ def _critique_event(approved: bool) -> Event:
 
 
 # --- FSM -------------------------------------------------------------------
+
 
 def test_gate_never_approval_finishes():
     t = transition(TaskState.CRITIQUE, _critique_event(True), gate="never")
@@ -89,6 +88,7 @@ def test_human_decision_reject_exhausted_fails():
 
 
 # --- Orchestrator decide ---------------------------------------------------
+
 
 def test_decide_approve_finishes_parked_task():
     from memnc.schema import TaskSnapshot
@@ -147,8 +147,7 @@ def test_submit_with_gate_is_carried():
     orch = _orch()
     msg = _FakeMsg(
         json.dumps(
-            {"action": "submit", "agent_id": "telegram-123", "task": "hi",
-             "gate": "always"}
+            {"action": "submit", "agent_id": "telegram-123", "task": "hi", "gate": "always"}
         ).encode()
     )
     asyncio.run(orch._on_control(msg))

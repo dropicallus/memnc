@@ -12,6 +12,7 @@ Env: NATS_URL, NATS_TOKEN, DISCUSS_NODES, DISCUSS_SUBJECTS,
      DISCUSS_SUBJECT_FMT (default "discuss.{node}")
 Saves transcript to discussions/disc_<ts>.txt
 """
+
 import asyncio
 import json
 import os
@@ -34,8 +35,12 @@ async def ask(nc, subj, name, topic, transcript, timeout):
         r["latency_s"] = round(time.time() - t0, 1)
         return r
     except Exception as e:
-        return {"agent": name, "text": f"[NO ANSWER: {e!r}]", "done": True,
-                "latency_s": round(time.time() - t0, 1)}
+        return {
+            "agent": name,
+            "text": f"[NO ANSWER: {e!r}]",
+            "done": True,
+            "latency_s": round(time.time() - t0, 1),
+        }
 
 
 async def main():
@@ -44,8 +49,7 @@ async def main():
     timeout = float(sys.argv[3]) if len(sys.argv) > 3 else 620
     n_want = int(sys.argv[4]) if len(sys.argv) > 4 else 2
 
-    nc = await nats.connect(servers=[S.nats_url], token=S.nats_token,
-                            name="discuss-driver")
+    nc = await nats.connect(servers=[S.nats_url], token=S.nats_token, name="discuss-driver")
     js = nc.jetstream()
 
     # Participant discovery: pinned subjects > pinned nodes > live roster.
@@ -63,8 +67,7 @@ async def main():
         return
 
     transcript = []
-    out = [f"=== DISCUSSION: {topic} ===",
-           f"{', '.join(names)} — max {rounds} rounds", ""]
+    out = [f"=== DISCUSSION: {topic} ===", f"{', '.join(names)} — max {rounds} rounds", ""]
 
     done_by = None
     for rnd in range(1, rounds + 1):

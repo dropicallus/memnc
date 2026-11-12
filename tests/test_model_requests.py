@@ -7,8 +7,11 @@ from typing import Any
 from memnc.schema import ModelRequest, NodeInfo, TaskNeeds, plan_model_request
 
 _DEFAULTS: dict[str, Any] = dict(
-    node_id="n1", roles=["coder"], models=["gemma-4-31b"],
-    vram_gb=20.0, gpu="test-gpu-a",
+    node_id="n1",
+    roles=["coder"],
+    models=["gemma-4-31b"],
+    vram_gb=20.0,
+    gpu="test-gpu-a",
 )
 
 

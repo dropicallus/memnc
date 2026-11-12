@@ -70,9 +70,7 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
             # name so any node's meshctl submits to its own orchestrator.
-            SUBJECT_SUBMIT_NODE.format(
-                node=getattr(args, "node", None) or settings.node_name
-            ),
+            SUBJECT_SUBMIT_NODE.format(node=getattr(args, "node", None) or settings.node_name),
             submission.model_dump_json().encode(),
             timeout=10,
         )
@@ -119,7 +117,7 @@ async def _watch(client, task_id: str) -> None:
             payload = envelope.get("payload") or {}
             event = payload.get("event", "")
             detail = payload.get("detail", "")
-            print(f"{envelope.get('ts','')} {event:<24} {detail}".rstrip())
+            print(f"{envelope.get('ts', '')} {event:<24} {detail}".rstrip())
             if event in _TERMINAL_EVENTS:
                 return
     except KeyboardInterrupt:
@@ -146,9 +144,7 @@ async def cmd_tail(args: argparse.Namespace, settings: Settings) -> int:
             state = payload.get("state") or envelope.get("state") or ""
             event = payload.get("event", "")
             detail = payload.get("detail", "")
-            print(
-                f"{envelope.get('ts','')} {state:<9} {event:<24} {detail}".rstrip()
-            )
+            print(f"{envelope.get('ts', '')} {state:<9} {event:<24} {detail}".rstrip())
             seen += 1
     except KeyboardInterrupt:
         pass
@@ -270,8 +266,7 @@ async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
     try:
         status = "approved" if args.action == "approve" else "rejected"
         matches = [
-            r for r in await bus.list_model_requests()
-            if r.request_id.startswith(args.request_id)
+            r for r in await bus.list_model_requests() if r.request_id.startswith(args.request_id)
         ]
         if not matches:
             print(f"no model request matching {args.request_id}")
@@ -309,9 +304,7 @@ async def cmd_gate(args: argparse.Namespace, settings: Settings) -> int:
         approved=args.action == "approve",
     )
     try:
-        response = await client.request(
-            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-        )
+        response = await client.request(SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15)
         data = json.loads(response.data)
         if "error" in data:
             print(f"error: {data['error']}", file=sys.stderr)
@@ -332,9 +325,7 @@ async def cmd_answer(args: argparse.Namespace, settings: Settings) -> int:
         text=" ".join(args.text),
     )
     try:
-        response = await client.request(
-            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-        )
+        response = await client.request(SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15)
         data = json.loads(response.data)
         if "error" in data:
             print(f"error: {data['error']}", file=sys.stderr)
@@ -350,9 +341,7 @@ async def cmd_pause(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
     cmd = ControlCommand(action=args.verb, agent_id=args.by, node=args.node)
     try:
-        response = await client.request(
-            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-        )
+        response = await client.request(SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15)
         data = json.loads(response.data)
         if "error" in data:
             print(f"error: {data['error']}", file=sys.stderr)
@@ -417,8 +406,10 @@ async def cmd_grant(args: argparse.Namespace, settings: Settings) -> int:
         grant = await bus.issue_grant(
             args.agent_id, level=level, granted_by=args.granted_by, ttl_s=args.ttl_s
         )
-        print(f"granted {grant.level.value} to {grant.agent_id} (by {grant.granted_by},"
-              f" ttl={args.ttl_s or 'never'} s)")
+        print(
+            f"granted {grant.level.value} to {grant.agent_id} (by {grant.granted_by},"
+            f" ttl={args.ttl_s or 'never'} s)"
+        )
         return 0
     finally:
         await bus.close()
@@ -512,23 +503,33 @@ def build_parser() -> argparse.ArgumentParser:
     submit = subparsers.add_parser("submit", help="submit a task")
     submit.add_argument("task")
     submit.add_argument("--context", default="")
-    submit.add_argument("--watch", action="store_true",
-                        help="follow the task's events until it finishes")
-    submit.add_argument("--fanout", action="store_true",
-                        help="M10: split the plan into independent subtasks")
-    submit.add_argument("--claimable", action="store_true",
-                        help="M11: leave in RECEIVED for agents to self-claim")
-    submit.add_argument("--node", default=None,
-                        help="M15: target orchestrator node (default: local node)")
-    submit.add_argument("--needs-vram", type=float, default=0.0,
-                        help="T6: VRAM (GB) the claiming node must have")
-    submit.add_argument("--needs-model", default="",
-                        help="T6: model name the claiming node must serve")
-    submit.add_argument("--needs-role", action="append", default=None,
-                        help="T6: allowed claiming role (repeatable)")
-    submit.add_argument("--gate", default="never",
-                        choices=["always", "fail", "never"],
-                        help="T3: human approval gate at the critique step")
+    submit.add_argument(
+        "--watch", action="store_true", help="follow the task's events until it finishes"
+    )
+    submit.add_argument(
+        "--fanout", action="store_true", help="M10: split the plan into independent subtasks"
+    )
+    submit.add_argument(
+        "--claimable", action="store_true", help="M11: leave in RECEIVED for agents to self-claim"
+    )
+    submit.add_argument(
+        "--node", default=None, help="M15: target orchestrator node (default: local node)"
+    )
+    submit.add_argument(
+        "--needs-vram", type=float, default=0.0, help="T6: VRAM (GB) the claiming node must have"
+    )
+    submit.add_argument(
+        "--needs-model", default="", help="T6: model name the claiming node must serve"
+    )
+    submit.add_argument(
+        "--needs-role", action="append", default=None, help="T6: allowed claiming role (repeatable)"
+    )
+    submit.add_argument(
+        "--gate",
+        default="never",
+        choices=["always", "fail", "never"],
+        help="T3: human approval gate at the critique step",
+    )
     submit.set_defaults(func=cmd_submit)
 
     gate = subparsers.add_parser(
@@ -582,9 +583,7 @@ def build_parser() -> argparse.ArgumentParser:
     tasks = subparsers.add_parser("tasks", help="list tasks")
     tasks.set_defaults(func=cmd_tasks)
 
-    mreqs = subparsers.add_parser(
-        "mreqs", help="T7.5: list model requests (pending first)"
-    )
+    mreqs = subparsers.add_parser("mreqs", help="T7.5: list model requests (pending first)")
     mreqs.set_defaults(func=cmd_mreqs)
 
     decide = subparsers.add_parser(
@@ -598,7 +597,9 @@ def build_parser() -> argparse.ArgumentParser:
     registry = subparsers.add_parser("registry", help="list advertised capability records")
     registry.set_defaults(func=cmd_registry)
 
-    ledger = subparsers.add_parser("ledger", help="M10: query the mesh ledger (registry+grants+trust+tasks)")
+    ledger = subparsers.add_parser(
+        "ledger", help="M10: query the mesh ledger (registry+grants+trust+tasks)"
+    )
     ledger.set_defaults(func=cmd_ledger)
 
     grant = subparsers.add_parser("grant", help="issue a capability grant (M9 permission chain)")

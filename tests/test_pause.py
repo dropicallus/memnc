@@ -76,9 +76,7 @@ def test_pause_requires_grant():
 
 
 def test_nodeinfo_merge_keeps_pause_through_heartbeat():
-    paused = NodeInfo(
-        node_id="n1", roles=["coder"], paused=True, updated_at="old"
-    )
+    paused = NodeInfo(node_id="n1", roles=["coder"], paused=True, updated_at="old")
     fresh = NodeInfo(node_id="n1", roles=["coder"], updated_at="new")
     merged = paused.merge(fresh)
     assert merged.paused is True
@@ -86,18 +84,14 @@ def test_nodeinfo_merge_keeps_pause_through_heartbeat():
 
 def test_worker_pause_check():
     bus = _NodeBus()
-    bus.nodes["n1"] = NodeInfo(
-        node_id="n1", roles=["coder"], paused=True, updated_at="t"
-    )
+    bus.nodes["n1"] = NodeInfo(node_id="n1", roles=["coder"], paused=True, updated_at="t")
     import tempfile
 
     from memnc.config import Settings
 
     with tempfile.TemporaryDirectory() as tmp:
         worker = Worker(
-            Settings(
-                role="coder", workspace_root=tmp, node_name="n1", mcp_enabled=False
-            ),
+            Settings(role="coder", workspace_root=tmp, node_name="n1", mcp_enabled=False),
             backend=None,
             tools=type("T", (), {"available": True, "schemas": [], "call": None})(),
             bus=bus,

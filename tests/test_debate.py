@@ -41,9 +41,7 @@ def test_debate_critique_rejected_lists_issues():
     snap.critique = CriticOutput(
         approved=False,
         summary="broken import",
-        issues=[
-            CriticIssue(file="m.py", line=3, severity="major", issue="import typo")
-        ],
+        issues=[CriticIssue(file="m.py", line=3, severity="major", issue="import typo")],
     )
     bus = FakeBus()
     asyncio.run(emit_debate(bus, snap, Role.CRITIC))

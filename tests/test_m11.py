@@ -18,9 +18,7 @@ from memnc.schema import (
     TaskSubmission,
 )
 
-_spec = importlib.util.spec_from_file_location(
-    "test_m10", Path(__file__).parent / "test_m10.py"
-)
+_spec = importlib.util.spec_from_file_location("test_m10", Path(__file__).parent / "test_m10.py")
 _m10 = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m10)
 FakeBus = _m10.FakeBus
@@ -104,9 +102,7 @@ def test_depth_zero_accepted():
 
 def test_depth_limit_rejected():
     orchestrator = _orchestrator()
-    msg = _submit_message(
-        TaskSubmission(task="nested", depth=Settings().max_submit_depth)
-    )
+    msg = _submit_message(TaskSubmission(task="nested", depth=Settings().max_submit_depth))
     asyncio.run(orchestrator._on_submit(msg))
     assert not orchestrator.bus.snapshots  # no snapshot created
     assert "error" in msg.replied  # submitter gets an error reply

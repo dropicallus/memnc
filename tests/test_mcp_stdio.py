@@ -27,9 +27,7 @@ async def test_mcp_stdio_roundtrip(tmp_path):
             "run_shell",
         } <= names
 
-        wrote = json.loads(
-            await client.call("write_file", {"path": "hello.txt", "content": "hi"})
-        )
+        wrote = json.loads(await client.call("write_file", {"path": "hello.txt", "content": "hi"}))
         assert wrote["ok"] is True
 
         read = json.loads(await client.call("read_file", {"path": "hello.txt"}))

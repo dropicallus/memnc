@@ -190,14 +190,14 @@ def _format_grants(grants) -> list[dict]:
     now = time.time()
     rows = []
     for g in grants:
-        rows.append({
-            "agent_id": g.agent_id,
-            "level": g.level.value,
-            "granted_by": g.granted_by,
-            "expires": (
-                f"in {g.expires_at - now:.0f}s" if g.expires_at > 0 else "never"
-            ),
-        })
+        rows.append(
+            {
+                "agent_id": g.agent_id,
+                "level": g.level.value,
+                "granted_by": g.granted_by,
+                "expires": (f"in {g.expires_at - now:.0f}s" if g.expires_at > 0 else "never"),
+            }
+        )
     return rows
 
 
@@ -332,7 +332,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     agent_id="console",
                     node=str(payload.get("node", "")),
                     task_id=str(payload.get("task_id", "")).lstrip("#"),
-                ).model_dump_json().encode(),
+                )
+                .model_dump_json()
+                .encode(),
                 timeout=15,
             )
             return json.loads(response.data)

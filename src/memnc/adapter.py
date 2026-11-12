@@ -53,9 +53,7 @@ Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 def _check_clean(*, agent_id: str, skill: str) -> None:
     """Registry keys are ``registry.<agent_id>.<skill>`` — dots would break it."""
     if "." in agent_id or "." in skill:
-        raise ValueError(
-            f"agent_id/skill must not contain '.': got {agent_id!r}/{skill!r}"
-        )
+        raise ValueError(f"agent_id/skill must not contain '.': got {agent_id!r}/{skill!r}")
 
 
 class AgentAdapter:
@@ -202,7 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--node", help="node name (default: hostname)")
     parser.add_argument("--model", default="", help="model the agent runs on")
     parser.add_argument("--contact", default="", help="how to reach the agent (mcp://, cli:, ...)")
-    parser.add_argument("--skill", action="append", default=[], help="skill to advertise (repeatable)")
+    parser.add_argument(
+        "--skill", action="append", default=[], help="skill to advertise (repeatable)"
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")

@@ -122,9 +122,7 @@ class Bus:
                 break
             except Exception as exc:  # noqa: BLE001 - retry any connect failure
                 last_error = exc
-                log.warning(
-                    "nats connect failed (%s/%s): %s", attempt, attempts, exc
-                )
+                log.warning("nats connect failed (%s/%s): %s", attempt, attempts, exc)
                 await asyncio.sleep(min(attempt, 5))
         else:
             raise RuntimeError(f"could not connect to NATS: {last_error}")
@@ -215,11 +213,11 @@ class Bus:
         """
         assert self._registry is not None
         if self.settings.mesh_gate:
-            decision = acl.check_registry_write(
-                await self.grant_read(cap.agent_id), cap.agent_id
-            )
+            decision = acl.check_registry_write(await self.grant_read(cap.agent_id), cap.agent_id)
             if not decision:
-                raise PermissionError(f"registry write denied for {cap.agent_id}: {decision.reason}")
+                raise PermissionError(
+                    f"registry write denied for {cap.agent_id}: {decision.reason}"
+                )
         await self._registry.put(cap.key(), cap.model_dump_json().encode())
         log.debug("advertised capability %s", cap.key())
 
@@ -330,9 +328,7 @@ class Bus:
         await self.ensure_model_requests()
         assert self._model_requests is not None
         try:
-            entry = await self._model_requests.get(
-                MODEL_REQUEST_KEY.format(request_id=request_id)
-            )
+            entry = await self._model_requests.get(MODEL_REQUEST_KEY.format(request_id=request_id))
         except (KeyError, NotFoundError):
             return None
         return ModelRequest.model_validate_json(entry.value)
@@ -361,9 +357,7 @@ class Bus:
         except (KeyError, KeyNotFoundError):
             return ModelReputation(model=model)
 
-    async def record_reputation(
-        self, model: str, approved: bool
-    ) -> ModelReputation:
+    async def record_reputation(self, model: str, approved: bool) -> ModelReputation:
         """Record a critic verdict against the coder model (T7).
 
         An approval clears the consecutive-rejection streak; a rejection
@@ -404,9 +398,7 @@ class Bus:
             kind=Kind.EVENT,
             payload={"event": "model.decision", "request": request.model_dump()},
         )
-        await self.nc.publish(
-            SUBJECT_MODEL_DECISION, envelope.model_dump_json().encode()
-        )
+        await self.nc.publish(SUBJECT_MODEL_DECISION, envelope.model_dump_json().encode())
 
     # -- M9: capability grants (permission chain) --------------------------
     async def ensure_grants(self) -> None:
@@ -485,9 +477,7 @@ class Bus:
         """Write one finished-task observation into the experience graph."""
         await self.ensure_observations()
         assert self._observations is not None
-        await self._observations.put(
-            observation.kv_id(), observation.model_dump_json().encode()
-        )
+        await self._observations.put(observation.kv_id(), observation.model_dump_json().encode())
         log.debug("deposited observation %s", observation.kv_id())
 
     async def list_observations(self) -> list[TaskObservation]:
@@ -608,7 +598,6 @@ class Bus:
             "tasks": sorted(tasks, key=lambda t: t["created_at"]),
         }
 
-
     # -- publish -----------------------------------------------------------
     async def publish_envelope(self, subject: str, envelope: Envelope) -> None:
         assert self.js is not None
@@ -633,9 +622,7 @@ class Bus:
                 "revisions": snapshot.revisions,
             },
         )
-        await self.publish_envelope(
-            SUBJECT_EVENTS.format(task_id=snapshot.task_id), envelope
-        )
+        await self.publish_envelope(SUBJECT_EVENTS.format(task_id=snapshot.task_id), envelope)
 
     async def dead_letter(self, envelope: Envelope, reason: str) -> None:
         envelope.payload = {**envelope.payload, "dlq_reason": reason}
@@ -652,9 +639,7 @@ class Bus:
 
     async def put_snapshot(self, snapshot: TaskSnapshot) -> None:
         assert self.kv is not None
-        await self.kv.put(
-            f"task.{snapshot.task_id}", snapshot.model_dump_json().encode()
-        )
+        await self.kv.put(f"task.{snapshot.task_id}", snapshot.model_dump_json().encode())
 
     async def try_claim(
         self, task_id: str, worker_id: str, role: str | None = None
@@ -824,8 +809,7 @@ async def emit_debate(bus: Bus, snapshot: TaskSnapshot, role: Role) -> None:
         name = "debate.critique"
         verdict = "APPROVED" if c.approved else "REJECTED"
         issues = "; ".join(
-            f"[{i.severity}] {i.file or '?'}:{i.line or '?'} {i.issue}"
-            for i in c.issues[:3]
+            f"[{i.severity}] {i.file or '?'}:{i.line or '?'} {i.issue}" for i in c.issues[:3]
         )
         detail = f"{verdict} - {c.summary}"
         if issues:

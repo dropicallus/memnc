@@ -50,8 +50,11 @@ class Settings(BaseSettings):
     grant_nodes: str = ""
 
     @field_validator(
-        "inference_fallback_provider", "inference_fallback_api_key",
-        "inference_api_key", "nats_token", "nats_name",
+        "inference_fallback_provider",
+        "inference_fallback_api_key",
+        "inference_api_key",
+        "nats_token",
+        "nats_name",
         mode="before",
     )
     @classmethod

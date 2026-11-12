@@ -102,6 +102,7 @@ def reputation_key(model: str) -> str:
     """KV-safe reputation key (KV charset forbids ':' — ollama tags use it)."""
     return REPUTATION_KEY.format(model=model.replace(":", "_"))
 
+
 # T2: human intervention over an approved channel (Telegram observer). The
 # orchestrator is the only subscriber; every command carries the acting
 # agent_id and is granted-checked (deny-by-default, acl.check_registry_write)
@@ -113,8 +114,14 @@ class ControlCommand(BaseModel):
     """T2: one human intervention command, issued via an approved channel."""
 
     action: Literal[
-        "submit", "cancel", "retry", "stop_worker", "decide", "answer",
-        "pause_node", "resume_node",
+        "submit",
+        "cancel",
+        "retry",
+        "stop_worker",
+        "decide",
+        "answer",
+        "pause_node",
+        "resume_node",
     ]
     agent_id: str  # who acts — grant-checked against the M9 registry
     task: str = ""  # submit only
@@ -227,15 +234,9 @@ class ModelReputation(BaseModel):
     updated_at: str = Field(default_factory=now_iso)
 
 
-def should_propose_retirement(
-    rep: ModelReputation, threshold: int
-) -> bool:
+def should_propose_retirement(rep: ModelReputation, threshold: int) -> bool:
     """Pure T7 rule: is this model due for a retirement proposal?"""
-    return (
-        threshold > 0
-        and rep.consecutive_rejections >= threshold
-        and not rep.retired
-    )
+    return threshold > 0 and rep.consecutive_rejections >= threshold and not rep.retired
 
 
 def plan_model_request(
@@ -287,8 +288,9 @@ SKILL_ROLES: dict[str, Role] = {
 def role_for_skill(skill: str) -> Role:
     return SKILL_ROLES.get(skill, Role.CODER)
 
+
 # --- M8: trust ledger ---
-TRUST_BUCKET = 'mesh_trust'
+TRUST_BUCKET = "mesh_trust"
 TRUST_DEFAULT = 1.0
 TRUST_MIN = 0.0
 TRUST_MAX = 10.0
@@ -298,13 +300,12 @@ TRUST_DECAY = 0.95
 
 class TrustEntry(BaseModel):
     """M8: A record in the trust ledger for an agent."""
+
     subject: str
     rating: str
     credit: float = TRUST_DEFAULT
     ts: float = Field(default_factory=time.time)
     attribution: list[str] = Field(default_factory=list)
-
-
 
 
 # --- M9: identity, ACLs, capability gate ---

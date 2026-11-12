@@ -117,9 +117,7 @@ async def test_openai_chat_parses_tool_calls():
         api_key="secret",
         client=mock_client(handler),
     )
-    result = await backend.chat(
-        [{"role": "user", "content": "hi"}], model="m", num_predict=128
-    )
+    result = await backend.chat([{"role": "user", "content": "hi"}], model="m", num_predict=128)
     assert captured["url"].endswith("/v1/chat/completions")
     assert captured["auth"] == "Bearer secret"
     assert captured["body"]["max_tokens"] == 128
@@ -162,9 +160,7 @@ async def test_retries_on_transient_status():
             return httpx.Response(503, text="busy")
         return httpx.Response(200, json={"message": {"content": "ok"}})
 
-    backend = OllamaBackend(
-        "http://box:11434", client=mock_client(handler), max_retries=2
-    )
+    backend = OllamaBackend("http://box:11434", client=mock_client(handler), max_retries=2)
     result = await backend.chat([{"role": "user", "content": "hi"}], model="m")
     assert result.content == "ok"
     assert calls["n"] == 2

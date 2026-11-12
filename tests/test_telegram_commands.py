@@ -1,5 +1,7 @@
 """Pure-logic tests for the improved Telegram command formatting."""
 
+import json
+
 import pytest
 
 from memnc.telegram import format_roster, format_task, summarize_tasks
@@ -51,6 +53,67 @@ def test_summary_includes_task_title():
 
 def test_summary_empty():
     assert summarize_tasks([]) == "no tasks in ledger"
+
+
+# -- M11b: Telegram routes control commands through the mesh API -------------
+
+
+class _FakeBot:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def send_message(self, chat: str, text: str) -> None:
+        self.sent.append((chat, text))
+
+
+class _FakeNc:
+    def __init__(self, reply: dict) -> None:
+        self.reply = reply
+        self.subjects: list[str] = []
+        self.raw: list[bytes] = []
+
+    async def request(self, subject: str, payload: bytes, timeout: float = 5):
+        self.subjects.append(subject)
+        self.raw.append(payload)
+        return type("M", (), {"data": json.dumps(self.reply).encode()})()
+
+
+def _observer(reply: dict):
+
+    from memnc.config import Settings
+    from memnc.telegram import TelegramObserver
+
+    nc = _FakeNc(reply)
+    obs = TelegramObserver(Settings(node_name="t", telegram_allow="42"), _FakeBot())  # type: ignore[arg-type]
+    obs.bus.nc = nc  # type: ignore[assignment]
+    return obs, nc
+
+
+def test_control_submit_goes_through_api_write_path():
+    import asyncio
+    import json as _json
+
+    obs, nc = _observer({"ok": True, "task_id": "t9"})
+    # api_request rides on obs.bus.nc (the fake) — no NATS server needed
+    asyncio.run(obs._control("42", "submit", "audit the mesh"))
+    # Telegram is an API client: the request hits the API subject, not mesh.control
+    assert nc.subjects == ["mesh.api.request.task"]
+    assert _json.loads(nc.raw[0]) == {
+        "verb": "task.submit",
+        "args": {"agent_id": "telegram-42", "task": "audit the mesh"},
+    }
+    assert obs.bot.sent == [("42", "submitted: #t9")]
+
+
+def test_control_denied_is_surfaced():
+    import asyncio
+    import json as _json
+
+    obs, nc = _observer({"error": "not granted"})
+    asyncio.run(obs._control("42", "cancel", "#t1"))
+    assert nc.subjects == ["mesh.api.request.task"]
+    assert _json.loads(nc.raw[0])["args"] == {"agent_id": "telegram-42", "task_id": "t1"}
+    assert obs.bot.sent == [("42", "denied: api task.cancel: not granted")]
 
 
 def test_format_roster_lines():

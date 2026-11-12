@@ -4,6 +4,7 @@
 Single source of truth for NATS connection settings, roster discovery and
 subject naming; used by memnc.discuss.agent and memnc.discuss.driver.
 """
+
 import os
 
 
@@ -41,7 +42,7 @@ async def roster_nodes(js, settings: Settings) -> list[str]:
     for key in sorted(keys):
         if not key.startswith(settings.roster_prefix):
             continue
-        node_id = key[len(settings.roster_prefix):]
+        node_id = key[len(settings.roster_prefix) :]
         try:
             info = json.loads((await kv.get(key)).value.decode())
         except Exception:

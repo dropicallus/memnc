@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from memnc.api import ApiServer
-from memnc.schema import NodeInfo, TaskSnapshot, TaskState
+from memnc.api import WRITE_VERBS, ApiServer
+from memnc.schema import SUBJECT_CONTROL, ControlCommand, NodeInfo, TaskSnapshot, TaskState
 
 
 def _snap(
@@ -41,9 +41,7 @@ class FakeBus:
         return self.snaps
 
     async def get_snapshot(self, task_id: str) -> TaskSnapshot | None:
-        return next(
-            (s for s in self.snaps if s.task_id == task_id), None
-        )
+        return next((s for s in self.snaps if s.task_id == task_id), None)
 
     async def list_nodes(self) -> list[NodeInfo]:
         return self.nodes
@@ -87,6 +85,90 @@ def test_dispatch_unknown_verb(server: ApiServer):
 
     with pytest.raises(ValueError):
         asyncio.run(server.dispatch("nope", {}))
+
+
+# -- M11b: write verbs forward to the orchestrator control gate ---------------
+
+
+class FakeNcControl:
+    """Captures the mesh.control request and replies like the orchestrator."""
+
+    def __init__(self, reply: dict) -> None:
+        self.reply = reply
+        self.subjects: list[str] = []
+        self.commands: list[ControlCommand] = []
+
+    async def request(self, subject: str, payload: bytes, timeout: float = 5):
+        self.subjects.append(subject)
+        self.commands.append(ControlCommand.model_validate_json(payload))
+        return FakeMsg(json.dumps(self.reply).encode())
+
+
+def _write_server(reply: dict) -> tuple[ApiServer, FakeNcControl]:
+    from memnc.config import Settings
+
+    nc = FakeNcControl(reply)
+    s = Settings(node_name="test-node")
+    bus = FakeBus()
+    bus.nc = nc  # type: ignore[assignment]
+    return ApiServer(s, bus), nc  # type: ignore[arg-type]
+
+
+def test_write_verbs_cover_t2_actions():
+    expected = {
+        "submit",
+        "cancel",
+        "retry",
+        "decide",
+        "stop_worker",
+        "pause_node",
+        "resume_node",
+    }
+    assert {v.split(".", 1)[1] for v in WRITE_VERBS} == expected
+
+
+def test_write_verb_forwards_control_command():
+    import asyncio
+
+    server, nc = _write_server({"ok": True, "task_id": "t9"})
+    out = asyncio.run(
+        server.dispatch("task.submit", {"agent_id": "telegram-42", "task": "audit the mesh"})
+    )
+    assert nc.subjects == [SUBJECT_CONTROL]
+    cmd = nc.commands[0]
+    assert cmd.action == "submit" and cmd.agent_id == "telegram-42"
+    assert cmd.task == "audit the mesh"
+    assert out["task_id"] == "t9"
+
+
+def test_write_verb_requires_agent_id(server: ApiServer):
+    import asyncio
+
+    with pytest.raises(ValueError, match="agent_id"):
+        asyncio.run(server.dispatch("task.cancel", {"task_id": "t1"}))
+
+
+def test_write_verb_maps_verb_to_action():
+    import asyncio
+
+    server, nc = _write_server({"ok": True})
+    for verb, action in (
+        ("task.retry", "retry"),
+        ("task.decide", "decide"),
+        ("node.stop_worker", "stop_worker"),
+        ("node.pause_node", "pause_node"),
+        ("node.resume_node", "resume_node"),
+    ):
+        asyncio.run(server.dispatch(verb, {"agent_id": "tg", "task_id": "t", "node": "n"}))
+        assert nc.commands[-1].action == action
+
+
+def test_write_verb_denied_reply_raises():
+    import asyncio
+
+    server, _nc = _write_server({"error": "not granted"})
+    with pytest.raises(PermissionError, match="not granted"):
+        asyncio.run(server.dispatch("task.cancel", {"agent_id": "tg", "task_id": "t1"}))
 
 
 def test_dispatch_node_detail_includes_tasks(server: ApiServer):

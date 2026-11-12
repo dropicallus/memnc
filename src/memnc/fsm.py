@@ -12,8 +12,14 @@ from typing import Literal
 from .schema import TERMINAL_STATES, Role, TaskState
 
 EventType = Literal[
-    "start", "result", "failure", "timeout", "cancel", "human_decision",
-    "ask", "answer",
+    "start",
+    "result",
+    "failure",
+    "timeout",
+    "cancel",
+    "human_decision",
+    "ask",
+    "answer",
 ]
 ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule", "park", "ask"]
 
@@ -108,9 +114,7 @@ def transition(
                 Role.CODER: TaskState.CODING,
                 Role.CRITIC: TaskState.CRITIQUE,
             }[role]
-            return Transition(
-                resume, (Action("dispatch", role),), attempt_reset=True
-            )
+            return Transition(resume, (Action("dispatch", role),), attempt_reset=True)
         return Transition(state)
 
     if state is TaskState.RECEIVED:
@@ -202,9 +206,7 @@ def transition(
             if approved is True:
                 # T3 gate "always": even an approval parks for the human.
                 if gate == "always":
-                    return Transition(
-                        TaskState.CRITIQUE, (Action("park", reason="gate always"),)
-                    )
+                    return Transition(TaskState.CRITIQUE, (Action("park", reason="gate always"),))
                 return Transition(TaskState.DONE, (Action("finish"),))
             if approved is False:
                 # T3 gate "always"/"fail": a rejection parks instead of

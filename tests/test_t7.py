@@ -64,8 +64,7 @@ class _Msg:
 
 def _pull_envelope(model: str, approved: bool = True) -> Envelope:
     request = ModelRequest(
-        request_id="r1", model=model, action="pull", status="approved"
-        if approved else "pending"
+        request_id="r1", model=model, action="pull", status="approved" if approved else "pending"
     )
     return Envelope(
         task_id="t",
@@ -86,6 +85,7 @@ async def test_approved_pull_refused_without_whitelist():
         return True
 
     import memnc.worker as wm
+
     orig = wm.pull_model
     wm.pull_model = fake_pull
     try:

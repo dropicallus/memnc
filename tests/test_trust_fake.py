@@ -9,9 +9,11 @@ class FakeKV:
     async def get(self, key: str) -> Any:
         if key not in self._store:
             raise KeyError(key)
+
         class Entry:
             def __init__(self, v: bytes):
                 self.value = v
+
         return Entry(self._store[key])
 
     async def put(self, key: str, val: bytes) -> None:

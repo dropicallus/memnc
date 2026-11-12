@@ -52,9 +52,7 @@ def _bus_with_kv() -> Bus:
 
 
 def _snapshot(task_id: str, **fields) -> TaskSnapshot:
-    return TaskSnapshot(
-        task_id=task_id, trace_id="tr-1", task="do a thing", **fields
-    )
+    return TaskSnapshot(task_id=task_id, trace_id="tr-1", task="do a thing", **fields)
 
 
 def test_try_claim_success():
@@ -107,9 +105,7 @@ def test_stale_revision_is_cas_conflict():
     asyncio.run(bus.kv.put("task.t5", b"{}"))  # bump the revision behind its back
     try:
         result = asyncio.run(
-            bus.kv.update(
-                "task.t5", stale.model_dump_json().encode(), last=entry.revision
-            )
+            bus.kv.update("task.t5", stale.model_dump_json().encode(), last=entry.revision)
         )
         pytest.fail(f"expected CAS rejection, got {result}")
     except Exception:

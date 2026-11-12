@@ -734,9 +734,14 @@ single-LoRA advantage (2603.01097) as working hypothesis.
 - Design doc first, then code. Blocks nothing, open-ended.
 
 ## P3 — M11 Mesh API rollout (M11a-d, concept done)
-M11a reads + listen (JetStream), M11b writes + Telegram API client,
-M11c web UI proxy + resources, M11d NL agent. Channels/human-as-peer
-from 5a feed into S4 (approval gate) — S4 and M11b merge.
+M11a reads + listen (JetStream): DONE (2026-11-12).
+M11b writes + Telegram API client: DONE (2026-11-12) — WRITE_VERBS in
+api.py forward every mutating call over mesh.control (orchestrator stays
+single writer, grant-check + human.* ledger unchanged); Telegram
+`/submit|/cancel|/retry|/gate|/stop worker|/pause|/resume` goes through
+api_request now. Next: M11c web UI proxy + resources, M11d NL agent.
+Channels/human-as-peer from 5a feed into S4 (approval gate) —
+S4 and M11b merge.
 
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art

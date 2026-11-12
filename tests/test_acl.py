@@ -58,9 +58,7 @@ class TestGrantIssuance:
         assert not acl.check_grant_issuance(None)
 
     def test_expired_root_may_not_issue(self):
-        root = GrantRecord(
-            agent_id="root", level=GrantLevel.ROOT, expires_at=time.time() - 1
-        )
+        root = GrantRecord(agent_id="root", level=GrantLevel.ROOT, expires_at=time.time() - 1)
         assert not acl.check_grant_issuance(root, now=time.time())
 
 
