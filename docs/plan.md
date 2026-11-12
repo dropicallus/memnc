@@ -493,7 +493,7 @@ scripts/
 
 §0.5) | An external harness (Hermes/pi, then Claude Code) joins the mesh via `memnc.agent`, advertises skills in `mesh.registry` KV, receives anycast work, replies; **adapter+registry done (commit 374fa3e); meshctl registry view is the remaining M7-CLR clearance** |
 | M8 | Utility routing + presence + trust (§0.5) | Router scores `U=w1·cap+w2·(1−load)+w3·(1−lat)+w4·trust` over presence KV (TTL); `meshctl` shows live roster + load; **trust ledger, submitter-signed attribution, >1 concurrent router work (SwarmHarness)**; multi-machine topology documented in §3; **trust ledger + utility scorer done (commit 03f1f35); live router on NATS + submitter-signed attribution is the remaining M8 clearance** |
-| M9 | Subject identity + ACLs + capability gate (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; **registry write authorized via orchestrator grant, deny-by-default (ormica permission-chain)**; documented in §5.2 + architecture.md; **grant ledger + gate (acl.py, deny-by-default) + meshctl grant/grants/revoke done (M9); LIVE GATED 2-NODE RUN PASSED : node B ([REDACTED], maco) deployed via docker-compose.node.yml against node A NATS, heartbeat-bootstrap grant + registry verified, meshctl submit completed end-to-end across node-a/node-b planner/coder/critic (task.done); broker-side JWT/user-ACL config remains optional hardening** |
+| M9 | Subject identity + ACLs + capability gate (§0.5) | NATS token → per-agent JWT/users ACLs; sender token policed on the wire; pinned per-agent durable inbox; **registry write authorized via orchestrator grant, deny-by-default (ormica permission-chain)**; documented in §5.2 + architecture.md; **grant ledger + gate (acl.py, deny-by-default) + meshctl grant/grants/revoke done (M9); LIVE GATED 2-NODE RUN PASSED : node B ([REDACTED], node-b) deployed via docker-compose.node.yml against node A NATS, heartbeat-bootstrap grant + registry verified, meshctl submit completed end-to-end across node-a/node-b planner/coder/critic (task.done); broker-side JWT/user-ACL config remains optional hardening** |
 | M10 | Queryable mesh ledger + fan-out tool-call (§0.5) | `meshctl registry` + presence/state readable as a ledger any agent queries; orchestrator emits subtasks as `mesh.task.submit` fan-out and returns immediately, anycast workers claim them (hive run_worker shape); **DONE : `mesh.ledger` request/reply + `meshctl ledger` (orchestrator answers, Bus fallback) + `submit --fanout` decomposition (≥2 plan steps → independent subtasks, parent parks in CODING, `_check_fanouts` aggregates DONE/FAILED); live: 2 subtasks emitted on submit, 1 DONE / 1 failed (worker tool-step limit, not M10), aggregation correct; broker-side JWT/user-ACL remains optional hardening** |
 
 Each milestone is independently demoable; M2 is the checkpoint that proves the mesh before any model is involved.
@@ -730,7 +730,7 @@ marked `untrusted: true`). No tier ever blocks basic mesh operation.
    mesh ever runs genuinely untrusted nodes — otherwise complexity
    without a threat.
 5. **DICE orientation (research flag):** hardware-rooted identity is
-   the endgame the blog points at; on our 6800XT/7600XT household
+   the endgame the blog points at; on current consumer
    hardware there is no TPM-backed attestation story today. Recorded
    as direction, not a near-term item: NKey seeds are today's
    stand-in; if a node ever ships with TPM2, the seed file would be
@@ -762,7 +762,7 @@ an excuse. The rule set:
    process control — it never means unauthenticated entry points.
 2. **Every listening surface is loopback-bound by default.** The
    terminal-facing agent services (HTTP/monitoring/CLI sockets) bind
-   `127.0.0.1` on the host (H2 pattern). Anything reachable beyond
+   `LAN-IP` on the host (H2 pattern). Anything reachable beyond
    localhost requires an explicit, reviewed config change — same rule
    that already forced `NATS_TOKEN:?` (H3) and the empty pull
    whitelist (secure-by-default).

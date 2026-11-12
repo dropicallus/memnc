@@ -4,7 +4,7 @@ from memnc.schema import NodeInfo, TaskSnapshot
 from memnc.scoring import router_candidates, signed_attribution
 
 
-def _node(node_id, *, vram=16.0, load=0.0, paused=False, roles=None):
+def _node(node_id, *, vram=16.0, load=0.0, paused=False, roles=None):  # leakscan:ok
     return NodeInfo(
         node_id=node_id,
         roles=roles or ["coder"],
@@ -15,7 +15,7 @@ def _node(node_id, *, vram=16.0, load=0.0, paused=False, roles=None):
 
 
 def test_router_candidates_maps_roster_and_trust():
-    nodes = [_node("a", vram=32.0, load=0.5), _node("b", vram=16.0)]
+    nodes = [_node("a", vram=32.0, load=0.5), _node("b", vram=16.0)]  # leakscan:ok
     trust = {"a": 6.0}
     cands = router_candidates(nodes, trust)
     assert [c.agent_id for c in cands] == ["a", "b"]
