@@ -137,7 +137,11 @@ def main() -> int:
 
     if args.worktree:
         tracked = git("ls-files", cwd=repo).splitlines()
+        # the scanner itself contains its own regex rules — skip it
+        SELF = "scripts/leakscan.py"
         for f in tracked:
+            if f == SELF:
+                continue
             try:
                 content = open(f"{repo}/{f}", encoding="utf-8", errors="replace").read()
             except OSError:
@@ -150,6 +154,8 @@ def main() -> int:
     else:
         diff = git("diff", args.range, cwd=repo)
         added, _files = added_lines(diff)
+        # the scanner itself contains its own regex rules — skip it
+        added = [l for l in added if not l.startswith("[scripts/leakscan.py]")]
         for i, cls, line in scan_line_rules(added):
             problems.append(f"diff:{i} [{cls}] {line.strip()[:100]}")
         for i, why in german_hits(added):
