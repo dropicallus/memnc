@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import acl, clarify
 from .acl import check_registry_write
+from .api import ApiServer
 from .bus import Bus
 from .config import Settings, get_settings
 from .fsm import Event, transition
@@ -82,6 +83,9 @@ class Orchestrator:
         self._results = await self.bus.pull_results(
             durable=f"orchestrator-results-{self.settings.node_name}"
         )
+        # M11a: anycast read API on mesh.api.request.* (queue-group mesh-api).
+        self._api = ApiServer(self.settings, self.bus)
+        await self._api.start()
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
         await asyncio.gather(self._result_loop(), self._timeout_loop())
@@ -92,6 +96,8 @@ class Orchestrator:
     async def aclose(self) -> None:
         if hasattr(self, '_router_task'):
             self._router_task.cancel()
+        if getattr(self, "_api", None) is not None:
+            await self._api.stop()
         self._stop.set()
         await self.bus.close()
 

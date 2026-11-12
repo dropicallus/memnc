@@ -232,6 +232,31 @@ def format_roster(nodes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_node_detail(data: dict[str, Any]) -> str:
+    """M11a /node <name>: which node, what it runs, which tasks it holds,
+    with each task's content (first line = the actual instruction)."""
+    node = data.get("node") or {}
+    roles = ",".join(node.get("roles") or []) or "-"
+    models = ",".join(node.get("models") or []) or "-"
+    lines = [
+        f"node {node.get('node_id', '?')} roles={roles} models={models} "
+        f"gpu={node.get('gpu') or '-'}"
+    ]
+    tasks = data.get("tasks") or []
+    if not tasks:
+        lines.append("no tasks claimed")
+        return "\n".join(lines)
+    lines.append(f"{len(tasks)} tasks:")
+    for t in tasks:
+        title = (t.get("task") or "").splitlines()[0][:70]
+        claimed = t.get("claimed_by") or "-"
+        lines.append(
+            f"  #{t.get('task_id', '?')[:12]} {t.get('state', '?')} "
+            f"by {claimed}\n    {title}"
+        )
+    return "\n".join(lines)
+
+
 def format_model_requests(requests: list[ModelRequest]) -> str:
     """Compact /mreqs view: one line per model request, newest first."""
     if not requests:
@@ -394,6 +419,20 @@ class TelegramObserver:
             await self.bot.send_message(
                 chat, format_observations(observations, model)
             )
+        elif cmd == "node" and len(parts) >= 2:
+            # M11a: query the mesh API, not local state — this is the
+            # first Telegram command routed through mesh.api.request.*.
+            try:
+                from .api import api_request
+
+                reply = await api_request(
+                    self.bus, "node.detail", node_id=parts[1].strip()
+                )
+                await self.bot.send_message(
+                    chat, format_node_detail(reply["data"])
+                )
+            except RuntimeError as exc:
+                await self.bot.send_message(chat, str(exc))
         elif cmd == "roster":
             nodes = await self.bus.list_nodes()
             await self.bot.send_message(
@@ -441,7 +480,7 @@ class TelegramObserver:
             await self._control(chat, "stop_worker", parts[2])
         else:
             await self.bot.send_message(
-                chat, "commands: status | tasks [state] | roster | obslast [model] | "
+                chat, "commands: status | tasks [state] | node <name> | roster | "
                 "state <task-id> "
                 "| trace <task-id> | mreqs | mrep | approve|reject <request-id> | gate approve|reject "
                 "<task-id> | submit <task> "
