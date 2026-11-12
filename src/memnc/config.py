@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     inference_api_key: str | None = None
     inference_timeout_s: float = 180.0
     inference_max_retries: int = 3
+    # Fallback inference (e.g. a peer node's local ollama) used when the
+    # primary is unreachable. Empty provider disables the fallback.
+    inference_fallback_provider: Literal["ollama", "openai"] | None = None
+    inference_fallback_base_url: str = ""
+    inference_fallback_api_key: str | None = None
+    # "primary=fallback,primary2=fallback2" model name remapping.
+    inference_fallback_model_map: str = ""
     model_planner: str = "qwen2.5:7b"
     model_coder: str = "qwen2.5-coder:7b"
     model_critic: str = "llama3.1:8b"
