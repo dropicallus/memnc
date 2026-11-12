@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .schema import Role
@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     # heartbeat automatically earns their agents a CHAIN grant (e.g.
     # "node-b-*"). Empty = no auto-grant; manual `meshctl grant` only.
     grant_nodes: str = ""
+
+    @field_validator(
+        "inference_fallback_provider", "inference_fallback_api_key",
+        "inference_api_key", "nats_token", "nats_name",
+        mode="before",
+    )
+    @classmethod
+    def _empty_str_to_none(cls, v):
+        """Compose interpolates unset vars as '' — treat that as unset."""
+        if v == "":
+            return None
+        return v
 
     # workspace / tools
     workspace_root: Path = Path("/workspace")
