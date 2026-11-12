@@ -217,6 +217,20 @@ async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_synergy(_: argparse.Namespace, settings: Settings) -> int:
+    """14.13 step 3: aggregated model-pair synergy (measurement only)."""
+    from memnc.synergy import compute_synergy_metrics, format_synergy
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        observations = await bus.list_observations()
+        print(format_synergy(compute_synergy_metrics(observations), _.limit))
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
     """T6: list live node roster entries (capabilities + presence)."""
     bus = Bus(settings)
@@ -567,6 +581,12 @@ def build_parser() -> argparse.ArgumentParser:
     obslast.add_argument("--model", default=None, help="only tasks served by MODEL")
     obslast.add_argument("--limit", type=int, default=10)
     obslast.set_defaults(func=cmd_obslast)
+
+    synergy = subparsers.add_parser(
+        "synergy", help="14.13 step 3: aggregated model-pair synergy"
+    )
+    synergy.add_argument("--limit", type=int, default=10)
+    synergy.set_defaults(func=cmd_synergy)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
     tail.add_argument("task_id")

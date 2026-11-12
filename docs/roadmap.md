@@ -318,9 +318,12 @@ early human view (meshctl/Telegram command, e.g. `obslast`) so Frank
 can sanity-check what the mesh remembers before any automatic use.
 
 **Step 3 — Team-synergy aggregation (pure computation, no behavior).**
-From deposited observations, aggregate per model pair: success ratio,
-revision counts, sample size. Surface only (console/Telegram). No
-routing decisions yet — measurement first (
+DONE for the CLI surface: `compute_synergy_metrics()` +
+`format_synergy()` in `src/memnc/synergy.py` (success ratio, mean
+revisions, sample size per unordered model pair), exposed as
+`meshctl synergy [--limit N]` (verified live against the mesh KV).
+Console dashboard + optional Telegram digest still open. No routing
+decisions — measurement first (
 §14.13 Steps 1–4 (Step 0 done, commit d6cb4fb) |
 | B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists as a standalone vendored copy** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) |
 | B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
@@ -411,12 +414,13 @@ The Experience Graph is designed to capture, store, and eventually leverage the 
 
 ### Step 3: Team-Synergy Aggregation (Measurement)
 **Goal:** Surface metrics that quantify how well different model pairings/roles are performing.
-**Status:** Planned (Crucial: No behavioral changes at this stage).
+**Status:** 3.1 + CLI table DONE (`src/memnc/synergy.py`, `meshctl synergy`); console dashboard + Telegram digest open. (Crucial: No behavioral changes at this stage.)
 
 | Task | Description | Targeted Files | Interface/Key Changes | Acceptance Criteria |
 | :--- | :--- | :--- | :--- | :--- |
-| **3.1 Aggregation Engine** | Implement logic to compute success ratios and revision counts from stored observations. | `src/memnc/scoring.py` | `compute_synergy_metrics()` | Correct math for: `Success / Total` per model-pair. |
-| **3.2 Console Dashboard** | Add a summary table to the `memnc` console showing model performance. | `src/memnc/console.py` | New `mesh stats` command | Live table of agent/model synergy metrics. |
+| **3.1 Aggregation Engine** | DONE: success ratio + mean revisions + sample size per unordered model pair. Lives in `src/memnc/synergy.py` (not `scoring.py` — kept the pure computation in its own module). | `src/memnc/synergy.py` | `compute_synergy_metrics()`, `format_synergy()` | 8 unit tests; math verified. |
+| **3.2 CLI Table** | DONE: `meshctl synergy [--limit N]` (name follows the existing `obslast` verb style instead of the planned `mesh stats`). | `src/memnc/cli.py` | `meshctl synergy` | Live table verified against the mesh KV. |
+| **3.2b Console Dashboard** | Add a summary table to the `memnc` console showing model performance. | `src/memnc/console.py` | reuses `format_synergy()` | Live table of agent/model synergy metrics. |
 | **3.3 Telegram Digest** | (Optional) Daily/periodic summary of mesh performance sent via Telegram. | `src/memnc/telegram.py` | Periodic scheduler | High-level overview of mesh drift or stability. |
 
 - **Type:** 💻 Pure Code / Test Work
