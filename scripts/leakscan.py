@@ -155,7 +155,7 @@ def main() -> int:
         diff = git("diff", args.range, cwd=repo)
         added, _files = added_lines(diff)
         # the scanner itself contains its own regex rules — skip it
-        added = [l for l in added if not l.startswith("[scripts/leakscan.py]")]
+        added = [x for x in added if not x.startswith("[scripts/leakscan.py]")]
         for i, cls, line in scan_line_rules(added):
             problems.append(f"diff:{i} [{cls}] {line.strip()[:100]}")
         for i, why in german_hits(added):
