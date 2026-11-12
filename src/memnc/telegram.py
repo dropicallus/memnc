@@ -311,6 +311,14 @@ class TelegramObserver:
             await self.bot.send_message(
                 chat, summarize_tasks([s.model_dump() for s in snapshots], filter_state)
             )
+        elif cmd == "obslast":
+            from memnc.observations import format_observations
+
+            observations = await self.bus.list_observations()
+            model = parts[1].strip() if len(parts) >= 2 else None
+            await self.bot.send_message(
+                chat, format_observations(observations, model)
+            )
         elif cmd == "roster":
             nodes = await self.bus.list_nodes()
             await self.bot.send_message(
@@ -358,7 +366,8 @@ class TelegramObserver:
             await self._control(chat, "stop_worker", parts[2])
         else:
             await self.bot.send_message(
-                chat, "commands: tasks [state] | roster | state <task-id> "
+                chat, "commands: tasks [state] | roster | obslast [model] | "
+                "state <task-id> "
                 "| trace <task-id> | mreqs | mrep | approve|reject <request-id> | gate approve|reject "
                 "<task-id> | submit <task> "
                 "| cancel <task-id> | retry <task-id> | stop worker <node>"
