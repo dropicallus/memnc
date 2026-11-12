@@ -863,3 +863,42 @@ authentication, push rights derive from the claim ledger (no new
 credential class, §21 rule 5), the git surface binds to the docker
 network only, and artifact hashing (sha256) plus reputation apply the
 same "bad actor degrades" model the claim loop already enforces.
+
+## 23. Mesh API / control plane (design only)
+
+kubectl-style mesh API: one verb surface (`task list/detail/submit/cancel`,
+`node list/detail/drain`, `discuss`, `listen`, `channel *`, `trace follow`,
+`llauncher *`, `grant`) reachable from every frontend — `meshctl`, Telegram,
+web UI, later a model-mediated NL agent. See
+`docs/mesh-api-concept.md` for the full concept.
+
+Key shape:
+
+- **Topology**: hybrid — reads answered by any node via NATS anycast
+  (queue-group `mesh-api`), writes forwarded to the orchestrator as single
+  writer. Failover via presence-KV (M8), no leader election; round-robin
+  master election only a later optimization (CAS-KV).
+- **Channels / teams**: `mesh.api.channel.<team>.*` subject namespaces;
+  channel context per frontend (`/channel <team>`), per-team `discuss` and
+  `listen`.
+- **Human as peer**: the human joins a channel with a `role: human` identity
+  (observe / join / mediate), reuses the ask/WAIT_INPUT path (`mesh.clarify`);
+  human messages are ordinary channel events agents can react to.
+- **Trace following**: `trace follow <task>` streams reasoning steps/verdicts
+  from trace-proxy records through the API to any frontend.
+- **Subjects (additive)**: `mesh.api.request.<verb>` (anycast),
+  `mesh.api.reply.<request_id>`, `mesh.api.events` (JetStream), channel
+  namespaces. Same `MeshEnvelope` (+ `request_id`, `reply_subject`,
+  `served_by`).
+- **Security**: existing ACL; verbs classified read/write/admin; M8 D3
+  submitter-signature on mutating calls; no new credentials.
+- **Resource management (v2)**: `node detail` aggregates heartbeat/queue/GPU
+  (llancherer)/reputation; `node drain` + worker scale for graceful
+  maintenance.
+
+Non-goals: no task placement by VRAM math (claim loop stays
+reputation-driven), no HTTP mesh-to-mesh, no federation in v1.
+
+Rollout sketch: M11a reads + `listen` via JetStream consumer; M11b write path
++ Telegram as API client; M11c web UI proxy + resource views; M11d
+model-mediated API agent.
