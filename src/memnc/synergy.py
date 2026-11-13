@@ -86,7 +86,7 @@ def should_withdraw(
     server_stats: dict[str, dict],
     server: str,
     min_samples: int = 3,
-    min_ratio: float = 0.34,
+    min_ratio: float = 0.3,
 ) -> bool:
     """14.13 step 5 (decide side): should this server withdraw from claiming?
 

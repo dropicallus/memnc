@@ -130,3 +130,10 @@ def test_withdraw_exactly_at_ratio_threshold_keeps_claiming() -> None:
     # ratio == min_ratio is NOT below it -> the server keeps claiming
     stats = {"node-x:model": {"total": 3, "successes": 1, "success_ratio": 1 / 3}}
     assert not should_withdraw(stats, "node-x:model", min_ratio=1 / 3)
+
+
+def test_one_in_three_keeps_claiming_at_default() -> None:
+    # default 0.3: a single success in 3 attempts is NOT below threshold —
+    # only clearly-bad records (0/3) bench themselves
+    stats = {"node-x:model": {"total": 3, "successes": 1, "success_ratio": 1 / 3}}
+    assert not should_withdraw(stats, "node-x:model")

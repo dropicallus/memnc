@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # the mesh routes by its own history, no central scheduler.
     claim_synergy_gate: bool = True
     claim_synergy_min_samples: int = 3
-    claim_synergy_min_ratio: float = 0.34
+    claim_synergy_min_ratio: float = 0.3
     agent_allowed_verbs: str = (
         "task.list,task.detail,node.list,node.detail,"
         "cap.list,grant.list,trust.list,ledger.read,task.submit"
