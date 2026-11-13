@@ -52,6 +52,7 @@ from .schema import (
     reputation_key,
     should_propose_retirement,
 )
+from .synergy import compute_server_success, should_withdraw
 
 log = logging.getLogger(__name__)
 
@@ -798,6 +799,33 @@ class Worker:
                 # refreshes; cleared by resume_node or a process restart).
                 if await self._paused():
                     continue
+                # 14.13 step 5: experience-driven claim gate. One shot per
+                # poll: aggregate the deposited observations and withdraw
+                # from claiming when OUR track record on this role is below
+                # threshold (min-samples guard; CLAIM_SYNERGY_GATE switch).
+                # No central scheduler — the node reads its own history and
+                # politely steps back, leaving work to peers with better
+                # track records on this role.
+                if self.settings.claim_synergy_gate:
+                    _stats = compute_server_success(
+                        await self.bus.list_observations()
+                    )
+                    _server = (
+                        f"{self.settings.node_name}:"
+                        f"{self.settings.model_for(self.role)}"
+                    )
+                    if should_withdraw(
+                        _stats,
+                        _server,
+                        min_samples=self.settings.claim_synergy_min_samples,
+                        min_ratio=self.settings.claim_synergy_min_ratio,
+                    ):
+                        log.info(
+                            "synergy gate: withdrawing from claims "
+                            "(track record below threshold)",
+                            extra={"server": _server},
+                        )
+                        continue
                 for snapshot in await self.bus.list_tasks():
                     if snapshot.state in TERMINAL_STATES:
                         continue

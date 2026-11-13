@@ -1,5 +1,10 @@
 from memnc.observations import TaskObservation
-from memnc.synergy import compute_synergy_metrics, format_synergy
+from memnc.synergy import (
+    compute_server_success,
+    compute_synergy_metrics,
+    format_synergy,
+    should_withdraw,
+)
 
 
 def _obs(task_id, outcome, route, revisions=0):
@@ -73,3 +78,55 @@ def test_format_table() -> None:
     assert lines[0].startswith("pair |")
     assert "model-a + model-b" in lines[1]
     assert "| 1 | 1 | 1.00 | 2.00" in lines[1]
+
+
+# -- 14.13 step 5: per-server track record + claim gate ---------------------
+
+ROUTE_MIXED = {
+    "planner": "node-a-planner:qwen2.5:7b",
+    "coder": "node-b-coder:llama3.2:3b",
+}
+
+
+def test_server_success_empty() -> None:
+    assert compute_server_success([]) == {}
+
+
+def test_server_success_counts_per_server() -> None:
+    obs = [
+        _obs("t1", "done", ROUTE_MIXED),
+        _obs("t2", "done", ROUTE_MIXED),
+        _obs("t3", "failed", ROUTE_MIXED),
+        _obs("t4", "done", {"planner": "node-a-planner:llama3.2:3b"}),
+    ]
+    stats = compute_server_success(obs)
+    assert stats["node-a-planner:qwen2.5:7b"] == {
+        "total": 3, "successes": 2, "success_ratio": 2 / 3,
+    }
+    assert stats["node-b-coder:llama3.2:3b"]["total"] == 3
+    assert stats["node-a-planner:llama3.2:3b"]["success_ratio"] == 1.0
+
+
+def test_withdraw_unknown_server_keeps_claiming() -> None:
+    assert not should_withdraw({}, "node-x:model")
+
+
+def test_withdraw_insufficient_samples_keeps_claiming() -> None:
+    stats = {"node-x:model": {"total": 2, "successes": 0, "success_ratio": 0.0}}
+    assert not should_withdraw(stats, "node-x:model", min_samples=3)
+
+
+def test_withdraw_bad_record() -> None:
+    stats = {"node-x:model": {"total": 3, "successes": 0, "success_ratio": 0.0}}
+    assert should_withdraw(stats, "node-x:model")
+
+
+def test_withdraw_decent_record_keeps_claiming() -> None:
+    stats = {"node-x:model": {"total": 3, "successes": 2, "success_ratio": 2 / 3}}
+    assert not should_withdraw(stats, "node-x:model")
+
+
+def test_withdraw_exactly_at_ratio_threshold_keeps_claiming() -> None:
+    # ratio == min_ratio is NOT below it -> the server keeps claiming
+    stats = {"node-x:model": {"total": 3, "successes": 1, "success_ratio": 1 / 3}}
+    assert not should_withdraw(stats, "node-x:model", min_ratio=1 / 3)

@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # LM Studio, cloud). agent_allowed_verbs is the fail-closed allowlist.
     agent_llm_base_url: str = "http://127.0.0.1:4000/v1"
     agent_llm_model: str = "local"
+    # 14.13 step 5: experience-driven claim gate. A server whose own track
+    # record (from deposited observations) is below claim_synergy_min_ratio
+    # with at least claim_synergy_min_samples stops claiming that role —
+    # the mesh routes by its own history, no central scheduler.
+    claim_synergy_gate: bool = True
+    claim_synergy_min_samples: int = 3
+    claim_synergy_min_ratio: float = 0.34
     agent_allowed_verbs: str = (
         "task.list,task.detail,node.list,node.detail,"
         "cap.list,grant.list,trust.list,ledger.read,task.submit"
