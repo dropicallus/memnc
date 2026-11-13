@@ -139,6 +139,30 @@ Without it the entrypoint behaves exactly as before (solo).
 Compose sets per-service `mem_limit`, `cpus` and `pids_limit`. Adjust for your
 host. The containers run read-only with only `/workspace` and `/tmp` writable.
 
+## Cold-standby backup (Duo topology)
+
+Durable state lives in JetStream KV buckets. Raft needs a majority, so a
+2-host setup gives replication but no automatic failover -- the recovery
+story is a periodic dump on the active host plus a documented restore on
+the stand-by. Ephemeral buckets (registry, roster) are skipped on
+purpose: they repopulate from node heartbeats within seconds.
+
+Dump every durable bucket to a JSON file:
+
+    meshctl backup --out /var/backups/memnc-$(date +%F).json
+
+Restore onto a stand-by host (upsert; live-only keys survive):
+
+    meshctl restore /var/backups/memnc-2026-11-13.json
+
+Add `--purge` to delete live keys missing from the backup and make the
+target an exact mirror of the dump. Promote procedure: stop the old
+NATS, start NATS on the stand-by with the same volume/token, run
+`restore`, then point clients at the new host (a comma-separated
+`NATS_URL` seed list already covers the switch). Schedule the backup
+with cron or systemd-timer on the active host; the recovery point is
+the time since the last dump.
+
 ## Security
 
 Full shell execution is enabled by default. Restrict exposure:

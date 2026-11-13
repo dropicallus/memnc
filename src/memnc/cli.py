@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import nats
 
 from .backends import make_backend
+from .backup import dump_buckets, restore_buckets
 from .bus import Bus
 from .config import Settings, get_settings
 from .schema import (
@@ -229,6 +230,35 @@ async def cmd_synergy(_: argparse.Namespace, settings: Settings) -> int:
         return 0
     finally:
         await bus.close()
+
+
+async def cmd_backup(args: argparse.Namespace, settings: Settings) -> int:
+    """Cold-standby backup: dump durable KV buckets to a JSON file."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        data = await dump_buckets(bus)
+    finally:
+        await bus.close()
+    with open(args.out, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+    counts = {k: len(v) for k, v in data["buckets"].items()}
+    print(f"backup written to {args.out}: {counts}")
+    return 0
+
+
+async def cmd_restore(args: argparse.Namespace, settings: Settings) -> int:
+    """Cold-standby restore: write a backup JSON back into the KV buckets."""
+    with open(args.file, encoding="utf-8") as fh:
+        data = json.load(fh)
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        counts = await restore_buckets(bus, data, purge=args.purge)
+    finally:
+        await bus.close()
+    print(f"restored: {counts}")
+    return 0
 
 
 async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
@@ -635,6 +665,23 @@ def build_parser() -> argparse.ArgumentParser:
     revoke = subparsers.add_parser("revoke", help="revoke an agent's capability grant")
     revoke.add_argument("agent_id")
     revoke.set_defaults(func=cmd_revoke)
+
+    backup = subparsers.add_parser(
+        "backup", help="cold-standby backup: dump durable KV buckets to JSON"
+    )
+    backup.add_argument("--out", required=True, help="output JSON file")
+    backup.set_defaults(func=cmd_backup)
+
+    restore = subparsers.add_parser(
+        "restore", help="cold-standby restore: write a backup JSON back into KV"
+    )
+    restore.add_argument("file", help="backup JSON file")
+    restore.add_argument(
+        "--purge",
+        action="store_true",
+        help="delete live keys missing from the backup (exact mirror)",
+    )
+    restore.set_defaults(func=cmd_restore)
 
     doctor = subparsers.add_parser("doctor", help="check connectivity and models")
     doctor.set_defaults(func=cmd_doctor)
