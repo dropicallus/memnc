@@ -686,7 +686,16 @@ reward + corroboration) onto our observations. Still read-only.
 **Step 5 — Routing feedback loop (behavior change, human-gated).**
 Claim decision consults ranked traces alongside the existing configured
 utility score; a config flag (default off) selects the mode. Compare
-both modes on a shadow period before switching. T7 scalar stays as the
+both modes on a shadow period before switching.
+- **DONE (commits a8cd309, 9d118b6):** experience-driven claim gate —
+  workers aggregate deposited observations per server ("node-role:model")
+  via `compute_server_success()` (synergy.py) and withdraw from claiming
+  when their own track record drops below `claim_synergy_min_ratio`
+  (default 0.3, >= `claim_synergy_min_samples` (default 3) required;
+  fail-closed: thin evidence never benches a server). No central
+  scheduler — the node reads its own history (CLAIM_SYNERGY_GATE switch,
+  on by default). First live observation: gate withdrew on 1/3 ratio at
+  the initial 0.34 default -> default retuned to 0.3 (only 0/n benches). T7 scalar stays as the
 human-gated retirement source (two consumers, 
 §14.13) | Observation deposits, trace query, team-synergy aggregation, similarity + ranked attention. This IS the AgentNet edge layer on our KV ledger — no external graph DB needed. |
 # Roadmap — prioritized (2026-11-12)
