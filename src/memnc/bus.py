@@ -105,7 +105,7 @@ class Bus:
                             "shared token (fail closed)."
                         )
                     self.nc = await nats.connect(
-                        self.settings.nats_url,
+                        self.settings.nats_servers,
                         nkeys_seed=seed_path,
                         name=self.settings.nats_name or self.settings.node_name,
                         max_reconnect_attempts=-1,
@@ -113,7 +113,7 @@ class Bus:
                     )
                 else:
                     self.nc = await nats.connect(
-                        self.settings.nats_url,
+                        self.settings.nats_servers,
                         token=self.settings.nats_token or None,
                         name=self.settings.nats_name or self.settings.node_name,
                         max_reconnect_attempts=-1,
@@ -183,7 +183,7 @@ class Bus:
             self.kv = await self.js.key_value(self.settings.kv_bucket)
         except NotFoundError:
             self.kv = await self.js.create_key_value(
-                KeyValueConfig(bucket=self.settings.kv_bucket, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=self.settings.kv_bucket, history=10)
             )
             log.info("created KV bucket %s", self.settings.kv_bucket)
 
@@ -196,6 +196,7 @@ class Bus:
         except NotFoundError:
             self._registry = await self.js.create_key_value(
                 KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas,
                     bucket=REGISTRY_BUCKET,
                     history=1,
                     # TTL = presence: expired capability records vanish.
@@ -258,7 +259,7 @@ class Bus:
             self._roster = await self.js.key_value(ROSTER_BUCKET)
         except NotFoundError:
             self._roster = await self.js.create_key_value(
-                KeyValueConfig(bucket=ROSTER_BUCKET, history=1, ttl=ROSTER_TTL)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=ROSTER_BUCKET, history=1, ttl=ROSTER_TTL)
             )
             log.info("created roster KV bucket %s (ttl=%ss)", ROSTER_BUCKET, ROSTER_TTL)
 
@@ -314,7 +315,7 @@ class Bus:
             self._model_requests = await self.js.key_value(MODEL_REQUESTS_BUCKET)
         except NotFoundError:
             self._model_requests = await self.js.create_key_value(
-                KeyValueConfig(bucket=MODEL_REQUESTS_BUCKET, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=MODEL_REQUESTS_BUCKET, history=10)
             )
             log.info("created model-request KV bucket %s", MODEL_REQUESTS_BUCKET)
 
@@ -408,7 +409,7 @@ class Bus:
             self._grants = await self.js.key_value(GRANT_BUCKET)
         except NotFoundError:
             self._grants = await self.js.create_key_value(
-                KeyValueConfig(bucket=GRANT_BUCKET, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=GRANT_BUCKET, history=10)
             )
             log.info("created grant KV bucket %s", GRANT_BUCKET)
 
@@ -469,7 +470,7 @@ class Bus:
             self._observations = await self.js.key_value(OBSERVATIONS_BUCKET)
         except NotFoundError:
             self._observations = await self.js.create_key_value(
-                KeyValueConfig(bucket=OBSERVATIONS_BUCKET, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=OBSERVATIONS_BUCKET, history=10)
             )
             log.info("created observation KV bucket %s", OBSERVATIONS_BUCKET)
 
@@ -502,7 +503,7 @@ class Bus:
             self._trust = await self.js.key_value(TRUST_BUCKET)
         except NotFoundError:
             self._trust = await self.js.create_key_value(
-                KeyValueConfig(bucket=TRUST_BUCKET, history=1)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=TRUST_BUCKET, history=1)
             )
             log.info("created trust KV bucket %s", TRUST_BUCKET)
 

@@ -40,14 +40,14 @@ async def _connect(settings: Settings):
                 "exist — refusing to fall back to the shared token (fail closed)."
             )
         return await nats.connect(
-            settings.nats_url,
+            settings.nats_servers,
             nkeys_seed=seed_path,
             name=f"meshctl-{settings.node_name}",
             max_reconnect_attempts=2,
             connect_timeout=5,
         )
     return await nats.connect(
-        settings.nats_url,
+        settings.nats_servers,
         token=settings.nats_token or None,
         name=f"meshctl-{settings.node_name}",
         max_reconnect_attempts=2,
