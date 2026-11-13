@@ -1,6 +1,21 @@
 # Roadmap
 
 ## Built
+
+- **2026-11-13 — §14.13 Step 5, experience-driven claim gate** (commits
+  a8cd309, 9d118b6, 7636e00): workers aggregate their own per-server track
+  record from deposited observations and withdraw from claiming when the
+  ratio drops below 0.3 with >= 3 samples (fail-closed). Live on
+  node-a + node-c.
+- **2026-11-13 — Topology framework** (commit 5856c84): `NATS_URL` accepts
+  comma-separated seed lists (client-side server pool / reconnect across
+  masters), `NATS_KV_REPLICAS` setting wired into every KV bucket, nats
+  compose entrypoint generates a Raft cluster block when
+  `NATS_CLUSTER_ROUTES` is set (port 6222). Reference topologies (Solo /
+  Duo cold-standby / Mesh >= 3 sites incl. witness) documented in
+  `docs/operations.md`. Deployment topology is settings-only — the
+  framework is not tied to any one machine layout.
+
 ## 14. Milestones
 
 | ID | Deliverable | Acceptance |
@@ -324,7 +339,7 @@ revisions, sample size per unordered model pair), exposed as
 `meshctl synergy [--limit N]` (verified live against the mesh KV).
 Console dashboard + optional Telegram digest still open. No routing
 decisions — measurement first (
-§14.13 Steps 1–4 (Step 0 done, commit d6cb4fb) |
+§14.13 Steps 1–4; remaining: Step 4 similarity/ranked attention (Step 5 claim gate DONE, commits a8cd309/9d118b6) |
 | B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists as a standalone vendored copy** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) |
 | B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
 | B4 | Fisher-Merge pipeline | mergekit-based merge of role adapters with a subspace-divergence check (principal angles) before merging; naive averaging is known to degrade (MoRSE result). | §19 P0 + synthesis.md §5 |
@@ -363,8 +378,8 @@ decisions — measurement first (
   design. Anthropic's orchestrator-worker engineering write-up is a design
   reference for M16, not a dependency.
 
-**Sequencing:** finish 
-§14.13 Steps 1–4 → Step 5 routing feedback → B3 leader
+**Sequencing:** §14.13 Step 5 claim gate is DONE; next
+Step 4 (similarity/ranked attention) → B3 leader
 prompt layer → B2 role-LoRA training from observations → B4 merges. T1 runs as
 a time-boxed side experiment; T2 rides along with S4; T3 after B2.
 
@@ -698,7 +713,7 @@ both modes on a shadow period before switching.
   the initial 0.34 default -> default retuned to 0.3 (only 0/n benches). T7 scalar stays as the
 human-gated retirement source (two consumers, 
 §14.13) | Observation deposits, trace query, team-synergy aggregation, similarity + ranked attention. This IS the AgentNet edge layer on our KV ledger — no external graph DB needed. |
-# Roadmap — prioritized (2026-11-12)
+# Roadmap — prioritized (2026-11-13)
 
 Inputs: 26-paper corpus (§19), insights from 2026-11-11/12 — MoRAM/CoDyRA
 (growing-LoRA as memory), Fisher-Merge (mergekit), arXiv 2603.01097
@@ -760,6 +775,24 @@ trust.list/ledger.read verbs; fallback to direct Bus reads if the API
 server is down); node load is part of the resource view.
 Next: M11d NL agent. Channels/human-as-peer from 5a feed into S4
 (approval gate) — S4 and M11b merge.
+
+## P4 — Infra robustness (decided 2026-11-13)
+
+Topology support is DONE (see Built). Open infra slices:
+
+1. **NATS cold-standby backup (Duo topology)**: periodic KV/ledger backup
+   on the active node (nats stream backup / KV export into the nats-data
+   companion), documented promote/restore for the second host. Recovery
+   point = time since last backup; acceptable for a 2-host setup (Raft
+   majority impossible without a 3rd voter). Decision: this is the
+   failover story until the mesh goes productive; a data-less witness
+   (tiny VPS, ~30 MB RAM) is the upgrade path to real automatic failover
+   (Mesh topology, replicas=3).
+2. **Node update logic**: version check at heartbeat, refuse/upgrade
+   stale nodes — motivated by today's manual rsync rollouts.
+3. **Wake-on-backlog (WoL)**: mesh detects backlog, wakes the cold
+   reserve host. Posture: cold reserve capacity, no replication overlap
+   with slice 1.
 
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art
