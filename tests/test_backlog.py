@@ -11,6 +11,7 @@ from memnc.backlog import (
     MAX_ATTEMPTS,
     BacklogStore,
     BacklogTask,
+    decompose_plan,
 )
 
 
@@ -154,3 +155,30 @@ def test_stale_claim_is_reclaimed():
     # fresh claim is NOT stealable
     fresh = asyncio.run(store.claim(task.id, "driver-c"))
     assert fresh is None
+
+
+def test_decompose_plan_numbered_lines():
+    plan = "1. write the parser\n2. add tests for the parser\n3. update docs"
+    assert decompose_plan(plan) == [
+        "write the parser",
+        "add tests for the parser",
+        "update docs",
+    ]
+
+
+def test_decompose_plan_bullets():
+    plan = "- first thing\n* second thing"
+    assert decompose_plan(plan) == ["first thing", "second thing"]
+
+
+def test_decompose_plan_paragraphs():
+    plan = "Build the thing.\n\nThen test the thing.\n\n\nShip it."
+    assert decompose_plan(plan) == ["Build the thing.", "Then test the thing.", "Ship it."]
+
+
+def test_decompose_plan_single_block_is_one_task():
+    assert decompose_plan("just do the one thing") == ["just do the one thing"]
+
+
+def test_decompose_plan_empty():
+    assert decompose_plan("   \n  ") == []

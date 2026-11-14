@@ -9,6 +9,7 @@ above the mesh task queue.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -40,6 +41,36 @@ def _parse_ts(value: str) -> datetime | None:
     except (ValueError, TypeError):
         return None
 
+
+_TASK_LINE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+")
+
+def decompose_plan(text: str) -> list[str]:
+    """Split a plan document into task prompts.
+
+    Numbered (``1.``) or bullet (``- ``/``* ``) lines win when there are at
+    least two of them -- that is the canonical shape of a written plan.
+    Otherwise blank-line-separated paragraphs are the tasks, and a single
+    block becomes one task.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return []
+    task_lines = [
+        _TASK_LINE.sub("", line).strip()
+        for line in stripped.splitlines()
+        if _TASK_LINE.match(line)
+    ]
+    tasks = [line for line in task_lines if line]
+    if len(tasks) >= 2:
+        return tasks
+    paragraphs = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", stripped)
+        if block.strip()
+    ]
+    if len(paragraphs) >= 2:
+        return paragraphs
+    return [stripped]
 
 def _is_stale_claimed(task: BacklogTask) -> bool:
     claimed_at = _parse_ts(task.claimed_at)

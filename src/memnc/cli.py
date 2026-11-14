@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 import nats
 
 from .backends import make_backend
-from .backlog import MAX_ATTEMPTS, BacklogStore
+from .backlog import MAX_ATTEMPTS, BacklogStore, decompose_plan
 from .backup import dump_buckets, restore_buckets
 from .bus import Bus
 from .config import Settings, get_settings
@@ -650,6 +650,37 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
     return True
 
 
+async def _backlog_plan(args: argparse.Namespace, settings: Settings) -> int:
+    """Decompose a plan text into backlog entries sharing a plan_id."""
+    tasks = decompose_plan(args.plan)
+    if not tasks:
+        print("error: plan text is empty", file=sys.stderr)
+        return 1
+    if args.dry_run:
+        for i, text in enumerate(tasks, 1):
+            print(f"{i}. {text}")
+        return 0
+
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        prev_id = ""
+        for i, text in enumerate(tasks, 1):
+            words = text.split()
+            title = " ".join(words[:8]) + ("..." if len(words) > 8 else "")
+            deps = [prev_id] if args.chain and prev_id else []
+            task = await store.add(title=title, prompt=text, plan_id=args.plan_id, deps=deps)
+            prev_id = task.id
+            print(f"added {task.id} [{i}/{len(tasks)}] deps={deps} {title}")
+        return 0
+    finally:
+        await client.close()
+
+
+def cmd_backlog_plan(args: argparse.Namespace, settings: Settings):
+    return _backlog_plan(args, settings)
+
+
 async def cmd_backlog_reset(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
     try:
@@ -847,6 +878,17 @@ def build_parser() -> argparse.ArgumentParser:
     backlog_list = subparsers.add_parser("backlog-list", help="list backlog entries")
     backlog_list.add_argument("--plan-id", default="", help="filter by plan")
     backlog_list.set_defaults(func=cmd_backlog_list)
+
+    plan_parser = subparsers.add_parser(
+        "backlog-plan",
+        help="decompose a plan text into backlog tasks sharing a plan_id",
+    )
+    plan_parser.add_argument("plan", help="plan text (numbered/bullet lines or paragraphs)")
+    plan_parser.add_argument("--plan-id", required=True)
+    plan_parser.add_argument("--chain", action="store_true",
+                             help="make each task depend on the previous one (sequential plan)")
+    plan_parser.add_argument("--dry-run", action="store_true", help="print the tasks without adding")
+    plan_parser.set_defaults(func=cmd_backlog_plan)
 
     backlog_reset = subparsers.add_parser("backlog-reset", help="re-plan a backlog entry")
     backlog_reset.add_argument("backlog_id")
