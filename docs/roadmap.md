@@ -974,7 +974,7 @@ claimed task 1 and submitted it into the mesh.
   2. node-c's ollama does NOT have `qwen2.5:7b` (planner) nor `qwen2.5-coder:32b` (coder) — ollama answers 404 for unknown models, which looks identical to a network error in the agent error string. node-c only has `qwen2.5-coder:7b`, `llama3.2:3b`, `swift`, `gemma4`, and a 27B/35B MoE coder. FIX PENDING (needs user OK, .env edit on node-c blocked overnight): point node-c's MODEL_PLANNER/MODEL_CODER/MODEL_CRITIC at `qwen2.5-coder:7b` — weak node, weak models, exactly the weak->strong routing slice's premise (node-a has the strong models: qwen2.5:7b, qwen2.5-coder:32b, produktiv, signal-27b...). No model download needed.
 - Design lesson for slice 3 (weak->strong routing): the 3x-fail -> FAILED measurement is exactly the signal the router needs — a task failing 3/3 on a weak node should be retried on a strong node before terminal failure, not just counted.
 
-### 14.15.3 Slice: weak->strong routing via backlog attempts (BUILT 2026-11-15 night, commit 16ee63c)
+### 14.15.3 Slice: weak->strong routing via backlog attempts (BUILT 2026-11-15 night, commits 16ee63c + c370a03)
 
 Slice 3 from the "Next slices" list. Mechanism, no new subjects and no
 --needs-model hack:
@@ -990,6 +990,10 @@ Slice 3 from the "Next slices" list. Mechanism, no new subjects and no
   `strong_retry=True`, `prefer_node=STRONG_NODE`). `should_strong_retry()`
   guards the loop: strong-retries never spawn further retries.
 - `Settings.strong_node` (env `STRONG_NODE`, default "") disables the path.
+- Gotcha (c370a03): worker node_names are role-suffixed (node-a-planner,
+  node-a-coder, ...). A task dispatches to several roles, so exact-match
+  targeting can never satisfy every dispatch — `prefer_node` names the HOST
+  and workers match by prefix (`node_name.startswith(prefer_node)`).
 
 Semantics: a weak node burns its 3 attempts on the weak pool first — that
 measured failure is the routing signal — then the work item migrates to the
