@@ -166,6 +166,11 @@ class NodeInfo(BaseModel):
         """Union of two heartbeat entries for the same node (multi-process)."""
         return NodeInfo(
             node_id=self.node_id,
+            # P4: carry the code fingerprint; the freshest non-default wins
+            # (a "dev" entry must not mask a real fingerprint in the merge).
+            version=self.version
+            if self.version and self.version != "dev"
+            else other.version,
             roles=sorted(set(self.roles) | set(other.roles)),
             models=sorted(set(self.models) | set(other.models)),
             disk_models=sorted(set(self.disk_models) | set(other.disk_models)),

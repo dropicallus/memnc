@@ -55,6 +55,7 @@ from .schema import (
     should_propose_retirement,
 )
 from .synergy import compute_server_success, should_withdraw
+from .version import code_version, is_stale
 
 log = logging.getLogger(__name__)
 
@@ -467,6 +468,7 @@ class Worker:
                 await self.bus.advertise_node(
                     NodeInfo(
                         node_id=self.settings.node_name,
+                        version=code_version(),
                         roles=[self.role.value],
                         models=[model],
                         disk_models=list(self._disk_models),
@@ -487,6 +489,30 @@ class Worker:
         # node-a-coder, ...) while prefer_node names the host (node-a).
         prefer = envelope.payload.get("prefer_node", "")
         if prefer and not self.settings.node_name.startswith(prefer):
+            try:
+                await message.nak(delay=2.0)
+            except Exception:  # noqa: BLE001
+                await message.nak()
+            return
+        # P4 slice 2: refuse commands from a mesh running different code.
+        # The orchestrator stamps mesh_version into every dispatch; a stale
+        # worker naks (like prefer_node) so the command stays available for
+        # a compliant node; if none exists it eventually dead-letters —
+        # the visible "upgrade this node" signal.
+        expected = (envelope.payload or {}).get("mesh_version", "")
+        if (
+            expected
+            and self.settings.enforce_node_version
+            and is_stale(expected, code_version())
+        ):
+            log.warning(
+                "version mismatch, refusing command",
+                extra={
+                    "task_id": envelope.task_id,
+                    "expected": expected,
+                    "running": code_version(),
+                },
+            )
             try:
                 await message.nak(delay=2.0)
             except Exception:  # noqa: BLE001

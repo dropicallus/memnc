@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     claim_synergy_gate: bool = True
     claim_synergy_min_samples: int = 3
     claim_synergy_min_ratio: float = 0.3
+    # P4 slice 2 (node update logic): when enabled, a worker refuses any
+    # dispatch command whose mesh_version differs from its own code
+    # fingerprint — stale nodes stop claiming until they upgrade.
+    enforce_node_version: bool = False
     agent_allowed_verbs: str = (
         "task.list,task.detail,node.list,node.detail,"
         "cap.list,grant.list,trust.list,ledger.read,task.submit"

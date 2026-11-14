@@ -35,6 +35,7 @@ from .schema import (
     TaskSubmission,
     model_pull_allowed,
 )
+from .version import code_version, is_stale
 
 
 async def _connect(settings: Settings):
@@ -521,6 +522,20 @@ async def cmd_doctor(_: argparse.Namespace, settings: Settings) -> int:
         info = await bus.js.stream_info(settings.stream_name)
         print(f"stream     {info.config.name}  messages={info.state.messages}")
         print(f"kv         {settings.kv_bucket}  ok")
+        # P4 slice 2: report nodes whose roster fingerprint differs from
+        # this host's code — the upgrade list for the fleet.
+        try:
+            nodes = await bus.list_nodes()
+            mine = code_version()
+            print(f"code       {mine}")
+            for node in nodes:
+                stale = is_stale(node.version, mine)
+                mark = "STALE" if stale else "ok"
+                print(f"  node {node.node_id:<20} {node.version}  {mark}")
+                if stale:
+                    ok = False
+        except Exception:  # noqa: BLE001 - roster view is best effort
+            print("roster     unavailable", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"stream     FAILED: {exc}", file=sys.stderr)
         ok = False

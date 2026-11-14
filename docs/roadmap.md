@@ -2,6 +2,16 @@
 
 ## Built
 
+- **2026-11-14 — Node code fingerprints (P4 slice 2)**: every worker
+  advertises a deterministic code fingerprint (`memnc.version.code_version`,
+  hash over installed package sources, `<__version__>+<hash12>`) in
+  `NodeInfo.version`; `merge()` carries the freshest non-`dev` value. The
+  orchestrator stamps `mesh_version` into every dispatch command; with
+  `Settings.enforce_node_version` (opt-in, default off) a worker running
+  different code naks the command so it stays available for compliant
+  nodes. `meshctl doctor` lists the roster with per-node STALE marks and
+  fails when any node runs other code. Unknown/`dev` versions fail open.
+
 - **2026-11-13 — §14.13 Step 5, experience-driven claim gate** (commits
   a8cd309, 9d118b6, 7636e00): workers aggregate their own per-server track
   record from deposited observations and withdraw from claiming when the
@@ -788,8 +798,11 @@ Topology support is DONE (see Built). Open infra slices:
    failover story until the mesh goes productive; a data-less witness
    (tiny VPS, ~30 MB RAM) is the upgrade path to real automatic failover
    (Mesh topology, replicas=3).
-2. **Node update logic**: version check at heartbeat, refuse/upgrade
-   stale nodes — motivated by today's manual rsync rollouts.
+2. **Node update logic**: DONE — deterministic code fingerprints
+   (`memnc.version`), orchestrator stamps `mesh_version` into dispatch,
+   workers refuse mismatched code when `enforce_node_version` is on
+   (opt-in until the fleet rolls it), `meshctl doctor` reports stale
+   roster nodes.
 3. **Wake-on-backlog (WoL)**: mesh detects backlog, wakes the cold
    reserve host. Posture: cold reserve capacity, no replication overlap
    with slice 1.

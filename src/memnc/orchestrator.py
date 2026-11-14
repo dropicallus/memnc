@@ -40,6 +40,7 @@ from .schema import (
     plan_model_request,
 )
 from .scoring import router_candidates, score_candidates
+from .version import code_version
 
 log = logging.getLogger(__name__)
 
@@ -717,6 +718,8 @@ class Orchestrator:
                 "workspace_root": str(self.settings.workspace_root),
                 "role": role.value,
                 "prefer_node": snapshot.prefer_node,
+                # P4 slice 2: mesh code fingerprint — stale workers refuse.
+                "mesh_version": code_version(),
             },
         )
         snapshot.last_action = {
