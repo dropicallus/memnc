@@ -2,6 +2,17 @@
 
 ## Built
 
+- **2026-11-14 — Node revocation tombstones (§21.3)**: `meshctl
+  revoke-node <id> --reason --by` writes a tombstone into the new KV bucket
+  `mesh_revocations` (durable, included in cold-standby backup), withdraws
+  every capability record of the node and drops its roster entry; `meshctl
+  reinstate <id>` removes it. Enforcement while revoked: heartbeats are
+  refused (roster gate), capability publishes raise `PermissionError`
+  (capability gate), and every `try_claim` from that node is denied
+  fail-closed before any CAS write — in-flight tasks finish untouched.
+  `meshctl revocations` lists tombstones. Tests: `tests/test_revocation.py`
+  (9 cases). Nothing in the mesh auto-revokes; revocation is a human cut.
+
 - **2026-11-14 — Telegram inline keyboards + short task-ID prefixes
   (14.11 P0 slice 1)**: failure cards carry `[Retry][Cancel]` inline buttons;
   callback_data (`tk:/mr:/nd:` triplets) parses through a fixed verb table and
@@ -993,7 +1004,6 @@ suite 372 passed + 2 skipped. Commit 22ef1a2.
   suffices), HTTP mesh-to-mesh, federation v1.
 
 ### 14.15.1 Slice: plan-decomposition helper `backlog-plan` (BUILT 2026-11-15 night, commit 5378963)
-
 `decompose_plan(text)` in `backlog.py` turns a written plan document into task prompts:
 numbered (`1.`) or bullet (`- ` / `* `) lines win when >=2 exist, else blank-line-separated
 paragraphs, else the whole text as one block.

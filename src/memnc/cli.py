@@ -501,12 +501,53 @@ async def cmd_grants(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
-async def cmd_revoke(args: argparse.Namespace, settings: Settings) -> int:
+async def cmd_revoke_grant(args: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
     try:
         await bus.revoke_grant(args.agent_id)
         print(f"revoked grant for {args.agent_id}")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_revoke_node(args: argparse.Namespace, settings: Settings) -> int:
+    """M7: revoke a whole node — roster cut + capability withdrawal + claim gate."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        record = await bus.revoke_node(args.node_id, reason=args.reason, by=args.by)
+        print(f"revoked node {record.node_id} (reason={record.reason or '-'} by={record.by})")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_reinstate_node(args: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        if await bus.reinstate_node(args.node_id):
+            print(f"reinstate: tombstone for {args.node_id} removed")
+        else:
+            print(f"{args.node_id} was not revoked")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_revocations(_: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        revocations = await bus.list_revocations()
+        if not revocations:
+            print("no revoked nodes")
+            return 0
+        for record in sorted(revocations, key=lambda r: r.node_id):
+            print(f"{record.node_id}  by={record.by}  reason={record.reason or '-'}")
+        print(f"{len(revocations)} node(s) revoked")
         return 0
     finally:
         await bus.close()
@@ -945,7 +986,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     revoke = subparsers.add_parser("revoke", help="revoke an agent's capability grant")
     revoke.add_argument("agent_id")
-    revoke.set_defaults(func=cmd_revoke)
+    revoke.set_defaults(func=cmd_revoke_grant)
+    revoke_node = subparsers.add_parser(
+        "revoke-node", help="M7: revoke a whole node (roster cut, caps withdrawn, claims denied)"
+    )
+    revoke_node.add_argument("node_id")
+    revoke_node.add_argument("--reason", default="")
+    revoke_node.add_argument("--by", default="meshctl")
+    revoke_node.set_defaults(func=cmd_revoke_node)
+    reinstate = subparsers.add_parser(
+        "reinstate", help="M7: remove a node revocation tombstone (node rejoins on next heartbeat)"
+    )
+    reinstate.add_argument("node_id")
+    reinstate.set_defaults(func=cmd_reinstate_node)
+    revocations = subparsers.add_parser("revocations", help="list revoked nodes")
+    revocations.set_defaults(func=cmd_revocations)
 
     backup = subparsers.add_parser(
         "backup", help="cold-standby backup: dump durable KV buckets to JSON"

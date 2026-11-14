@@ -29,6 +29,11 @@ from nats.js.errors import (
 from . import acl
 from .config import Settings
 from .observations import OBSERVATIONS_BUCKET, TaskObservation
+from .revocation import (
+    REVOCATIONS_BUCKET,
+    RevocationRecord,
+    revocation_key,
+)
 from .schema import (
     GRANT_BUCKET,
     MODEL_REQUEST_KEY,
@@ -87,6 +92,7 @@ class Bus:
         self._grants = None
         self._model_requests = None
         self._observations = None
+        self._revocations = None
 
     # -- lifecycle ---------------------------------------------------------
     async def connect(self, attempts: int = 20) -> None:
@@ -134,6 +140,7 @@ class Bus:
         await self.ensure_trust()
         await self.ensure_grants()
         await self.ensure_observations()
+        await self.ensure_revocations()
         log.info("connected to NATS at %s", self.settings.nats_url)
 
     async def close(self) -> None:
@@ -213,6 +220,9 @@ class Bus:
         grantless writes raise ``PermissionError``.
         """
         assert self._registry is not None
+        # M7 capability gate: a revoked node may not (re)publish capabilities.
+        if await self.revocation_of(cap.node) is not None:
+            raise PermissionError(f"registry write denied for {cap.agent_id}: node revoked")
         if self.settings.mesh_gate:
             decision = acl.check_registry_write(await self.grant_read(cap.agent_id), cap.agent_id)
             if not decision:
@@ -252,9 +262,9 @@ class Bus:
 
     async def ensure_roster(self) -> None:
         """Ensure the TTL node-roster KV bucket exists."""
-        assert self.js is not None
         if self._roster is not None:
             return
+        assert self.js is not None
         try:
             self._roster = await self.js.key_value(ROSTER_BUCKET)
         except NotFoundError:
@@ -264,7 +274,14 @@ class Bus:
             log.info("created roster KV bucket %s (ttl=%ss)", ROSTER_BUCKET, ROSTER_TTL)
 
     async def advertise_node(self, info: NodeInfo) -> None:
-        """Refresh one node's roster entry (merge with existing roles/models)."""
+        """Refresh one node's roster entry (merge with existing roles/models).
+
+        M7 roster gate: a revoked node's heartbeats are refused outright —
+        reinstate deletes the tombstone and the next heartbeat rejoins it.
+        """
+        if await self.revocation_of(info.node_id) is not None:
+            log.warning("refusing heartbeat from revoked node %s", info.node_id)
+            return
         await self.ensure_roster()
         assert self._roster is not None
         existing = await self.get_node(info.node_id)
@@ -457,6 +474,81 @@ class Bus:
         for key in sorted(keys):
             entry = await self._grants.get(key)
             out.append(GrantRecord.model_validate_json(entry.value))
+        return out
+
+    # -- M7: revocation tombstones -------------------------------------------
+
+    async def ensure_revocations(self) -> None:
+        """Ensure the revocation-tombstone KV bucket exists."""
+        if self._revocations is not None:
+            return
+        assert self.js is not None
+        try:
+            self._revocations = await self.js.key_value(REVOCATIONS_BUCKET)
+        except NotFoundError:
+            self._revocations = await self.js.create_key_value(
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas,
+                    bucket=REVOCATIONS_BUCKET,
+                    history=10,
+                )
+            )
+            log.info("created revocation KV bucket %s", REVOCATIONS_BUCKET)
+
+    async def revoke_node(self, node_id: str, reason: str = "", by: str = "") -> RevocationRecord:
+        """Cut a node: tombstone + capability withdrawal + roster removal.
+
+        In-flight tasks are untouched (revocation gates future claims only).
+        """
+        await self.ensure_revocations()
+        assert self._revocations is not None
+        record = RevocationRecord(node_id=node_id, reason=reason, by=by, revoked_at=time.time())
+        await self._revocations.put(record.key(), record.model_dump_json().encode())
+        # Cut the node out of every surface a claim could consult: capability
+        # records (TTL would take hours to age out) and the roster entry.
+        withdrawn = [cap.agent_id for cap in await self.list_capabilities() if cap.node == node_id]
+        for agent_id in sorted(set(withdrawn)):
+            await self.withdraw_capability(agent_id)
+        await self.ensure_roster()
+        assert self._roster is not None
+        try:
+            await self._roster.delete(f"roster.{node_id}")
+        except (KeyError, NotFoundError):
+            pass
+        log.warning("node %s revoked (by %s): %s", node_id, by, reason)
+        return record
+
+    async def reinstate_node(self, node_id: str) -> bool:
+        """Remove a tombstone; the node rejoins on its next heartbeat."""
+        await self.ensure_revocations()
+        assert self._revocations is not None
+        if await self.revocation_of(node_id) is None:
+            return False
+        await self._revocations.delete(revocation_key(node_id))
+        log.info("node %s reinstated", node_id)
+        return True
+
+    async def revocation_of(self, node_id: str) -> RevocationRecord | None:
+        if self._revocations is None:
+            # No bucket handle (not connected / fake bus): nothing is revoked.
+            return None
+        try:
+            entry = await self._revocations.get(revocation_key(node_id))
+        except (KeyError, NotFoundError):
+            return None
+        return RevocationRecord.model_validate_json(entry.value)
+
+    async def list_revocations(self) -> list[RevocationRecord]:
+        await self.ensure_revocations()
+        assert self._revocations is not None
+        out: list[RevocationRecord] = []
+        try:
+            keys = await self._revocations.keys()
+        except NoKeysError:
+            return out
+        for key in sorted(keys):
+            entry = await self._revocations.get(key)
+            out.append(RevocationRecord.model_validate_json(entry.value))
         return out
 
     # -- 14.13 step 1: observation deposits (experience graph) --------------
@@ -665,6 +757,12 @@ class Bus:
             or snapshot.claimed_by
             or (snapshot.state is not TaskState.RECEIVED and not snapshot.next_role)
         ):
+            return None
+        # M7: revocation gate — a claim from a revoked node is denied outright
+        # (fail-closed, before any CAS write). In-flight tasks are untouched.
+        node_id, _sep, _role = worker_id.partition(":")
+        if node_id and await self.revocation_of(node_id) is not None:
+            log.warning("claim %s denied: node %s revoked", task_id, node_id)
             return None
         # M14: worker-driven pipeline — only the next scheduled role may claim.
         if role is not None and snapshot.next_role and snapshot.next_role != role:
