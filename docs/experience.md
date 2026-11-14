@@ -213,3 +213,28 @@ shows act-only without reasoning traces is worse than the interleave);
 small model with the trained procedure beats a big model with
 prompting; (3) the internal-unsure-then-external fallback is a concrete
 routing signal for the pheromone slice 14.15.10.
+
+## 2026-11-14 external evidence: FireAct - the direct ReAct follow-up
+
+FireAct (arXiv 2310.05915, Oct 2023, co-authored by Shunyu Yao, the
+ReAct first author) takes ReAct section 3.3's finetuning aside and
+makes it systematic: Llama2-7B finetuned on 500 GPT-4-generated ReAct
+trajectories gains +77% on HotpotQA (EM 14.8 -> 26.2); finetuned
+Llama2-13B beats ALL GPT-3.5 prompting methods. Multi-method
+finetuning (ReAct + CoT trajectories mixed, EM 41.0) beats ReAct-only
+(39.4): the model learns to answer easy questions internally in one
+round and search only when hard - the ReAct fallback heuristic placed
+IN THE WEIGHTS instead of the prompt. Robustness: with a search API
+returning 50% junk, prompted ReAct drops 28-34% but finetuned FireAct
+only 5-14% (training trajectories contained successful noise
+handling). Inference is 70% cheaper (no few-shot prompt in context).
+Llamas need ~500 trajectories before the ReAct format emerges.
+
+memnc relevance: FireAct is distill-big-trajectories-into-small-open-
+models in production - the growing-LoRA shape for the agent mesh. Our
+successful bench trajectories are exactly the training source this
+recipe consumes; a mesh node learning from its own bench history is a
+candidate future arm E. Wider lineage for reference: Reflexion
+(2303.11366, verbal RL - our arm B pattern), ReWOO (2305.18323, plan
+once with placeholders, 5x cheaper - plan-in-KV idea), LATS (2310.04406,
+ReAct + tree search).
