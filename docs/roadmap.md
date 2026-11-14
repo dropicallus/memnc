@@ -951,3 +951,25 @@ suite 372 passed + 2 skipped. Commit 22ef1a2.
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art
   suffices), HTTP mesh-to-mesh, federation v1.
+
+### 14.15.1 Slice: plan-decomposition helper `backlog-plan` (BUILT 2026-11-15 night, commit 5378963)
+
+`decompose_plan(text)` in `backlog.py` turns a written plan document into task prompts:
+numbered (`1.`) or bullet (`- ` / `* `) lines win when >=2 exist, else blank-line-separated
+paragraphs, else the whole text as one block.
+
+`meshctl backlog-plan --plan-id <id> [--chain] [--dry-run] "<plan text>"` adds N backlog
+entries sharing plan_id; `--chain` links each entry to its predecessor via `deps` so the
+driver (`next_claimable`) consumes the chain in order. Gotcha: the FIRST entry must get
+`deps=[]` — `deps=['']` (empty prev_id) makes the task unclaimable forever because no id
+ever reaches `done`. Fixed in 5378963 (guard: `args.chain and prev_id`).
+
+Live-proven: `night1` plan decomposed into 2 chained entries; the running driver daemon
+claimed task 1 and submitted it into the mesh.
+
+### 14.15.2 Infra findings (night 2026-11-15)
+
+- All backlog attempts 404'd with `Client error '404 Not Found' for url 'http://host.docker.internal:11434/api/chat'` — root causes, both fixed/known:
+  1. `docker-compose.node.yml` had no `extra_hosts: host.docker.internal:host-gateway` (root compose already did) — fixed in commit e8ccf47; node-c stack recreated with it. NOTE: the repo on node-c (`~/memnc`, branch feat/m8-live-router with local mods) is a separate checkout — the compose fix was copied over manually and the node-c repo needs a proper re-sync later.
+  2. node-c's ollama does NOT have `qwen2.5:7b` (planner) nor `qwen2.5-coder:32b` (coder) — ollama answers 404 for unknown models, which looks identical to a network error in the agent error string. node-c only has `qwen2.5-coder:7b`, `llama3.2:3b`, `swift`, `gemma4`, and a 27B/35B MoE coder. FIX PENDING (needs user OK, .env edit on node-c blocked overnight): point node-c's MODEL_PLANNER/MODEL_CODER/MODEL_CRITIC at `qwen2.5-coder:7b` — weak node, weak models, exactly the weak->strong routing slice's premise (node-a has the strong models: qwen2.5:7b, qwen2.5-coder:32b, produktiv, signal-27b...). No model download needed.
+- Design lesson for slice 3 (weak->strong routing): the 3x-fail -> FAILED measurement is exactly the signal the router needs — a task failing 3/3 on a weak node should be retried on a strong node before terminal failure, not just counted.
