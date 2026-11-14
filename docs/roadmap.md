@@ -1117,3 +1117,33 @@ backlog driver had already marked it failed: `_backlog_watch` counted
 `state.failed` (emitted on every FSM transition, once per debate attempt) as
 terminal. Only `task.*` events are final now; 3 tests
 (tests/test_backlog_watch.py). Suite 417 passed, 2 skipped.
+
+### 14.15.9 Slice: swarm-vs-single benchmark (PLANNED 2026-11-14)
+
+Goal: measure whether the mesh actually beats a single model. Literature
+context: debate/multi-agent gains are unreliable (Du et al. 2023; "If MAD is
+the Answer...?" 2025; "Talk Isn't Always Cheap" 2025 — sycophantic flip of
+correct answers; "More Agents Is All You Need" — gains correlate with task
+difficulty). Heterogeneity is the factor that wins consistently. Current
+system evidence: 40 live tasks, only 2 revisions — the critic approves
+almost everything on proof-of-concept tasks (verify-gate override,
+worker.py ~1114).
+
+Design — three arms on the same task set:
+  A) single strong: qwen2.5-coder:32b, one chance, no critic.
+  B) single + self-reflection: 32b with 3 self-correction rounds
+     (the necessary baseline a critic loop must beat).
+  C) mesh: planner qwen2.5:7b -> coder 32b -> critic-loop (current debate).
+
+Task set: 20-30 tasks with automatic verification (deterministic checks,
+no LLM judge), difficulty tiers easy/medium/hard.
+
+Runs: >= 5 seeded repetitions per task per arm. Metrics: success rate
+(primary), revision rounds to success, tokens / GPU-seconds, wallclock.
+Fair compute comparison: MAD vs. voting at equal token budget.
+
+Implementation: a `bench` runner driving the three arms through the
+worker/inproc path, writing `bench-report.md` with success rates and
+confidence intervals. Nightly runs over the backlog driver (no extra GPU
+cost). Backlog items: bench task set, bench runner + report, first
+report run.
