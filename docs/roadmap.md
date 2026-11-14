@@ -999,3 +999,30 @@ Semantics: a weak node burns its 3 attempts on the weak pool first — that
 measured failure is the routing signal — then the work item migrates to the
 strong node exactly once. Failed-chain semantics (a terminal failure should
 release or fail dependents) remain a design decision for a later slice.
+
+### 14.15.4 Slice: daemonize the backlog driver (BUILT 2026-11-15 night)
+
+Slice 2 from the "Next slices" list. The driver loop itself already exists
+(`meshctl backlog-run`); the slice replaces the fragile nohup-from-/tmp
+invocation with a repo-shipped service:
+
+- `scripts/backlog-driver.sh`: launcher that encodes the client-env rules —
+  never `source .env` (extract `NATS_TOKEN` with the plain-match awk pattern),
+  host-side clients use `nats://127.0.0.1:4222` (the .env URL is the
+  compose-internal hostname), empty tokens are never exported, PYTHONPATH is
+  stripped, and it `exec`s `.venv/bin/meshctl backlog-run`.
+- `scripts/systemd/memnc-backlog-driver.service`: systemd **user** unit
+  (no root anywhere), `Restart=on-failure` + `RestartSec=10`. Killing the
+  driver loses nothing — stale claims are reclaimed by the next pass.
+- Install (per host): `cp scripts/systemd/memnc-backlog-driver.service
+  ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl
+  --user enable --now memnc-backlog-driver`. Requires lingering for
+  boot-time start (`loginctl enable-linger`), otherwise it runs while the
+  user session is up.
+- `STRONG_NODE` passes through the environment (14.15.3 weak->strong
+  routing), e.g. `Environment=STRONG_NODE=node-a` in the unit override.
+- Tests: `tests/test_backlog_daemon.py` pins the invariants (executable
+  launcher, no `source .env`, guarded token export, loopback default,
+  PYTHONPATH strip, Restart policy, no root).
+
+Deployment note: node-a swapped from the nohup driver to the user unit.

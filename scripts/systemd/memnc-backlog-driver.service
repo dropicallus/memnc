@@ -1,0 +1,15 @@
+[Unit]
+Description=memnc backlog driver (claim -> submit -> watch -> mark)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/memnc
+ExecStart=%h/memnc/scripts/backlog-driver.sh
+Restart=on-failure
+RestartSec=10
+# The driver is a pure client: killing it loses nothing (stale claims are
+# reclaimed by the next pass, see docs/roadmap.md 14.15).
+
+[Install]
+WantedBy=default.target
