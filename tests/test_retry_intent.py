@@ -223,3 +223,70 @@ def test_set_my_commands_posts_payload():
     obs.run_roster = noop  # type: ignore[method-assign]
     asyncio.run(obs.run())  # must not raise
 
+
+# -- P1 item 5: completion cards deliver the result --------------------------
+
+
+def test_format_done_card_carries_result_and_files():
+    from memnc.telegram import format_done_card
+
+    snap = {
+        "task_id": "abcd12345678",
+        "task": "write the thing\nmore lines",
+        "code": {
+            "summary": "did the thing",
+            "files": [{"path": "out/x.py"}, {"path": "out/y.py"}, {}],
+        },
+    }
+    card = format_done_card(snap)
+    assert card.startswith("DONE #abcd1234567")
+    assert "write the thing" in card
+    assert "result: did the thing" in card
+    assert "files: out/x.py, out/y.py" in card
+
+
+def test_format_done_card_minimal():
+    from memnc.telegram import format_done_card
+
+    card = format_done_card({"task_id": "z", "task": "", "code": None})
+    assert card == "DONE #z"
+
+
+def test_done_event_broadcasts_result_card():
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from memnc.config import Settings
+    from memnc.telegram import TelegramObserver
+
+    class _Bus:
+        def __init__(self, snap) -> None:
+            self._snap = snap
+
+        async def get_snapshot(self, task_id: str):
+            return self._snap
+
+    code = SimpleNamespace(
+        model_dump=lambda: {
+            "summary": "it worked",
+            "files": [{"path": "a.py"}],
+        }
+    )
+    snap = SimpleNamespace(
+        model_dump=lambda: {
+            "task_id": "t-done-1",
+            "task": "do work",
+            "code": code.model_dump(),
+        }
+    )
+    obs = TelegramObserver(Settings(node_name="t", telegram_allow="42"), _FakeBot())  # type: ignore[arg-type]
+    obs.bus = _Bus(snap)  # type: ignore[assignment]
+
+    envelope = {"task_id": "t-done-1", "state": "DONE", "payload": {"state": "done"}}
+    asyncio.run(obs.on_event(SimpleNamespace(data=json.dumps(envelope).encode())))
+    sent = obs.bot.sent
+    done = [t for _c, t in sent if t.startswith("DONE #")]
+    assert done and "result: it worked" in done[0]
+    assert "files: a.py" in done[0]
+

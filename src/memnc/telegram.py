@@ -208,6 +208,25 @@ def format_event(envelope: dict[str, Any]) -> str | None:
     return line
 
 
+def format_done_card(snapshot_dict: dict[str, Any]) -> str:
+    """Completion card that carries the result itself (P1 item 5): title,
+    coder summary excerpt and produced files - no second tool hop needed."""
+    task_id = snapshot_dict.get("task_id", "?")
+    title = (snapshot_dict.get("task") or "").strip()
+    title = title.splitlines()[0][:70] if title else ""
+    card = f"DONE #{task_id[:12]}"
+    if title:
+        card += f"\n{title}"
+    code = snapshot_dict.get("code") or {}
+    summary = (code.get("summary") or "").strip()
+    if summary:
+        card += f"\nresult: {summary[:400]}"
+    files = [f.get("path") for f in (code.get("files") or []) if f.get("path")]
+    if files:
+        card += f"\nfiles: {', '.join(files[:5])}"
+    return card
+
+
 def format_task(snapshot_dict: dict[str, Any]) -> str:
     """Short human-readable task summary for `state <id>` and `tasks`."""
     task = snapshot_dict.get("task_id", "?")
@@ -467,6 +486,15 @@ class TelegramObserver:
                         card += f"\ncause: {detail}"
                     card += f"\nretry: /retry {task_id}"
                     await self.broadcast(card, markup=task_buttons(task_id))
+                elif state == "DONE" and task_id:
+                    # P1 item 5: deliver the result, not just the ledger state.
+                    snapshot = await self.bus.get_snapshot(task_id)
+                    if snapshot is not None:
+                        await self.broadcast(
+                            format_done_card(snapshot.model_dump())
+                        )
+                    else:
+                        await self.broadcast(line)
                 else:
                     await self.broadcast(line)
 

@@ -2,6 +2,12 @@
 
 ## Built
 
+- **2026-11-14 — Task output delivered to chat (P1 item 5)**: DONE events
+  broadcast a completion card instead of a bare state line — `format_done_card`
+  shows task title, the coder summary (400-char excerpt) and produced file
+  paths, so the result itself lands in chat with the final event (no second
+  tool hop to /trace). Tests: 3 cases in `tests/test_retry_intent.py`.
+
 - **2026-11-14 — Command discovery (P1 item 7)**: the Telegram command list
   lives in one grouped table (`COMMAND_GROUPS`: view / act / decide) in
   `telegram.py`; unknown commands get the grouped list via `format_help()`
@@ -600,9 +606,8 @@ today.
 
 ### P1 — smoother daily loop
 
-5. **Task output delivered to chat.** On completion, push the result
-   artifact (or its path/summary) with the final event, not just ledger
-   state. Fix: no second tool hop to read what the mesh produced.
+5. **~~Task output delivered to chat.~~ DONE 2026-11-14** — see Built entry;
+   DONE events now broadcast a completion card carrying summary + files.
 6. **~~Retry with intent.~~ DONE 2026-11-14** — `/retry <id> --model <name>`
    overrides the model for the rerun; `/retry` alone keeps the recorded
    route. See the Built entry below.
