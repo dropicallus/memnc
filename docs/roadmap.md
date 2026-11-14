@@ -892,6 +892,62 @@ using throwaway fake `pi` scripts.
    mesh self-organization: cheap models draft dirty, strong models fix.
 4. `DiscussHarness` (multi-model debate) on the same contract.
 
+## 14.15 Backlog: plan-level task queue with atomic claim (BUILT 2026-11-14)
+
+User driver: "wir brauchen quasi einen Weg, Pläne auf Tasks runter zu
+brechen und die zu blocken wie ein Lock so dass nicht andere damit
+anfangen. Klassisches Scrum für Agents."
+
+**Design:** one level above the mesh task queue (`bus.try_claim`, commit
+a8cd309, KV-revision CAS as lock). `src/memnc/backlog.py`:
+
+- `BacklogTask` model: `id` (`b-{uuid4}`), `plan_id` (groups the tasks
+  decomposed from one plan), `prompt`, `status`
+  (`planned`/`claimed`/`done`/`failed`), `attempts`, `claimed_at`,
+  `claimant`, `mesh_task_id`, timestamps.
+- `BacklogStore` on NATS KV bucket `memnc-backlog`. The lock is the KV
+  revision: `claim()` reads the entry, flips `planned` -> `claimed` (or
+  steals a stale claim), and writes back with
+  `kv.update(key, value, last=entry.revision)`. On racing drivers exactly
+  one CAS succeeds, the losers see a wrong-revision error and move on.
+- Stale-claim reclaim: a `claimed` entry whose `claimed_at` is older than
+  `CLAIM_STALE_S` (15 min) is stealable -- driver died mid-task and the
+  work is not lost. Unparseable timestamps count as stale.
+- `MAX_ATTEMPTS = 3` mirrors the mesh's own retry measurement; `failed`
+  with attempts left goes back to `planned` for the next pass.
+
+**meshctl subcommands:**
+- `backlog-add "<prompt>" --plan-id <id>`: enqueue a task.
+- `backlog-list`: planned/claimed/done/failed with attempts.
+- `backlog-run [--once]`: the driver loop. Claim one entry, submit to the
+  mesh (`TaskSubmission` claimable), mark `mesh_task_id`, watch to a
+  terminal event, then `mark()` done/failed. Without `--once` it loops.
+- `backlog-reset <id>`: re-plan an entry for debugging.
+
+**Two live-bugs found and fixed during the smoke:**
+1. Core-NATS subscribe misses fast tasks: the mesh terminal event can be
+   published before the driver's subscription is live. Fix: the watcher
+   uses a JetStream ordered consumer (`deliver_all`) on
+   `mesh.task.{task_id}.events`, so it replays the retained history.
+2. Terminal-event naming: worker/orchestrator emit
+   `state.{snapshot.state.value.lower()}` on transitions, so the settled
+   states arrive as `state.done`/`state.failed` -- not `task.done`/
+   `task.failed` (those exist only in the orchestrator's own paths).
+
+**Live proof (node-a, 2026-11-14):** add -> claim -> mesh task submitted
+-> `state.failed` watched -> `failed` marked -> back to `planned`
+(attempts 1/3) -> re-claimed twice -> attempts 3/3, entry terminal. Stale
+claim of a killed driver was reclaimed by the next `--once` pass. Full
+suite 372 passed + 2 skipped. Commit 22ef1a2.
+
+**Next slices on this level:**
+1. Plan decomposition helper: turn a plan doc into N `backlog-add` calls
+   with a shared `plan_id` (the Scrum planning step).
+2. Run the driver as a daemon (systemd unit / cron) so the machines
+   consume work instead of idling (Auto-Driver stage 1).
+3. Weak->strong routing rule on top of `attempts` (stage 2 of the
+   orchestration design).
+
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art
   suffices), HTTP mesh-to-mesh, federation v1.
