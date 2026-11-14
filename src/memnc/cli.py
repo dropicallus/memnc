@@ -664,7 +664,7 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
         )
         await store.mark(claimed.id, "claimed", mesh_task_id=mesh_task_id)
         event = await _backlog_watch(client, mesh_task_id)
-        final = "done" if event == "task.done" else "failed"
+        final = "done" if event in ("task.done", "state.done") else "failed"
         await store.mark(claimed.id, final, mesh_task_id=mesh_task_id)
         print(f"{driver}: {claimed.id} -> {final} (mesh {mesh_task_id})", flush=True)
     except Exception as exc:  # noqa: BLE001 - failed submission burns one attempt
