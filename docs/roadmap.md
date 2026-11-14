@@ -1089,3 +1089,11 @@ Fix (agent.py):
 Tests: tests/test_role_parse.py (6). Suite 414 passed, 2 skipped.
 A debug INFO log (`raw role output`) in the worker keeps tool_steps and the
 first 400 chars of model content visible for future parsing regressions.
+
+### 14.15.8 Backlog watcher terminal events (2026-11-14)
+
+The live proof then showed the orchestrator retrying a task to DONE while the
+backlog driver had already marked it failed: `_backlog_watch` counted
+`state.failed` (emitted on every FSM transition, once per debate attempt) as
+terminal. Only `task.*` events are final now; 3 tests
+(tests/test_backlog_watch.py). Suite 417 passed, 2 skipped.

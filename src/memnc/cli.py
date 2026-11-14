@@ -99,11 +99,10 @@ _TERMINAL_EVENTS = {
     "task.done",
     "task.failed",
     "task.cancelled",
-    # worker/orchestrator emit state.{snapshot.state.value.lower()} on every
-    # transition, so the settled states show up as state.done / state.failed
-    "state.done",
-    "state.failed",
-    "state.cancelled",
+    # Only task.* events are final. state.done/state.failed are emitted on
+    # EVERY FSM transition (and once per debate attempt), so counting them as
+    # terminal made the backlog watcher give up on the first failed attempt
+    # while the orchestrator was still retrying.
 }
 
 
