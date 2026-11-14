@@ -344,3 +344,36 @@ playbook first (cheap, immediate), MEM1-style RL consolidation as the
 later growing-LoRA stage. Operational bonus: constant context bounds
 each node's KV size - relevant to capacity planning and routing
 (14.15.10); our arm C ReadTimeouts partly came from growing contexts.
+
+## 2026-11-14 external evidence: SyncMind (arXiv 2502.06994, Frank)
+
+SyncMind (Guo et al., UIUC / Heng Ji group, Feb 2025 - PREPRINT, not
+peer reviewed) defines the OUT-OF-SYNC problem in collaborative SE: an
+agent works on a task while the shared environment evolves underneath
+it (another participant commits at T_j); at T_k its understanding
+diverges from the true state and its actions fail, causing integration
+breakage. SyncBench operationalizes it: 24,332 out-of-sync instances
+derived from 21 real GitHub repositories, with executable verification
+tests (same checker philosophy as our bench).
+
+Findings: enormous model gap in recovery (Llama-3.1 agents <= 3.33%,
+Claude-3.5-Sonnet >= 28.18% - even the best is far from solved);
+collaboration willingness <= 4.86% - agents almost never ASK for help
+or sync when out-of-sync, a fundamental limitation; when collaboration
+does happen it positively correlates with recovery success; and
+near-zero resource awareness (minimal performance difference between
+resource-aware and unaware recovery - agents ignore their own
+budgets).
+
+memnc reading: (1) out-of-sync IS the distributed-memory problem -
+our node revocation tombstones (21.3), workflow_state KV and
+pheromone freshness are sync mechanisms for exactly this failure mode;
+(2) the <=4.9% willingness number proves collaboration must be
+architecturally FORCED, not left to the agent - our forced
+planner->coder->critic pipeline is vindicated, and future coder nodes
+should get an explicit sync-check prompt on suspicion of drift;
+(3) candidate future bench tier: a task that runs while a simulated
+second node commits, where the coder must reconcile - would
+discriminate hard (frontier models score ~28%); (4) routing must
+enforce resource discipline from the outside (pheromone/capacity
+signals) because agents will not self-regulate.
