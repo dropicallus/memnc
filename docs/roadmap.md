@@ -973,3 +973,25 @@ claimed task 1 and submitted it into the mesh.
   1. `docker-compose.node.yml` had no `extra_hosts: host.docker.internal:host-gateway` (root compose already did) — fixed in commit e8ccf47; node-c stack recreated with it. NOTE: the repo on node-c (`~/memnc`, branch feat/m8-live-router with local mods) is a separate checkout — the compose fix was copied over manually and the node-c repo needs a proper re-sync later.
   2. node-c's ollama does NOT have `qwen2.5:7b` (planner) nor `qwen2.5-coder:32b` (coder) — ollama answers 404 for unknown models, which looks identical to a network error in the agent error string. node-c only has `qwen2.5-coder:7b`, `llama3.2:3b`, `swift`, `gemma4`, and a 27B/35B MoE coder. FIX PENDING (needs user OK, .env edit on node-c blocked overnight): point node-c's MODEL_PLANNER/MODEL_CODER/MODEL_CRITIC at `qwen2.5-coder:7b` — weak node, weak models, exactly the weak->strong routing slice's premise (node-a has the strong models: qwen2.5:7b, qwen2.5-coder:32b, produktiv, signal-27b...). No model download needed.
 - Design lesson for slice 3 (weak->strong routing): the 3x-fail -> FAILED measurement is exactly the signal the router needs — a task failing 3/3 on a weak node should be retried on a strong node before terminal failure, not just counted.
+
+### 14.15.3 Slice: weak->strong routing via backlog attempts (BUILT 2026-11-15 night, commit 16ee63c)
+
+Slice 3 from the "Next slices" list. Mechanism, no new subjects and no
+--needs-model hack:
+
+- `TaskSubmission.prefer_node` / `TaskSnapshot.prefer_node` ("" = unconstrained).
+- The orchestrator copies it into every dispatch command payload.
+- A worker whose `node_name` differs naks the command (2 s delay) so a worker
+  on the preferred node picks it up — targeting rides the existing role
+  command queue (shared JetStream durable).
+- The backlog driver: when `mark()` leaves a task terminally failed
+  (attempts >= MAX_ATTEMPTS=3, `mark()` re-plans while budget remains), the
+  driver queues ONE `[strong-retry]` copy (same prompt/plan_id/deps,
+  `strong_retry=True`, `prefer_node=STRONG_NODE`). `should_strong_retry()`
+  guards the loop: strong-retries never spawn further retries.
+- `Settings.strong_node` (env `STRONG_NODE`, default "") disables the path.
+
+Semantics: a weak node burns its 3 attempts on the weak pool first — that
+measured failure is the routing signal — then the work item migrates to the
+strong node exactly once. Failed-chain semantics (a terminal failure should
+release or fail dependents) remain a design decision for a later slice.
