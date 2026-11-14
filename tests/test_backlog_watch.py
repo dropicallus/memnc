@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 from memnc.cli import _TERMINAL_EVENTS, _backlog_watch
 
 
-def test_state_events_are_not_terminal() -> None:
+def test_terminal_events() -> None:
     assert "state.failed" not in _TERMINAL_EVENTS
-    assert "state.done" not in _TERMINAL_EVENTS
+    assert "state.done" in _TERMINAL_EVENTS
     assert "task.done" in _TERMINAL_EVENTS
 
 
@@ -43,6 +43,19 @@ def test_watcher_ignores_state_failed_then_sees_done() -> None:
         return await _backlog_watch(client, "t1")
 
     assert asyncio.run(run()) == "task.done"
+
+
+def test_watcher_done_via_state_done() -> None:
+    events = ["state.coding", "state.done"]
+    client = MagicMock()
+    client.jetstream = MagicMock(
+        return_value=MagicMock(subscribe=AsyncMock(return_value=_subscription(events)))
+    )
+
+    async def run() -> str:
+        return await _backlog_watch(client, "t1")
+
+    assert asyncio.run(run()) == "state.done"
 
 
 def test_watcher_still_fails_on_final_task_failed() -> None:

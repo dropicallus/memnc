@@ -99,10 +99,11 @@ _TERMINAL_EVENTS = {
     "task.done",
     "task.failed",
     "task.cancelled",
-    # Only task.* events are final. state.done/state.failed are emitted on
-    # EVERY FSM transition (and once per debate attempt), so counting them as
-    # terminal made the backlog watcher give up on the first failed attempt
-    # while the orchestrator was still retrying.
+    # state.done is also final: the worker-driven pipeline only RECORDS
+    # task.done without emitting it, so a successful debate ends in state.done.
+    # state.failed must NOT be terminal -- it fires once per debate attempt
+    # while the orchestrator keeps retrying; an exhausted task emits task.failed.
+    "state.done",
 }
 
 
