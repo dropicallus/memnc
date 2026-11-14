@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     clarify_timeout_s: int = 120
     planner_timeout_s: int = 180
     coder_timeout_s: int = 600
+    # Harness for the coder role: "inproc" (default, the worker's own tool
+    # loop) or "pi" (external pi CLI against the workspace; host-side for
+    # now -- see docs/roadmap.md 14.14). Harnesses share one contract
+    # (memnc.harnesses.Harness), so weak->strong handoff stays routing policy.
+    harness_coder: str = "inproc"
     critic_timeout_s: int = 180
     orchestrator_grace_s: int = 30
     apply_artifacts: bool = True

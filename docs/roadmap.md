@@ -794,6 +794,51 @@ Topology support is DONE (see Built). Open infra slices:
    reserve host. Posture: cold reserve capacity, no replication overlap
    with slice 1.
 
+## 14.14 Harness abstraction layer (pi first, BUILT 2026-11-14)
+Status: core built + proven end-to-end; worker wiring is the next slice.
+
+The weak->strong proof (7b dirty pass -> produktiv fixer, 11/11 green in
+`~/memnc-harness-wt`) showed the *product* of a coding agent is workspace
+state (git diff + tests), not structured patches. That is the contract the
+new `src/memnc/harnesses/` package formalizes; it sits above the inference
+backends (memnc.backends abstracts *models*, harnesses abstract *how the
+model works on a workspace*).
+
+**Contract (built):**
+- `HarnessResult` — ok, summary, diff, tool_events, exit_code, error.
+- `Harness` protocol — `capabilities()` + `async run(prompt, workspace, timeout_s)`.
+- Registry — `@register`, `get_harness(name, **kwargs)`, `known_harnesses()`.
+
+**Adapters:**
+- `PiHarness` (`harnesses/pi.py`) — spawns `pi -p --mode json --model <m>`
+  with the workspace as cwd, parses the JSONL event stream (tolerant to
+  noise/huge lines), returns the workspace diff (untracked files included
+  via `git add -N`). Carries the proven pitfalls: process-group kill on
+  timeout (orphans otherwise hold the stdout pipe open), `tool_events == 0`
+  as the no-native-tool-calls signal (the 32b template issue), generous
+  timeouts for weak models (7b parallel-tool-call retry loop).
+- Probe CLI `python -m memnc.harnesses --workspace W --model M "prompt"`
+  runs one prompt through a harness from the host and prints a JSON result.
+
+**Config:** `harness_coder: str = "inproc"` in Settings (opt-in; "inproc"
+keeps the worker's own tool loop as default).
+
+**Tests:** `tests/test_harnesses.py` — event parsing (tools/summary/settled,
+noise tolerance, error turns), registry selection, and subprocess behavior
+(ok path, nonzero exit, timeout kills the whole tree <10s, missing binary)
+using throwaway fake `pi` scripts.
+
+**Next slices:**
+1. Worker wiring: when `harness_coder == "pi"`, the coder role builds its
+   usual prompt, runs the harness against a git worktree of the target
+   workspace, and maps `HarnessResult` into the ResultPayload contract
+   (diff -> evidence; Critic stays harness-agnostic).
+2. `ToolLoopHarness`: wrap the worker's in-proc loop in the same protocol so
+   routing sees one interface.
+3. Per-task harness selection (instead of per-node config) — the step toward
+   mesh self-organization: cheap models draft dirty, strong models fix.
+4. `DiscussHarness` (multi-model debate) on the same contract.
+
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art
   suffices), HTTP mesh-to-mesh, federation v1.
