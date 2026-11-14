@@ -238,3 +238,41 @@ candidate future arm E. Wider lineage for reference: Reflexion
 (2303.11366, verbal RL - our arm B pattern), ReWOO (2305.18323, plan
 once with placeholders, 5x cheaper - plan-in-KV idea), LATS (2310.04406,
 ReAct + tree search).
+
+## 2026-11-14 external evidence: GEPA (ICLR 2026, Frank)
+
+GEPA (Genetic-Pareto; Agrawal et al., the DSPy team - Berkeley,
+Stanford, Databricks, MIT) argues that natural-language reflection is a
+richer learning medium than policy gradients from sparse scalar
+rewards. Weights stay frozen; GEPA evolves only the prompts of a
+compound system. Three components: (1) reflective prompt mutation -
+rollout traces plus evaluation traces (e.g. compiler errors) are fed
+to a reflection LM that does implicit per-module credit assignment and
+proposes targeted prompt updates; (2) Pareto-based candidate selection
+- a candidate stays in the pool when it is best on at least one task,
+strictly dominated ones are pruned, which escapes local optima that
+greedy/beam selection fall into; (3) system-aware merge, a crossover
+that combines complementary lessons from the Pareto frontier.
+
+Results: beats GRPO by +6pp on average (up to +19pp) with up to 78x
+fewer rollouts (IFBench: 678 rollouts -> 38.6% vs GRPO's 24,000
+rollouts -> 35.9%); beats MIPROv2 by +10pp. Reflectively evolved
+instructions beat optimized few-shot examples and are up to 9.2x
+shorter; prompts evolved on Qwen3-8B transfer to GPT-4.1-Mini (+9pp).
+
+memnc reading: GEPA is arm B's self-reflection used as an OFFLINE
+optimizer over a bench history instead of online per task. All
+ingredients already exist in this repo: bench JSONL traces, our
+deterministic checkers as the feedback function (text feedback is the
+checker output), and modular SYSTEM_PROMPTS in roles.py. Candidate
+slice: bench-driven prompt evolution of the planner/coder/critic
+prompts with zero weight changes. It also sharpens the skill->weights
+ladder: prompt -> prompt evolution (GEPA) -> finetuning (FireAct,
+LoRA). GEPA is the cheap middle rung - most of the gain for orders of
+magnitude less compute, before any growing-LoRA work. The Pareto
+frontier itself mirrors the Einzel-LoRA thesis: GRPO collapses onto
+one averaged policy the way multi-task finetuning does, while GEPA
+keeps diverse specialists each winning on different tasks - which maps
+directly onto pheromone routing (14.15.10): per-node evolved prompt
+variants as specialization, routing picks the Pareto winner per task
+class.
