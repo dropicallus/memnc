@@ -872,6 +872,23 @@ class Worker:
             extra={"model": model, "request": request.request_id},
         )
 
+    @staticmethod
+    def _claim_permitted(
+        snapshot: TaskSnapshot, node_name: str, withdrawn: bool
+    ) -> bool:
+        """Weak->strong routing on the M14 claim path.
+
+        A snapshot with prefer_node set may only be claimed by the preferred
+        host (prefix match: worker node_names are role-suffixed while
+        prefer_node names the host). An explicit preference overrides the
+        synergy-gate withdraw — the driver deliberately picked that node.
+        """
+        prefer = snapshot.prefer_node
+        matches = bool(prefer) and node_name.startswith(prefer)
+        if prefer and not matches:
+            return False
+        return matches or not withdrawn
+
     async def _claim_loop(self) -> None:
         """Poll the ledger and CAS-claim tasks matching our next role.
 
@@ -897,6 +914,7 @@ class Worker:
                 # No central scheduler — the node reads its own history and
                 # politely steps back, leaving work to peers with better
                 # track records on this role.
+                withdrawn = False
                 if self.settings.claim_synergy_gate:
                     _stats = compute_server_success(
                         await self.bus.list_observations()
@@ -905,18 +923,18 @@ class Worker:
                         f"{self.settings.node_name}:"
                         f"{self.settings.model_for(self.role)}"
                     )
-                    if should_withdraw(
+                    withdrawn = should_withdraw(
                         _stats,
                         _server,
                         min_samples=self.settings.claim_synergy_min_samples,
                         min_ratio=self.settings.claim_synergy_min_ratio,
-                    ):
+                    )
+                    if withdrawn:
                         log.info(
                             "synergy gate: withdrawing from claims "
                             "(track record below threshold)",
                             extra={"server": _server},
                         )
-                        continue
                 for snapshot in await self.bus.list_tasks():
                     if snapshot.state in TERMINAL_STATES:
                         continue
@@ -926,6 +944,14 @@ class Worker:
                         continue
                     # M14: role gate — only the scheduled next role claims.
                     if snapshot.next_role and snapshot.next_role != self.role.value:
+                        continue
+                    # Weak->strong routing on the claim path: prefer_node
+                    # binds a snapshot to its preferred host, and an explicit
+                    # preference overrides the synergy-gate withdraw (the
+                    # driver deliberately picked that node).
+                    if not self._claim_permitted(
+                        snapshot, self.settings.node_name, withdrawn
+                    ):
                         continue
                     # T7: a retired model is not claimable through — the node
                     # that retired it unloads it, so planning around it would

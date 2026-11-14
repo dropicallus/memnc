@@ -1055,3 +1055,17 @@ invocation with a repo-shipped service:
   PYTHONPATH strip, Restart policy, no root).
 
 Deployment note: node-a swapped from the nohup driver to the user unit.
+
+### 14.15.6 prefer_node binding on the claim path (2026-11-14)
+
+The strong-retry live proof exposed a gap: `prefer_node` was only enforced on
+the command path (worker `_handle`), but claimable tasks run through the M14
+worker-driven pipeline (`_claim_loop`), which ignored it entirely — node-c's
+planner won the claim race for `[strong-retry]` tasks despite
+`prefer_node=node-a`. Additionally the synergy gate could withdraw the
+preferred node itself, deadlocking explicitly routed work.
+
+Fix (`Worker._claim_permitted`): a snapshot with `prefer_node` set may only be
+claimed by the preferred host (prefix match against the role-suffixed
+node_name), and an explicit preference overrides the synergy-gate withdraw.
+Tests in `tests/test_prefer_claim.py`; suite 408 passed, 2 skipped.
