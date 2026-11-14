@@ -803,9 +803,7 @@ Topology support is DONE (see Built). Open infra slices:
    workers refuse mismatched code when `enforce_node_version` is on
    (opt-in until the fleet rolls it), `meshctl doctor` reports stale
    roster nodes.
-3. **Wake-on-backlog (WoL)**: mesh detects backlog, wakes the cold
-   reserve host. Posture: cold reserve capacity, no replication overlap
-   with slice 1.
+3. **Wake-on-backlog (WoL)**: DONE — see section 14.15.8.
 
 ## 14.14 Harness abstraction layer (pi first, BUILT 2026-11-14)
 
@@ -1055,6 +1053,28 @@ invocation with a repo-shipped service:
   PYTHONPATH strip, Restart policy, no root).
 
 Deployment note: node-a swapped from the nohup driver to the user unit.
+
+### 14.15.8 Slice: wake-on-backlog / WOL (BUILT 2026-11-14 night)
+
+Slice 3 of the P4 list. The backlog driver wakes the cold-reserve host
+when planned work is waiting but the mesh is otherwise idle:
+
+- `src/memnc/wol.py`: `parse_mac` / `magic_packet` (6x0xFF + 16x MAC),
+  `send_wol` (broadcast UDP datagram, SO_BROADCAST), and `WolWaker` —
+  a throttled wake decision (`maybe_wake()` with a configurable clock
+  and sender so tests inject fakes).
+- Settings: `wol_mac` (env `WOL_MAC`, "" = disabled) and
+  `wol_min_interval_s` (default 300). The idle loop cannot flood a
+  sleeping host: at most one packet per interval.
+- `meshctl backlog-run` calls `_maybe_wake_idle()` on every idle pass —
+  a packet is sent only when planned backlog entries exist AND the waker
+  is enabled. `meshctl wol [--mac M]` is the manual one-shot.
+- Tests: `tests/test_wol.py` (MAC parsing variants, packet structure,
+  broadcast send via a fake socket, throttle semantics, driver-hook
+  gating on planned entries, CLI subparser wiring).
+
+Cold-reserve posture: capacity wakes on demand, no replication overlap
+with the cold-standby backup (slice 1).
 
 ### 14.15.6 prefer_node binding on the claim path (2026-11-14)
 

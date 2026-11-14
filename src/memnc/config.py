@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Weak->strong routing: node that receives strong-retry tasks after a
     # weak node exhausts its attempt budget ("" = disabled).
     strong_node: str = ""
+    # P4 slice 3: wake-on-backlog. When the backlog driver finds planned
+    # work and wol_mac is set, it sends a WOL magic packet (throttled by
+    # wol_min_interval_s) to wake the cold-reserve host ("" = disabled).
+    wol_mac: str = ""
+    wol_min_interval_s: float = 300.0
 
     # T6: node capabilities advertised into the roster KV (roster.<node>).
     # node_vram_gb = VRAM the mesh may plan around (0 = unknown/none);

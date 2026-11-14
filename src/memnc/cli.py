@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -36,6 +37,7 @@ from .schema import (
     model_pull_allowed,
 )
 from .version import code_version, is_stale
+from .wol import WolWaker, send_wol
 
 
 async def _connect(settings: Settings):
@@ -744,8 +746,32 @@ async def cmd_backlog_reset(args: argparse.Namespace, settings: Settings) -> int
         await client.close()
 
 
+async def _maybe_wake_idle(
+    get_store, settings: Settings, waker: WolWaker
+) -> bool:
+    """P4 slice 3: planned backlog work + WOL config -> wake the reserve host.
+
+    ``get_store`` is a zero-arg callable returning the BacklogStore (in the
+    driver loop: a partial of ``_backlog_store`` over the connected client).
+    Throttling lives in the WolWaker, so an idle loop cannot flood the
+    sleeping host with packets.
+    """
+    if not waker.enabled:
+        return False
+    result = get_store() if callable(get_store) else get_store
+    store = await result if inspect.isawaitable(result) else result
+    planned = [t for t in await store.list() if t.status == "planned"]
+    if not planned:
+        return False
+    sent = waker.maybe_wake()
+    if sent:
+        print(f"backlog: {len(planned)} planned -> WOL packet sent", flush=True)
+    return sent
+
+
 async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
+    waker = WolWaker(settings.wol_mac, settings.wol_min_interval_s)
     try:
         driver = args.driver or f"driver-{settings.node_name}"
         if args.once:
@@ -757,9 +783,24 @@ async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
                 print(f"driver error: {exc}", file=sys.stderr, flush=True)
                 worked = False
             if not worked:
+                await _maybe_wake_idle(lambda: _backlog_store(client), settings, waker)
                 await asyncio.sleep(args.idle_sleep)
     finally:
         await client.close()
+
+
+def cmd_wol(args: argparse.Namespace, settings: Settings) -> int:
+    mac = args.mac or settings.wol_mac
+    if not mac:
+        print("no MAC: pass --mac or set WOL_MAC", file=sys.stderr)
+        return 2
+    try:
+        send_wol(mac)
+    except ValueError as exc:
+        print(f"invalid MAC: {exc}", file=sys.stderr)
+        return 2
+    print(f"WOL packet sent to {mac}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -935,6 +976,12 @@ def build_parser() -> argparse.ArgumentParser:
     backlog_reset = subparsers.add_parser("backlog-reset", help="re-plan a backlog entry")
     backlog_reset.add_argument("backlog_id")
     backlog_reset.set_defaults(func=cmd_backlog_reset)
+
+    wol = subparsers.add_parser(
+        "wol", help="send one Wake-on-LAN magic packet (P4: wake-on-backlog)"
+    )
+    wol.add_argument("--mac", default="", help="target MAC (default: WOL_MAC setting)")
+    wol.set_defaults(func=cmd_wol)
 
     backlog_run = subparsers.add_parser(
         "backlog-run", help="driver loop: claim -> submit -> watch -> mark"
