@@ -997,8 +997,24 @@ Slice 3 from the "Next slices" list. Mechanism, no new subjects and no
 
 Semantics: a weak node burns its 3 attempts on the weak pool first — that
 measured failure is the routing signal — then the work item migrates to the
-strong node exactly once. Failed-chain semantics (a terminal failure should
-release or fail dependents) remain a design decision for a later slice.
+strong node exactly once.
+
+### 14.15.5 Slice: failed-chain semantics (BUILT 2026-11-15 night)
+
+When `mark()` drives a task terminally `failed` (attempt budget exhausted,
+after weak pool and strong retry), the store cascade-fails every planned
+task that transitively depends on it (`BacklogStore.fail_dependents`). A
+dependent whose dep can never reach `done` would deadlock `next_claimable`
+forever. Rules:
+
+- only `planned` dependents are cascade-failed; claimed ones are in flight
+  and terminate (and cascade) on their own;
+- cascade-failed tasks keep `attempts` at 0 (they never ran);
+- non-terminal failures (back to `planned` for the next retry) never
+  cascade;
+- the decision is fail-the-chain, not release-the-chain: a strong retry of
+  the failed root is a separate entry and does NOT revive the failed
+  dependents -- re-planning a chain is a manual `backlog-reset` decision.
 
 ### 14.15.4 Slice: daemonize the backlog driver (BUILT 2026-11-15 night)
 
