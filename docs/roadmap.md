@@ -795,6 +795,36 @@ Topology support is DONE (see Built). Open infra slices:
    with slice 1.
 
 ## 14.14 Harness abstraction layer (pi first, BUILT 2026-11-14)
+
+### Worker wiring (DONE 2026-11-14)
+
+When ``harness_coder != "inproc"``, the worker's coder role routes through the
+harness instead of the in-proc loop:
+
+- ``Worker._run_impl`` dispatches ``Role.CODER`` + non-inproc harness to
+  ``Worker._run_harness`` (worker.py). Non-coder roles are untouched.
+- ``_run_harness`` builds the coder prompt, runs
+  ``get_harness(harness_coder, model=...)`` against ``workspace_root`` with
+  ``coder_timeout_s``, then harvests workspace state:
+  ``harnesses.workspace.changed_file_contents`` (``git add -N .`` +
+  ``git diff --name-only``, untracked files included, non-repo -> empty).
+- Harvested files are syntax-checked (``python_syntax_errors``) and converted
+  to ``CoderOutput(summary, files=FileArtifact...)`` -> ``ResultPayload(ok,
+  output, tool_steps=harness tool_events)``. The orchestrator/critic contract
+  is unchanged: harness results look exactly like in-proc coder results.
+- Harness failure / timeout / exception -> ``ResultPayload(ok=False)`` with
+  the harness error, measured attempts (3x retry) as usual. No routing hack.
+
+Verified live: worker + PiHarness + qwen2.5:7b in a scratch git repo ->
+ok=True, tool_steps=1, hello.txt harvested with exact content. (qwen2.5-coder:32b
+still returns 0 tool events -> empty files -> the known template backlog item.)
+
+Tests: tests/test_harnesses.py -- changed_file_contents (untracked + non-repo),
+worker harvest, failure path, broken-python rejection, non-coder roles ignore
+the harness (deterministic via monkeypatch, immune to test pollution), default
+stays inproc.
+
+
 Status: core built + proven end-to-end; worker wiring is the next slice.
 
 The weak->strong proof (7b dirty pass -> produktiv fixer, 11/11 green in

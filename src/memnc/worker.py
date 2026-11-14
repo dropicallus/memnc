@@ -18,6 +18,8 @@ from .bus import Bus, emit_debate
 from .config import Settings, get_settings
 from .fsm import Event, transition
 from .fsutil import apply_artifacts
+from .harnesses import get_harness
+from .harnesses.workspace import changed_file_contents
 from .mcp.client import MCPClient
 from .roles import (
     CONSULT_SYSTEM_PROMPT,
@@ -598,6 +600,10 @@ class Worker:
         consult = (envelope.payload or {}).get("consult")
         if consult:
             return await self._run_consult(envelope, role, model, consult)
+        # Harness layer (14.14): external harnesses take the coder role via
+        # the generic Harness contract; "inproc" keeps the built-in loop.
+        if role is Role.CODER and self.settings.harness_coder != "inproc":
+            return await self._run_harness(envelope, role, model)
         self._written_files = {}
         tools = (
             list(self.tools.schemas)
@@ -667,6 +673,54 @@ class Worker:
             output=output.model_dump(),
             prompt_version=PROMPT_VERSION,
             tool_steps=run.tool_steps,
+        )
+
+    async def _run_harness(self, envelope: Envelope, role: Role, model: str) -> ResultPayload:
+        """Run the coder role through an external harness (workspace state).
+
+        The harness edits the workspace directly; we harvest the changed
+        files back into CoderOutput so the orchestrator/critic contract is
+        unchanged (14.14).
+        """
+        if role is not Role.CODER:
+            return ResultPayload(
+                ok=False,
+                error=f"harness {self.settings.harness_coder!r} runs the coder role only",
+            )
+        prompt = build_user_prompt(role, envelope.payload or {})
+        harness = get_harness(self.settings.harness_coder, model=model)
+        workspace = Path(self.settings.workspace_root)
+        try:
+            result = await harness.run(
+                prompt, workspace, timeout_s=self.settings.coder_timeout_s
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ResultPayload(ok=False, error=f"harness error: {exc}")
+        if not result.ok:
+            return ResultPayload(
+                ok=False,
+                error=result.error or f"harness {self.settings.harness_coder} failed",
+                tool_steps=result.tool_events,
+            )
+        changed = await changed_file_contents(
+            workspace, max_bytes=self.settings.max_artifact_bytes
+        )
+        errors = python_syntax_errors(changed)
+        if errors:
+            return ResultPayload(
+                ok=False,
+                error="python syntax error: " + "; ".join(errors),
+                tool_steps=result.tool_events,
+            )
+        output = CoderOutput(
+            summary=result.summary,
+            files=[FileArtifact(path=path, content=content) for path, content in changed.items()],
+        )
+        return ResultPayload(
+            ok=True,
+            output=output.model_dump(),
+            prompt_version=PROMPT_VERSION,
+            tool_steps=result.tool_events,
         )
 
     async def _repair(self, role: Role, model: str, run, error: str):

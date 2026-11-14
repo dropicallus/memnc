@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from memnc.config import Settings
 from memnc.harnesses import (
     HarnessResult,
     get_harness,
@@ -15,6 +16,9 @@ from memnc.harnesses import (
     register,
 )
 from memnc.harnesses.pi import PiHarness, parse_events
+from memnc.harnesses.workspace import changed_file_contents
+from memnc.schema import Envelope, Kind, Role
+from memnc.worker import Worker
 
 
 def _line(event: dict) -> str:
@@ -150,3 +154,176 @@ def test_pi_harness_missing_binary(tmp_path):
     result = asyncio.run(harness.run("do it", tmp_path))
     assert result.ok is False
     assert "cannot start pi" in (result.error or "")
+
+
+class _FakeBus:
+    async def get_snapshot(self, task_id):
+        return None
+
+    async def put_snapshot(self, snapshot):
+        return None
+
+
+class _FakeTools:
+    available = True
+    schemas = []
+
+    async def call(self, name, arguments):
+        return "result"
+
+    async def close(self):
+        return None
+
+
+def _coder_worker(tmp_path, harness_name):
+    settings = Settings(
+        role="coder",
+        workspace_root=str(tmp_path / "ws"),
+        mcp_enabled=False,
+        harness_coder=harness_name,
+    )
+    return Worker(settings, backend=None, tools=_FakeTools(), bus=_FakeBus())
+
+
+def _coder_envelope(payload):
+    return Envelope(
+        id="cmd-h",
+        task_id="t-harness",
+        trace_id="tr-h",
+        kind=Kind.COMMAND,
+        role=Role.CODER,
+        payload=payload,
+    )
+
+
+def test_changed_file_contents_includes_untracked(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "new.py").write_text("x = 1\n")
+    (tmp_path / "notes.txt").write_text("hi")
+    changed = asyncio.run(changed_file_contents(tmp_path))
+    assert changed == {"new.py": "x = 1\n", "notes.txt": "hi"}
+
+
+def test_changed_file_contents_non_repo_is_empty(tmp_path):
+    assert asyncio.run(changed_file_contents(tmp_path)) == {}
+
+
+def test_worker_harness_coder_harvests_workspace_state(tmp_path):
+    import subprocess
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+
+    class FakeWorkspaceHarness:
+        def __init__(self, **kwargs):
+            pass
+        name = "fake-writer"
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            (workspace / "hello.py").write_text("x = 1\n")
+            return HarnessResult(ok=True, summary="wrote hello.py", tool_events=2)
+
+    register(FakeWorkspaceHarness)
+    worker = _coder_worker(tmp_path, "fake-writer")
+    result = asyncio.run(worker._run(_coder_envelope({"task": "add hello"}), None))
+    assert result.ok is True
+    assert result.model == worker.settings.model_for(Role.CODER)
+    files = result.output["files"]
+    assert files == [{"path": "hello.py", "content": "x = 1\n"}]
+    assert result.output["summary"] == "wrote hello.py"
+    assert result.tool_steps == 2
+
+
+def test_worker_harness_coder_reports_failure(tmp_path):
+    class BrokenHarness:
+        def __init__(self, **kwargs):
+            pass
+        name = "fake-broken"
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            return HarnessResult(ok=False, error="pi timed out", tool_events=0)
+
+    register(BrokenHarness)
+    worker = _coder_worker(tmp_path, "fake-broken")
+    result = asyncio.run(worker._run(_coder_envelope({"task": "x"}), None))
+    assert result.ok is False
+    assert result.error == "pi timed out"
+    assert result.tool_steps == 0
+
+
+def test_worker_harness_coder_rejects_broken_python(tmp_path):
+    import subprocess
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+
+    class DirtyHarness:
+        def __init__(self, **kwargs):
+            pass
+        name = "fake-dirty"
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            (workspace / "bad.py").write_text("def f(:\n")
+            return HarnessResult(ok=True, summary="wrote bad.py", tool_events=1)
+
+    register(DirtyHarness)
+    worker = _coder_worker(tmp_path, "fake-dirty")
+    result = asyncio.run(worker._run(_coder_envelope({"task": "x"}), None))
+    assert result.ok is False
+    assert "python syntax error" in result.error
+
+
+def test_worker_non_coder_role_ignores_harness(tmp_path, monkeypatch):
+    import memnc.worker as worker_mod
+
+    class MustNotRunHarness:
+        name = "fake-must-not-run"
+
+        def __init__(self, **kwargs):
+            pass
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            raise AssertionError("harness must not run for non-coder roles")
+
+    register(MustNotRunHarness)
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("in-proc loop reached: this test only checks routing")
+
+    # Immune to cross-test module pollution (test_clarify patches run_agent
+    # without restoring): pin it deterministically for this test.
+    monkeypatch.setattr(worker_mod, "run_agent", boom)
+    worker = _coder_worker(tmp_path, "fake-must-not-run")
+    envelope = Envelope(
+        id="cmd-h2",
+        task_id="t-harness2",
+        trace_id="tr-h2",
+        kind=Kind.COMMAND,
+        role=Role.CRITIC,
+        payload={},
+    )
+    result = asyncio.run(worker._run(envelope, None))
+    assert result.ok is False
+    # The critic role took the in-proc loop, NOT the registered harness.
+    assert "only checks routing" in result.error
+
+
+def test_worker_default_harness_is_inproc(tmp_path):
+    worker = _coder_worker(tmp_path, "inproc")
+    assert worker.settings.harness_coder == "inproc"
