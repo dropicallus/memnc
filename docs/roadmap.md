@@ -1160,6 +1160,24 @@ Status (2026-11-14): stage 1 done — `memnc.bench` package:
   Checker protocol: `check_<task_id>(workdir) -> list[str]`; empty list
   = pass. `verify_task()` is the single entry point for the runner.
 
+Status (2026-11-14): stage 2 done — `memnc.bench.runner`:
+  - Three arms over one inproc engine (`BenchEngine`) driving the same
+    memnc backends with the SAME role prompts (production mesh has no
+    solo mode, so the runner owns its engine): A single-shot coder,
+    B coder + up to 3 self-critique rounds, C planner->coder->critic
+    loop (max 3 revisions), mirroring the production FSM.
+  - Checker isolation: deterministic checkers are NEVER shown to the
+    models and never terminate a loop early; they score the final
+    workspace once (checker leakage would turn arm C into "arm A plus
+    an oracle").
+  - Seeded reps via a fixed temperature ladder (deterministic, no RNG;
+    identical prompts, only temperature varies).
+  - `bench-report.md` with success rates, Wilson score intervals,
+    tokens and wallclock per arm. Tests: tests/test_bench_runner.py
+    (9 tests, FakeBackend scripted). First live report: smoke run in
+    progress (easy tier, local ollama); full overnight run over the
+    backlog driver next.
+
 ### 14.15.10 Slice: pheromone routing (PROPOSED 2026-11-14, gated on bench evidence)
 
 Frank's framing: "Ich komme ja aus den Routing Algorithmen" — routing as the
