@@ -1147,3 +1147,15 @@ worker/inproc path, writing `bench-report.md` with success rates and
 confidence intervals. Nightly runs over the backlog driver (no extra GPU
 cost). Backlog items: bench task set, bench runner + report, first
 report run.
+
+Status (2026-11-14): stage 1 done — `memnc.bench` package:
+  - `tasks.py`: 24 tasks (8 easy / 8 medium / 8 hard), pure stdlib,
+    deterministic, no network. Prompt names the produced file(s).
+  - `checkers.py`: one deterministic checker per task (plain asserts,
+    no LLM judge). Probes target the prompt's hard cases (LRU eviction
+    order, lexicographic tie-break in Dijkstra, token-bucket refill cap
+    and non-monotonic timestamps, csv quoting, mutation-freedom, etc.).
+  - `solutions.py`: reference solutions; every checker is proven to
+    accept them and reject a stub (tests/test_bench.py, 10 tests).
+  Checker protocol: `check_<task_id>(workdir) -> list[str]`; empty list
+  = pass. `verify_task()` is the single entry point for the runner.
