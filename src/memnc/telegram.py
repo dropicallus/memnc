@@ -50,6 +50,88 @@ def allowed_chats(allow: str) -> set[str]:
     return {part.strip().lstrip("@").lower() for part in allow.split(",") if part.strip()}
 
 
+MIN_TASK_PREFIX = 6
+
+
+def resolve_task_id(prefix: str, snapshots: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    """Resolve a (possibly short) task-id prefix against known snapshots.
+
+    Returns (resolved_id, candidates). A full exact id always wins (also for
+    short strings that ARE an id). A unique startswith match resolves; several
+    matches return the sorted candidate list so the caller can ask the user
+    to be more specific. Prefixes shorter than MIN_TASK_PREFIX that are not
+    an exact id are refused (empty result, no candidates).
+    """
+    prefix = prefix.lstrip("#").strip()
+    if not prefix:
+        return "", []
+    ids = [str(s.get("task_id", "")) for s in snapshots]
+    if prefix in ids:
+        return prefix, []
+    if len(prefix) < MIN_TASK_PREFIX:
+        return "", []
+    matches = sorted({i for i in ids if i.startswith(prefix)})
+    if len(matches) == 1:
+        return matches[0], []
+    return "", matches
+
+
+def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
+    """Build Telegram reply_markup for an inline keyboard."""
+    return {
+        "inline_keyboard": [
+            [{"text": label, "callback_data": data} for label, data in row] for row in rows
+        ]
+    }
+
+
+def task_buttons(task_id: str) -> dict[str, Any]:
+    """[Retry][Cancel] buttons for a task card (14.11 P0)."""
+    return inline_keyboard(
+        [
+            [
+                ("Retry", f"tk:{task_id}:retry"),
+                ("Cancel", f"tk:{task_id}:cancel"),
+            ]
+        ]
+    )
+
+
+def mreq_buttons(request_id: str) -> dict[str, Any]:
+    """[Approve][Reject] buttons for a pending model-request card."""
+    return inline_keyboard(
+        [
+            [
+                ("Approve", f"mr:{request_id}:approve"),
+                ("Reject", f"mr:{request_id}:reject"),
+            ]
+        ]
+    )
+
+
+def parse_callback(data: str) -> tuple[str, str, str] | None:
+    """Parse callback_data into (kind, id, action).
+
+    Kinds: tk = task (retry/cancel), mr = model request (approve/reject),
+    nd = node (pause/resume). Anything malformed or with an unknown action
+    returns None — callback_data is untrusted input.
+    """
+    parts = data.split(":")
+    if len(parts) != 3:
+        return None
+    kind, ident, action = parts
+    ident = ident.strip()
+    if not ident:
+        return None
+    if kind == "tk" and action in ("retry", "cancel"):
+        return "task", ident, action
+    if kind == "mr" and action in ("approve", "reject"):
+        return "mreq", ident, action
+    if kind == "nd" and action in ("pause", "resume"):
+        return "node", ident, action
+    return None
+
+
 def format_event(envelope: dict[str, Any]) -> str | None:
     """One compact line per ledger event, or None for uninteresting ones."""
     payload = envelope.get("payload") or {}
@@ -283,10 +365,13 @@ class TelegramObserver:
         self._seen_nodes: set[str] = set()
 
     # -- outbound ----------------------------------------------------------
-    async def broadcast(self, text: str) -> None:
+    async def broadcast(self, text: str, markup: dict[str, Any] | None = None) -> None:
         for chat in sorted(self.chats):
             try:
-                await self.bot.send_message(chat, text)
+                if markup is None:
+                    await self.bot.send_message(chat, text)
+                else:
+                    await self.bot.send_message(chat, text, markup)
             except Exception as exc:  # noqa: BLE001 - observer must never disturb the mesh
                 log.warning(
                     "telegram send to %s failed: %s",
@@ -323,7 +408,7 @@ class TelegramObserver:
                     if detail:
                         card += f"\ncause: {detail}"
                     card += f"\nretry: /retry {task_id}"
-                    await self.broadcast(card)
+                    await self.broadcast(card, markup=task_buttons(task_id))
                 else:
                     await self.broadcast(line)
 
@@ -427,17 +512,21 @@ class TelegramObserver:
             nodes = await self.bus.list_nodes()
             await self.bot.send_message(chat, format_roster([n.model_dump() for n in nodes]))
         elif cmd == "trace" and len(parts) >= 2:
-            snapshot = await self.bus.get_snapshot(parts[1].lstrip("#").strip())
-            if snapshot is None:
-                await self.bot.send_message(chat, f"task not found: {parts[1]}")
-            else:
-                await self.bot.send_message(chat, format_trace(snapshot.model_dump()))
+            tid = await self._resolve_task(chat, parts[1])
+            if tid:
+                snapshot = await self.bus.get_snapshot(tid)
+                if snapshot is None:
+                    await self.bot.send_message(chat, f"task not found: {parts[1]}")
+                else:
+                    await self.bot.send_message(chat, format_trace(snapshot.model_dump()))
         elif cmd == "state" and len(parts) >= 2:
-            snapshot = await self.bus.get_snapshot(parts[1].lstrip("#").strip())
-            if snapshot is None:
-                await self.bot.send_message(chat, f"task not found: {parts[1]}")
-            else:
-                await self.bot.send_message(chat, format_task(snapshot.model_dump()))
+            tid = await self._resolve_task(chat, parts[1])
+            if tid:
+                snapshot = await self.bus.get_snapshot(tid)
+                if snapshot is None:
+                    await self.bot.send_message(chat, f"task not found: {parts[1]}")
+                else:
+                    await self.bot.send_message(chat, format_task(snapshot.model_dump()))
         elif cmd == "mreqs":
             requests = await self.bus.list_model_requests()
             await self.bot.send_message(chat, format_model_requests(requests))
@@ -459,9 +548,17 @@ class TelegramObserver:
             await self._decide(chat, cmd, parts[1].lstrip("#").strip())
         elif cmd == "gate" and len(parts) >= 3 and parts[1] in ("approve", "reject"):
             # T3 task approval gate (distinct from T7.5 /approve model requests)
-            await self._control(chat, "decide", f"{parts[2].lstrip('#').strip()} {parts[1]}")
+            tid = await self._resolve_task(chat, parts[2])
+            if tid:
+                await self._control(chat, "decide", f"{tid} {parts[1]}")
         elif cmd in ("submit", "cancel", "retry"):
-            await self._control(chat, cmd, parts[1] if len(parts) >= 2 else "")
+            argument = parts[1] if len(parts) >= 2 else ""
+            if cmd in ("cancel", "retry") and argument:
+                tid = await self._resolve_task(chat, argument)
+                if not tid:
+                    return
+                argument = tid
+            await self._control(chat, cmd, argument)
         elif cmd == "stop" and len(parts) >= 3 and parts[1].lower() == "worker":
             await self._control(chat, "stop_worker", parts[2])
         else:
@@ -475,6 +572,55 @@ class TelegramObserver:
             )
 
     # -- T2: human intervention — Telegram is an M11b API client --------------
+    async def _resolve_task(self, chat: str, prefix: str) -> str:
+        """Resolve a task-id prefix; reply in-chat when it does not resolve.
+
+        Returns the full task id, or "" after telling the user why (unknown
+        id, too short, ambiguous). Full ids pass through unchanged.
+        """
+        snapshots = [s.model_dump() for s in await self.bus.list_tasks()]
+        tid, candidates = resolve_task_id(prefix, snapshots)
+        if tid:
+            return tid
+        if candidates:
+            shown = ", ".join(f"#{c[:12]}" for c in candidates[:5])
+            more = f" (+{len(candidates) - 5} more)" if len(candidates) > 5 else ""
+            await self.bot.send_message(chat, f"ambiguous prefix {prefix}: {shown}{more}")
+        elif len(prefix.lstrip('#').strip()) < MIN_TASK_PREFIX:
+            await self.bot.send_message(
+                chat, f"prefix too short ({prefix}) — use at least {MIN_TASK_PREFIX} chars"
+            )
+        else:
+            await self.bot.send_message(chat, f"task not found: {prefix}")
+        return ""
+
+    async def handle_callback(self, chat: str, message_id: int | None, data: str) -> None:
+        """Route an inline-button press through the existing gated paths.
+
+        callback_data is untrusted input: only the fixed verb table of
+        parse_callback is accepted, and every write still rides the same
+        _control/_decide grant-checked surfaces as the typed commands.
+        """
+        parsed = parse_callback(data)
+        if parsed is None:
+            await self.bot.send_message(chat, "unknown button action")
+            return
+        kind, ident, action = parsed
+        try:
+            if kind == "task":
+                await self._control(chat, action, ident)
+            elif kind == "mreq":
+                await self._decide(chat, action, ident)
+            elif kind == "node":
+                await self._control(chat, f"{action}_node", ident)
+        finally:
+            # Best-effort stamp on the card so the decision stays visible.
+            if message_id is not None:
+                try:
+                    await self.bot.edit_message_text(chat, message_id, f"{data} -> sent")
+                except Exception:  # noqa: BLE001 - cosmetic only
+                    pass
+
     async def _control(self, chat: str, action: str, argument: str) -> None:
         """Send the command through the mesh API write path.
 
@@ -565,6 +711,10 @@ class TelegramObserver:
             updates = await self.bot.get_updates(offset)
             for update in updates:
                 offset = max(offset, update.get("update_id", 0) + 1)
+                cq = update.get("callback_query")
+                if cq:
+                    await self._run_callback(cq)
+                    continue
                 message = update.get("message") or {}
                 chat_obj = message.get("chat") or {}
                 chat = str(chat_obj.get("id", ""))
@@ -577,6 +727,27 @@ class TelegramObserver:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("command failed: %s", _redact(str(exc), self.bot.token))
                     await self.bot.send_message(chat, "error handling command")
+
+    async def _run_callback(self, cq: dict[str, Any]) -> None:
+        message = cq.get("message") or {}
+        chat = str((message.get("chat") or {}).get("id", ""))
+        if not chat or chat not in self.chats:
+            # callback_data is attacker-influenced: answer nothing else to a
+            # chat outside TELEGRAM_ALLOW.
+            log.info("ignored callback from unauthorized chat %s", chat or "?")
+            try:
+                await self.bot.answer_callback(cq.get("id", ""))
+            except Exception:  # noqa: BLE001 - cosmetic
+                pass
+            return
+        try:
+            await self.bot.answer_callback(cq.get("id", ""))
+            await self.handle_callback(
+                chat, message.get("message_id"), str(cq.get("data", ""))
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("callback failed: %s", _redact(str(exc), self.bot.token))
+            await self.bot.send_message(chat, "error handling button")
 
     async def run(self) -> None:
         if not self.chats:
@@ -592,10 +763,31 @@ class BotAPI:
         self.poll_timeout_s = poll_timeout_s
         self._client = httpx.AsyncClient(timeout=60.0)
 
-    async def send_message(self, chat: str, text: str) -> None:
+    async def send_message(self, chat: str, text: str, markup: dict[str, Any] | None = None) -> None:
+        payload: dict[str, Any] = {"chat_id": chat, "text": text[:4000]}
+        if markup is not None:
+            payload["reply_markup"] = markup
         r = await self._client.post(
             f"{API}/bot{self.token}/sendMessage",
-            json={"chat_id": chat, "text": text[:4000]},
+            json=payload,
+        )
+        r.raise_for_status()
+
+    async def answer_callback(self, callback_query_id: str, text: str = "") -> None:
+        """Acknowledge a button press (stops the client-side spinner)."""
+        payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+        r = await self._client.post(
+            f"{API}/bot{self.token}/answerCallbackQuery",
+            json=payload,
+        )
+        r.raise_for_status()
+
+    async def edit_message_text(self, chat: str, message_id: int, text: str) -> None:
+        r = await self._client.post(
+            f"{API}/bot{self.token}/editMessageText",
+            json={"chat_id": chat, "message_id": message_id, "text": text[:4000]},
         )
         r.raise_for_status()
 

@@ -2,6 +2,15 @@
 
 ## Built
 
+- **2026-11-14 — Telegram inline keyboards + short task-ID prefixes
+  (14.11 P0 slice 1)**: failure cards carry `[Retry][Cancel]` inline buttons;
+  callback_data (`tk:/mr:/nd:` triplets) parses through a fixed verb table and
+  every press rides the existing grant-checked `_control`/`_decide` API path
+  (answerCallbackQuery + edit-in-place stamp, unauthorized chats only get the
+  answer). `resolve_task_id()` accepts unambiguous ≥6-char prefixes for
+  `state`/`trace`/`cancel`/`retry`/`gate`, with ambiguity and refusal
+  messages. Tests: `tests/test_telegram_buttons.py` (25 cases).
+
 - **2026-11-14 — Node code fingerprints (P4 slice 2)**: every worker
   advertises a deterministic code fingerprint (`memnc.version.code_version`,
   hash over installed package sources, `<__version__>+<hash12>`) in
@@ -531,22 +540,19 @@ today.
 
 ### P0 — friction we feel every day
 
-1. **Inline keyboards for gates and control actions** (biggest single win).
-   Instead of typing `/approve <request-id>` / `/gate approve <task-id>`,
-   the bot sends the pending request as a message with buttons:
-   `[✅ Approve] [❌ Reject]` for model requests, `[Cancel] [Retry]` under
-   failed-task events, `[Pause] [Resume]` under roster anomalies. On tap:
-   `answerCallbackQuery` + edit the original message in place to show the
-   decision (buttons removed, decision stamped) — no extra chat clutter.
-   Implementation: python-telegram-bot `CallbackQueryHandler`; store the
-   `ControlCommand` as `callback_data` (compact `m:<req-id>:approve`,
-   `t:<task-id>:retry`); the existing grant-checked `_control` path is
-   reused unchanged, only the transport becomes a button.
+1. **Inline keyboards for gates and control actions** — DONE (slice 1,
+   shipped). `CallbackQueryHandler`-equivalent polling: failure cards carry
+   `[Retry][Cancel]` (`tk:<id>:retry|cancel`), model-request buttons
+   (`mr:<req-id>:approve|reject`) and node buttons (`nd:<node>:pause|resume`)
+   parse through a fixed verb table; every press still rides the grant-checked
+   `_control`/`_decide` API path (no new authority path), unauthorized chats
+   only get the callback answered. Model-request/node cards are handled but
+   not yet auto-announced — pending-request push is a later slice.
    Fixes: copying 20-hex IDs on mobile, typo risk, slow approval loop.
-2. **Short task IDs everywhere.** Accept unambiguous prefixes (≥6 chars)
-   for every task-id argument (`state`, `trace`, `cancel`, `retry`,
-   `gate`); `/tasks` and `/trace` already print only a prefix — align
-   them. Fixes: ID copy/paste round trips.
+2. **Short task IDs everywhere** — DONE (slice 1). `resolve_task_id()`
+   accepts unambiguous prefixes (≥6 chars, exact full ids always win) for
+   `state`, `trace`, `cancel`, `retry`, `gate`; ambiguity lists the candidate
+   prefixes, short/unknown prefixes say why. Fixes: ID copy/paste round trips.
 3. **`/status` one-shot digest.** One command answering "is everything
    fine?": tasks by state (count + the interesting ones), nodes with
    heartbeat age and current claim, pending model requests, models near

@@ -223,8 +223,8 @@ async def test_on_event_failed_broadcasts_card_with_retry_hint():
     obs = _observer()
     sent = []
 
-    async def fake_broadcast(text):
-        sent.append(text)
+    async def fake_broadcast(text, markup=None):
+        sent.append((text, markup))
 
     async def fake_snapshot(task_id):
         class S:
@@ -248,7 +248,11 @@ async def test_on_event_failed_broadcasts_card_with_retry_hint():
     )
     msg = type("M", (), {"data": __import__("json").dumps(env).encode()})()
     await obs.on_event(msg)
-    card = sent[-1]
+    card, markup = sent[-1]
     assert "FAILED #1a1ad82fd5e" in card
     assert "cause: permission denied" in card
     assert "/retry 1a1ad82fd5e07764bfe0756" in card
+    # 14.11 P0 slice 1: failure cards carry [Retry][Cancel] buttons
+    from memnc.telegram import task_buttons
+
+    assert markup == task_buttons("1a1ad82fd5e07764bfe0756")
