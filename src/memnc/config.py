@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # identity / transport
     role: Role = Role.CODER
     node_name: str = Field(default_factory=socket.gethostname)
+    # Weak->strong routing: node that receives strong-retry tasks after a
+    # weak node exhausts its attempt budget ("" = disabled).
+    strong_node: str = ""
+
     # T6: node capabilities advertised into the roster KV (roster.<node>).
     # node_vram_gb = VRAM the mesh may plan around (0 = unknown/none);
     # node_gpu = free-form label (e.g. "test-gpu-a").

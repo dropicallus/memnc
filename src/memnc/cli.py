@@ -13,7 +13,13 @@ from datetime import UTC, datetime
 import nats
 
 from .backends import make_backend
-from .backlog import MAX_ATTEMPTS, BacklogStore, decompose_plan
+from .backlog import (
+    MAX_ATTEMPTS,
+    BacklogStore,
+    decompose_plan,
+    make_strong_retry,
+    should_strong_retry,
+)
 from .backup import dump_buckets, restore_buckets
 from .bus import Bus
 from .config import Settings, get_settings
@@ -554,9 +560,9 @@ async def _backlog_store(client) -> BacklogStore:
     return BacklogStore(client.jetstream())
 
 
-async def _backlog_submit(client, settings: Settings, prompt: str) -> str:
+async def _backlog_submit(client, settings: Settings, prompt: str, prefer_node: str = "") -> str:
     """Submit one backlog task to the mesh, return the mesh task id."""
-    submission = TaskSubmission(task=prompt, context="", fanout=1, claimable=True)
+    submission = TaskSubmission(task=prompt, context="", fanout=1, claimable=True, prefer_node=prefer_node)
     response = await client.request(
         SUBJECT_SUBMIT_NODE.format(node=settings.node_name),
         submission.model_dump_json().encode(),
@@ -638,15 +644,36 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
         return False
     print(f"{driver}: claimed {claimed.id} ({claimed.title})", flush=True)
     try:
-        mesh_task_id = await _backlog_submit(client, settings, claimed.prompt)
+        mesh_task_id = await _backlog_submit(
+            client, settings, claimed.prompt, prefer_node=claimed.prefer_node
+        )
         await store.mark(claimed.id, "claimed", mesh_task_id=mesh_task_id)
         event = await _backlog_watch(client, mesh_task_id)
         final = "done" if event == "task.done" else "failed"
         await store.mark(claimed.id, final, mesh_task_id=mesh_task_id)
         print(f"{driver}: {claimed.id} -> {final} (mesh {mesh_task_id})", flush=True)
     except Exception as exc:  # noqa: BLE001 - failed submission burns one attempt
+        final = "failed"
         await store.mark(claimed.id, "failed")
         print(f"{driver}: {claimed.id} -> failed ({exc})", flush=True)
+    # Weak->strong routing: one-shot strong-node retry after the attempts
+    # budget is exhausted (mark() flips back to planned while budget lasts).
+    if final == "failed":
+        task = await store.get(claimed.id)
+        if task and should_strong_retry(task, settings.strong_node):
+            retry = make_strong_retry(task, settings.strong_node)
+            await store.add(
+                title=retry.title,
+                prompt=retry.prompt,
+                plan_id=retry.plan_id,
+                deps=retry.deps,
+                prefer_node=retry.prefer_node,
+                strong_retry=True,
+            )
+            print(
+                f"{driver}: strong-retry queued (prefer {retry.prefer_node}) for {claimed.id}",
+                flush=True,
+            )
     return True
 
 

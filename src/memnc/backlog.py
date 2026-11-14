@@ -93,6 +93,10 @@ class BacklogTask(BaseModel):
     claimed_at: str = ""
     attempts: int = 0
     mesh_task_id: str = ""
+    # Weak->strong routing: the driver adds a strong-retry task (prefer_node
+    # set) once this one exhausts its attempts on the weak pool.
+    strong_retry: bool = False
+    prefer_node: str = ""
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
 
@@ -120,8 +124,17 @@ class BacklogStore:
         prompt: str = "",
         plan_id: str = "",
         deps: list[str] | None = None,
+        prefer_node: str = "",
+        strong_retry: bool = False,
     ) -> BacklogTask:
-        task = BacklogTask(title=title, prompt=prompt, plan_id=plan_id, deps=deps or [])
+        task = BacklogTask(
+            title=title,
+            prompt=prompt,
+            plan_id=plan_id,
+            deps=deps or [],
+            prefer_node=prefer_node,
+            strong_retry=strong_retry,
+        )
         kv = await self._ensure_kv()
         await kv.put(task.id, task.model_dump_json().encode())
         return task
@@ -214,3 +227,30 @@ class BacklogStore:
             if claimed is not None:
                 return claimed
         return None
+
+
+def should_strong_retry(task: BacklogTask, strong_node: str) -> bool:
+    """True when a terminally failed task deserves one strong-node retry.
+
+    A task is terminal when its attempts are exhausted (status stays
+    "failed"); only then, only when a strong node is configured, and only
+    once per task (strong_retry flag guards against loops).
+    """
+    return (
+        task.status == "failed"
+        and task.attempts >= MAX_ATTEMPTS
+        and not task.strong_retry
+        and bool(strong_node)
+    )
+
+
+def make_strong_retry(task: BacklogTask, strong_node: str) -> BacklogTask:
+    """Build the one-shot strong-node retry for a terminally failed task."""
+    return BacklogTask(
+        title=f"[strong-retry] {task.title}",
+        prompt=task.prompt,
+        plan_id=task.plan_id,
+        deps=list(task.deps),
+        strong_retry=True,
+        prefer_node=strong_node,
+    )

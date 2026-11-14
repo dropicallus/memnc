@@ -153,6 +153,7 @@ class Orchestrator:
             depth=submission.depth,
             claimable=submission.claimable,
             needs=submission.needs,
+            prefer_node=submission.prefer_node,
             gate=submission.gate,
             # M14: worker-driven pipeline for claimable tasks
             next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
@@ -715,6 +716,7 @@ class Orchestrator:
                 "last_error": snapshot.error,
                 "workspace_root": str(self.settings.workspace_root),
                 "role": role.value,
+                "prefer_node": snapshot.prefer_node,
             },
         )
         snapshot.last_action = {

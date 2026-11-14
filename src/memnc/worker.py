@@ -481,6 +481,15 @@ class Worker:
     # -- command handling --------------------------------------------------
     async def _handle(self, message) -> None:
         envelope = Envelope.model_validate_json(message.data)
+        # Weak->strong routing: a command with prefer_node set is for that
+        # node only — everyone else naks so a matching worker claims it.
+        prefer = envelope.payload.get("prefer_node", "")
+        if prefer and prefer != self.settings.node_name:
+            try:
+                await message.nak(delay=2.0)
+            except Exception:  # noqa: BLE001
+                await message.nak()
+            return
         snapshot = await self.bus.get_snapshot(envelope.task_id)
         if snapshot is None:
             await self.bus.dead_letter(envelope, "unknown task")

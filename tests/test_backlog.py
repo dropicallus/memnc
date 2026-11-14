@@ -182,3 +182,55 @@ def test_decompose_plan_single_block_is_one_task():
 
 def test_decompose_plan_empty():
     assert decompose_plan("   \n  ") == []
+
+
+# -- weak->strong routing helpers -------------------------------------------
+
+def _failed_task(attempts: int = 3, strong_retry: bool = False) -> BacklogTask:
+    return BacklogTask(
+        title="write the report",
+        prompt="write the report",
+        status="failed",
+        attempts=attempts,
+        strong_retry=strong_retry,
+    )
+
+
+def test_should_strong_retry_true_when_terminal_and_configured() -> None:
+    from memnc.backlog import should_strong_retry
+    assert should_strong_retry(_failed_task(attempts=3), "node-a") is True
+
+
+def test_should_strong_retry_false_without_strong_node() -> None:
+    from memnc.backlog import should_strong_retry
+    assert should_strong_retry(_failed_task(), "") is False
+
+
+def test_should_strong_retry_false_while_attempts_remain() -> None:
+    # mark() flips status back to planned while the budget lasts; a task
+    # still mid-budget must not spawn a strong retry.
+    from memnc.backlog import MAX_ATTEMPTS, should_strong_retry
+    t = _failed_task(attempts=MAX_ATTEMPTS - 1)
+    t.status = "planned"  # mark() behaviour: retried in-pool first
+    assert should_strong_retry(t, "node-a") is False
+
+
+def test_should_strong_retry_never_loops() -> None:
+    from memnc.backlog import should_strong_retry
+    t = _failed_task(strong_retry=True)
+    assert should_strong_retry(t, "node-a") is False
+
+
+def test_make_strong_retry_copies_prompt_and_sets_target() -> None:
+    from memnc.backlog import make_strong_retry
+    src = _failed_task()
+    src.plan_id = "night4"
+    src.deps = ["b-abc"]
+    retry = make_strong_retry(src, "node-a")
+    assert retry.prompt == src.prompt
+    assert retry.plan_id == "night4"
+    assert retry.deps == ["b-abc"]
+    assert retry.strong_retry is True
+    assert retry.prefer_node == "node-a"
+    assert retry.title.startswith("[strong-retry] ")
+    assert retry.id != src.id

@@ -591,6 +591,9 @@ class TaskSubmission(BaseModel):
     needs: TaskNeeds | None = None
     # T3 human approval gate carried over from the submission.
     gate: Literal["always", "fail", "never"] = "never"
+    # Weak->strong routing: when set, workers on other nodes nak the command
+    # (skip it) so only this node's worker picks it up. "" = any node.
+    prefer_node: str = ""
 
     @field_validator("task")
     @classmethod
@@ -634,6 +637,8 @@ class TaskSnapshot(BaseModel):
     origin_node: str = ""
     # T6: carried over from TaskSubmission so the claim gate sees the needs.
     needs: TaskNeeds | None = None
+    # Weak->strong routing: carried over from TaskSubmission.prefer_node.
+    prefer_node: str = ""
     # T4 (model-routing-visible): role -> "node:model" for every executed
     # step, recorded from the worker's result payloads. Shows which model
     # actually handled each pipeline stage.
