@@ -14,6 +14,8 @@ services:
       file: docker-compose.yml
       service: worker-planner
     environment:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
       NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_ID:-node-b}-planner
@@ -28,6 +30,8 @@ services:
       file: docker-compose.yml
       service: worker-coder
     environment:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
       NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_ID:-node-b}-coder
@@ -42,6 +46,8 @@ services:
       file: docker-compose.yml
       service: worker-critic
     environment:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
       NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_ID:-node-b}-critic
@@ -66,6 +72,8 @@ services:
               "--contact", "mcp://memnc-agent",
               "--skill", "code"]
     environment:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
       NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: ${NODE_ID:-node-b}
@@ -84,6 +92,8 @@ services:
       service: worker-coder
     command: ["python", "-m", "memnc.orchestrator"]
     environment:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
       NATS_URL: ${NODE_NATS_URL:-nats://host.docker.internal:4222}
       NATS_TOKEN: ${NATS_TOKEN:-dev-token}
       NODE_NAME: node-b
