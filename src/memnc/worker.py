@@ -676,6 +676,14 @@ class Worker:
         except Exception as exc:  # noqa: BLE001
             return ResultPayload(ok=False, error=f"agent error: {exc}")
 
+        log.info(
+            "raw role output",
+            extra={
+                "role": role.value,
+                "tool_steps": run.tool_steps,
+                "content": (run.content or "")[:400],
+            },
+        )
         try:
             output = parse_role_output(role, run.content)
         except (ValueError, ValidationError) as exc:

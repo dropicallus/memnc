@@ -1069,3 +1069,23 @@ Fix (`Worker._claim_permitted`): a snapshot with `prefer_node` set may only be
 claimed by the preferred host (prefix match against the role-suffixed
 node_name), and an explicit preference overrides the synergy-gate withdraw.
 Tests in `tests/test_prefer_claim.py`; suite 408 passed, 2 skipped.
+
+### 14.15.7 Robust role-output parsing (2026-11-14)
+
+Live proof exposed a second parsing gap: a coder model emits its JSON tool
+call (name/arguments) as *plain text* before the result object, and
+`extract_json` returned the first object — the tool-call echo, which pydantic
+validated into an *empty* CoderOutput (extra keys ignored). Every debate round
+logged "files: no files" even though the model had written the file JSON.
+
+Fix (agent.py):
+- `extract_json_candidates` collects ALL JSON values in document order
+  (fenced blocks first, raw scan skips past decoded values).
+- `parse_role_output` validates every candidate, skips tool-call echoes
+  (name+arguments), and picks the richest valid payload (files/commands/
+  issues/plan/summary scored); ties go to document order. No candidate /
+  nothing valid -> precise ValueError or first ValidationError.
+
+Tests: tests/test_role_parse.py (6). Suite 414 passed, 2 skipped.
+A debug INFO log (`raw role output`) in the worker keeps tool_steps and the
+first 400 chars of model content visible for future parsing regressions.
