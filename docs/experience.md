@@ -317,3 +317,30 @@ whole store (context collapse). Combined with GEPA the ladder is now:
 prompt -> prompt evolution (GEPA) -> evolving context playbooks (ACE)
 -> finetuning (FireAct/LoRA). ACE and GEPA are complementary: GEPA
 mutates the prompt, ACE accumulates context; ACE won on AppWorld.
+
+## 2026-11-14 external evidence: MEM1 (MIT, ICLR 2026, Frank)
+
+MEM1 (Zhou et al., MIT - Rus/Liang groups, arXiv 2506.15841; ICLR
+2026, Best Paper at the NeurIPS 2025 MTI-LLM workshop) trains agents
+via RL (PPO over veRL) to operate with a CONSTANT compact internal
+state: at every turn the model itself consolidates prior memory plus
+new environment observations and strategically discards irrelevant or
+redundant information. Memory management is not prompted - it is a
+LEARNED skill in the weights.
+
+Results: MEM1-7B improves performance 3.5x while using 3.7x less
+memory than Qwen2.5-14B-Instruct on a 16-objective multi-hop QA task,
+and generalizes beyond the training horizons. Checkpoint released
+(Qwen2.5-7B, MIT license); builds on veRL, search-R1 and
+AgenticMemory.
+
+memnc reading: this is the direct answer to the "chatstrophic
+forgetting" question - what to keep and what to discard is TRAINABLE.
+MEM1 and ACE are the exact poles of the memory spectrum: ACE
+consolidates externally (deterministic playbook merge, zero training,
+needs reliable feedback), MEM1 consolidates internally (RL trains the
+consolidation behavior itself). Natural memnc path: ACE-style external
+playbook first (cheap, immediate), MEM1-style RL consolidation as the
+later growing-LoRA stage. Operational bonus: constant context bounds
+each node's KV size - relevant to capacity planning and routing
+(14.15.10); our arm C ReadTimeouts partly came from growing contexts.
