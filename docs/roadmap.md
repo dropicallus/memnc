@@ -2,6 +2,14 @@
 
 ## Built
 
+- **2026-11-14 — Command discovery (P1 item 7)**: the Telegram command list
+  lives in one grouped table (`COMMAND_GROUPS`: view / act / decide) in
+  `telegram.py`; unknown commands get the grouped list via `format_help()`
+  (replacing the dense one-line usage string), and `BotAPI.set_my_commands`
+  registers the flattened command list with BotFather at startup so Telegram
+  autocompletes. Registration is best-effort (failure logged, never fatal).
+  Tests: 3 cases in `tests/test_retry_intent.py`.
+
 - **2026-11-14 — Retry with intent (P1 item 6)**: `/retry <id> --model
   <name>` reruns a FAILED/CANCELLED task on a chosen model. `ControlCommand`
   gains `model_override`; the retry branch in the orchestrator stamps it on
@@ -598,10 +606,8 @@ today.
 6. **~~Retry with intent.~~ DONE 2026-11-14** — `/retry <id> --model <name>`
    overrides the model for the rerun; `/retry` alone keeps the recorded
    route. See the Built entry below.
-7. **Command discovery.** Register the command list with BotFather
-   (setMyCommands) so Telegram autocompletes; `/help` prints the same
-   list grouped (view / act / decide). Fix: the dense one-line usage
-   string is the only discovery surface today.
+7. **~~Command discovery.~~ DONE 2026-11-14** — see Built entry; grouped
+   `/help` and BotFather `setMyCommands` registration at startup.
 8. **Quieter event stream.** Group and throttle routine state transitions
    (e.g. claim→advance collapsed), keep the loud channel for submit /
    failure / gate / completion. Rationale: notification rules belong to

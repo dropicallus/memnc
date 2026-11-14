@@ -42,6 +42,64 @@ log = logging.getLogger(__name__)
 
 API = "https://api.telegram.org"
 
+# Command discovery (P1 item 7): the grouped command list is the single
+# source for both /help output and the BotFather setMyCommands registration.
+# (group, [(command, description, args), ...]) — args shown in /help only.
+COMMAND_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
+    (
+        "view",
+        [
+            ("status", "mesh digest", ""),
+            ("tasks", "list tasks (optionally by state)", "[state]"),
+            ("node", "node detail", "<name>"),
+            ("nodes", "roster list", ""),
+            ("state", "task state", "<task-id>"),
+            ("trace", "debate trace + routing", "<task-id>"),
+            ("obslast", "recent observations", "[model] [limit]"),
+            ("mreqs", "model requests", ""),
+            ("mrep", "model reputation", ""),
+        ],
+    ),
+    (
+        "act",
+        [
+            ("submit", "new task", "<task>"),
+            ("cancel", "cancel task", "<task-id>"),
+            ("retry", "rerun task (optionally another model)", "<task-id> [--model <name>]"),
+            ("stop worker", "withdraw a node", "<node>"),
+        ],
+    ),
+    (
+        "decide",
+        [
+            ("approve", "approve model request", "<request-id>"),
+            ("reject", "reject model request", "<request-id>"),
+            ("gate", "verify-gate override", "approve|reject <task-id>"),
+        ],
+    ),
+]
+
+
+def format_help() -> str:
+    lines = ["commands:"]
+    for group, commands in COMMAND_GROUPS:
+        lines.append(f"{group}:")
+        for name, desc, args in commands:
+            suffix = f" {args}" if args else ""
+            lines.append(f"  /{name}{suffix} - {desc}")
+    return "\n".join(lines)
+
+
+def botfather_commands() -> list[dict[str, str]]:
+    """Flattened command list for the BotFather setMyCommands registration."""
+    out = []
+    for _group, commands in COMMAND_GROUPS:
+        for name, desc, _args in commands:
+            if " " in name:  # two-word forms are not botfather commands
+                continue
+            out.append({"command": name, "description": desc})
+    return out
+
 SUBJECT_ALL_EVENTS = SUBJECT_EVENTS.format(task_id="*")
 
 
@@ -582,14 +640,7 @@ class TelegramObserver:
         elif cmd == "stop" and len(parts) >= 3 and parts[1].lower() == "worker":
             await self._control(chat, "stop_worker", parts[2])
         else:
-            await self.bot.send_message(
-                chat,
-                "commands: status | tasks [state] | node <name> | roster | "
-                "state <task-id> "
-                "| trace <task-id> | mreqs | mrep | approve|reject <request-id> | gate approve|reject "
-                "<task-id> | submit <task> "
-                "| cancel <task-id> | retry <task-id> | stop worker <node>",
-            )
+            await self.bot.send_message(chat, format_help())
 
     # -- T2: human intervention — Telegram is an M11b API client --------------
     async def _resolve_task(self, chat: str, prefix: str) -> str:
@@ -776,6 +827,10 @@ class TelegramObserver:
     async def run(self) -> None:
         if not self.chats:
             raise SystemExit("TELEGRAM_ALLOW is empty - no chats to mirror to")
+        try:
+            await self.bot.set_my_commands(botfather_commands())
+        except Exception as exc:  # noqa: BLE001 - registration is best-effort
+            log.warning("setMyCommands failed: %s", _redact(str(exc), self.bot.token))
         await asyncio.gather(self.run_events(), self.run_commands(), self.run_roster())
 
 
@@ -794,6 +849,14 @@ class BotAPI:
         r = await self._client.post(
             f"{API}/bot{self.token}/sendMessage",
             json=payload,
+        )
+        r.raise_for_status()
+
+    async def set_my_commands(self, commands: list[dict[str, str]]) -> None:
+        """Register the command list with BotFather (Telegram autocomplete)."""
+        r = await self._client.post(
+            f"{API}/bot{self.token}/setMyCommands",
+            json={"commands": commands},
         )
         r.raise_for_status()
 

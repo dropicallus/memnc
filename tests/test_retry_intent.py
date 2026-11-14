@@ -156,3 +156,70 @@ def test_control_sends_model_override_arg():
     assert body["verb"] == "task.retry"
     assert body["args"]["model_override"] == "big:32b"
 
+
+# -- P1 item 7: command discovery (/help groups + BotFather registration) ----
+
+
+def test_format_help_groups_commands():
+    from memnc.telegram import format_help
+
+    out = format_help()
+    assert out.startswith("commands:")
+    for group in ("view:", "act:", "decide:"):
+        assert group in out
+    assert "/retry <task-id> [--model <name>]" in out
+    assert "submit" in out
+
+
+def test_botfather_commands_flattens_and_skips_two_word():
+    from memnc.telegram import botfather_commands
+
+    cmds = botfather_commands()
+    names = [c["command"] for c in cmds]
+    assert "submit" in names and "retry" in names
+    assert all(" " not in n for n in names)
+    assert all(c["description"] for c in cmds)
+
+
+def test_set_my_commands_posts_payload():
+    import asyncio
+
+    from memnc.config import Settings
+    from memnc.telegram import BotAPI, TelegramObserver, botfather_commands
+
+    posted: list = []
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            pass
+
+    class _FakeClient:
+        async def post(self, url: str, json=None):  # noqa: A002
+            posted.append((url, json))
+            return _Resp()
+
+    api = BotAPI("t0k3n")
+    api._client = _FakeClient()
+    asyncio.run(api.set_my_commands(botfather_commands()))
+    url, payload = posted[0]
+    assert url.endswith("/bott0k3n/setMyCommands")
+    assert payload == {"commands": botfather_commands()}
+
+    # Startup registration is best-effort: a failing bot must not crash run().
+    class _LocalBot:
+        token = "t0k3n"
+
+    obs = TelegramObserver(Settings(node_name="t", telegram_allow="42"), _LocalBot())  # type: ignore[arg-type]
+
+    async def boom(commands):
+        raise RuntimeError("down")
+
+    async def noop():
+        pass
+
+    obs.bot.set_my_commands = boom  # type: ignore[method-assign]
+    obs.run_events = noop  # type: ignore[method-assign]
+    obs.run_commands = noop  # type: ignore[method-assign]
+    obs.run_roster = noop  # type: ignore[method-assign]
+    asyncio.run(obs.run())  # must not raise
+
