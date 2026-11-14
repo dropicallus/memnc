@@ -15,6 +15,7 @@ from memnc.harnesses import (
     known_harnesses,
     register,
 )
+from memnc.harnesses.inproc import ToolLoopHarness
 from memnc.harnesses.pi import PiHarness, parse_events
 from memnc.harnesses.workspace import changed_file_contents
 from memnc.schema import Envelope, Kind, Role
@@ -327,3 +328,86 @@ def test_worker_non_coder_role_ignores_harness(tmp_path, monkeypatch):
 def test_worker_default_harness_is_inproc(tmp_path):
     worker = _coder_worker(tmp_path, "inproc")
     assert worker.settings.harness_coder == "inproc"
+
+
+class _FakeChatResult:
+    def __init__(self, content="", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+
+class _FakeToolCall:
+    def __init__(self, name, arguments, call_id="call-1"):
+        self.name = name
+        self.arguments = arguments
+        self.id = call_id
+
+
+class _FakeBackend:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        result = self.results[min(self.calls, len(self.results) - 1)]
+        self.calls += 1
+        return result
+
+
+def test_tool_loop_harness_happy_path(tmp_path):
+    import json
+
+    final = {"summary": "wrote hi.py", "files": [{"path": "hi.py", "content": "x = 1\n"}]}
+    backend = _FakeBackend([
+        _FakeChatResult(tool_calls=[_FakeToolCall("write_file", {"path": "hi.py"})]),
+        _FakeChatResult(content=json.dumps(final)),
+    ])
+    seen = []
+
+    async def execute(name, arguments):
+        seen.append(name)
+        return "ok"
+
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    harness = ToolLoopHarness(model="fake", backend=backend, execute_tool=execute)
+    result = asyncio.run(harness.run("do it", tmp_path, timeout_s=10))
+    assert result.ok is True
+    assert result.summary == "wrote hi.py"
+    assert result.tool_events == 1
+    assert seen == ["write_file"]
+    assert (tmp_path / "hi.py").read_text() == "x = 1\n"
+    assert "hi.py" in result.diff
+
+
+def test_tool_loop_harness_rejects_bad_json(tmp_path):
+    backend = _FakeBackend([_FakeChatResult(content="no json here")])
+    harness = ToolLoopHarness(model="fake", backend=backend)
+    result = asyncio.run(harness.run("do it", tmp_path, timeout_s=10))
+    assert result.ok is False
+    assert "invalid coder output" in result.error
+
+
+def test_tool_loop_harness_timeout(tmp_path):
+    import asyncio as aio
+    import time
+
+    class SlowBackend:
+        async def chat(self, messages, **kwargs):
+            await aio.sleep(30)
+            return _FakeChatResult(content="{}")
+
+    harness = ToolLoopHarness(model="fake", backend=SlowBackend(), max_steps=1)
+    started = time.monotonic()
+    result = asyncio.run(harness.run("do it", tmp_path, timeout_s=1))
+    assert result.ok is False
+    assert "timed out" in result.error
+    assert time.monotonic() - started < 10
+
+
+def test_inproc_harness_registered():
+    assert "inproc" in known_harnesses()
+    harness = ToolLoopHarness(model="fake", backend=_FakeBackend([]))
+    caps = harness.capabilities()
+    assert caps.external_process is False

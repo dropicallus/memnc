@@ -60,3 +60,14 @@ async def changed_file_contents(
             continue
         changed[rel] = data.decode(errors="replace")
     return changed
+
+
+async def workspace_diff(workspace: Path) -> str:
+    """The git diff of ``workspace`` including untracked files ('' if not a repo)."""
+    if not _is_git_repo(workspace):
+        return ""
+    try:
+        await _git("add", "-N", ".", cwd=workspace)
+        return await _git("diff", cwd=workspace)
+    except (TimeoutError, FileNotFoundError, OSError):
+        return ""

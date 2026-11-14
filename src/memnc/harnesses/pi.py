@@ -20,6 +20,7 @@ import signal
 from pathlib import Path
 
 from . import HarnessCaps, HarnessResult, register
+from .workspace import workspace_diff
 
 DEFAULT_TIMEOUT_S = 900
 
@@ -157,27 +158,5 @@ class PiHarness:
 
     @staticmethod
     async def _git_diff(workspace: Path) -> str:
-        """Workspace diff including untracked files.
-
-        ``git add -N .`` marks untracked files intent-to-add so plain
-        ``git diff`` shows their content; it stages nothing.
-        """
-        try:
-            add = await asyncio.create_subprocess_exec(
-                "git", "add", "-N", ".",
-                cwd=str(workspace),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await asyncio.wait_for(add.communicate(), timeout=30)
-            proc = await asyncio.create_subprocess_exec(
-                "git",
-                "diff",
-                cwd=str(workspace),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-            return stdout.decode(errors="replace")
-        except (TimeoutError, FileNotFoundError, OSError):
-            return ""
+        """Workspace diff including untracked files (shared helper)."""
+        return await workspace_diff(workspace)

@@ -63,7 +63,7 @@ def register(cls: type) -> type:
 def get_harness(name: str, **kwargs) -> Harness:
     """Instantiate a registered harness by name."""
     if not _REGISTRY:  # lazy: import plugins on first use
-        from . import pi  # noqa: F401  (registers itself)
+        from . import inproc, pi  # noqa: F401  (register themselves)
 
     try:
         cls = _REGISTRY[name]
@@ -74,7 +74,7 @@ def get_harness(name: str, **kwargs) -> Harness:
 
 def known_harnesses() -> list[str]:
     if not _REGISTRY:
-        from . import pi  # noqa: F401
+        from . import inproc, pi  # noqa: F401
 
     return sorted(_REGISTRY)
 

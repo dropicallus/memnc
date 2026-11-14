@@ -32,7 +32,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.harness not in known_harnesses():
         parser.error(f"unknown harness {args.harness!r}; known: {known_harnesses()}")
 
-    harness = get_harness(args.harness, model=args.model)
+    if args.harness == "inproc":
+        from ..backends import make_backend
+        from ..config import get_settings
+
+        settings = get_settings()
+        settings.model_coder = args.model
+        harness = get_harness("inproc", model=args.model, backend=make_backend(settings))
+    else:
+        harness = get_harness(args.harness, model=args.model)
     workspace = Path(args.workspace).expanduser().resolve()
     result = asyncio.run(
         harness.run(args.prompt, workspace, timeout_s=args.timeout)

@@ -819,6 +819,29 @@ Verified live: worker + PiHarness + qwen2.5:7b in a scratch git repo ->
 ok=True, tool_steps=1, hello.txt harvested with exact content. (qwen2.5-coder:32b
 still returns 0 tool events -> empty files -> the known template backlog item.)
 
+### ToolLoopHarness (in-proc loop as a Harness, DONE 2026-11-14)
+
+``harnesses/inproc.py`` wraps ``memnc.agent.run_agent`` so the built-in coder
+loop satisfies the same Harness contract as pi:
+
+- ``ToolLoopHarness(model, backend, tools=None, execute_tool=None,
+  system_prompt=None, max_steps=8, raw_prompt=False)`` -- registered as
+  ``"inproc"`` in the harness registry.
+- ``run(prompt, workspace, timeout_s)``: builds the coder prompt exactly like
+  the worker's in-proc path (``build_user_prompt(Role.CODER, {"task": ...})`` +
+  ``SYSTEM_PROMPTS[Role.CODER]``), runs the tool loop under ``asyncio.wait_for``,
+  parses ``CoderOutput``, applies artifacts into the workspace
+  (``fsutil.apply_artifacts``) and returns the workspace git diff in
+  ``HarnessResult``. Bad JSON / timeout / backend error -> ``ok=False``.
+- ``workspace_diff(workspace)`` helper added to ``harnesses/workspace.py``
+  (git add -N + diff, untracked included); ``pi.py._git_diff`` now reuses it.
+- Probe CLI: ``python -m memnc.harnesses --harness inproc --model M`` builds a
+  backend from settings (model overridden) -- the built-in loop is now probeable
+  from the host without pi.
+
+Verified live: ToolLoopHarness + qwen2.5:7b + scratch git repo -> ok=True,
+CoderOutput parsed, hello.txt applied, full diff harvested.
+
 Tests: tests/test_harnesses.py -- changed_file_contents (untracked + non-repo),
 worker harvest, failure path, broken-python rejection, non-coder roles ignore
 the harness (deterministic via monkeypatch, immune to test pollution), default
