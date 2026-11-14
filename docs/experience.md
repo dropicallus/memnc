@@ -276,3 +276,44 @@ keeps diverse specialists each winning on different tasks - which maps
 directly onto pheromone routing (14.15.10): per-node evolved prompt
 variants as specialization, routing picks the Pareto winner per task
 class.
+
+## 2026-11-14 external evidence: ACE (ICLR 2026, Frank)
+
+ACE (Agentic Context Engineering; Zhang et al., Stanford/SambaNova/
+Berkeley, ICLR 2026) treats contexts as EVOLVING PLAYBOOKS: a
+structured, itemized collection of bullets (each with helpful/harmful
+counters, grouped in sections) that accumulates, refines and organizes
+strategies. Three specialized roles: the Generator produces reasoning
+trajectories, the Reflector distills concrete lessons from successes
+and errors (JSON: error identification, root cause, correct approach,
+key insight), and the Curator emits compact DELTA operations
+(ADD/UPDATE/REMOVE) that are merged by lightweight deterministic
+non-LLM logic - grow-and-refine, never a monolithic rewrite.
+
+Two named failure modes of prior context adaptation: (1) brevity bias
+- LLM summarization drops domain insights for conciseness; (2) context
+collapse - iterative monolithic rewriting erodes accumulated detail.
+ACE's itemized deltas preserve detail, allow parallel merges, and
+enable lazy/periodic pruning.
+
+Results: +10.6% on agents and +8.6% on finance. AppWorld: base 42.4%,
+ICL 46.0%, GEPA 46.4%, Dynamic Cheatsheet 51.9%, ACE 59.5% - matching
+a production leaderboard agent with a smaller open model. Beats GEPA
+with 75.1% fewer rollouts, 86.9% lower adaptation latency (delta
+updates instead of GEPA's prompt-validation rollouts). Works offline
+(system prompts) AND online (agent memory), and adapts WITHOUT labels
+- natural execution feedback suffices. Caveat: without any reliable
+feedback signal, ACE and Dynamic Cheatsheet DEGRADE (spurious signals
+pollute the playbook) - feedback quality is the critical ingredient.
+
+memnc reading: this is the automated version of our Erfahrungsspeicher
+(docs/experience.md) - and we have exactly the reliable feedback it
+needs (deterministic checkers). The three roles map 1:1 onto our mesh
+topology: coder=Generator, critic=Reflector, planner=Curator writing
+into workflow_state/backlog KV. Concrete design rule for any memnc
+memory store: append-only itemized bullets with counters, merged
+deterministically, pruned periodically - NEVER let an LLM rewrite the
+whole store (context collapse). Combined with GEPA the ladder is now:
+prompt -> prompt evolution (GEPA) -> evolving context playbooks (ACE)
+-> finetuning (FireAct/LoRA). ACE and GEPA are complementary: GEPA
+mutates the prompt, ACE accumulates context; ACE won on AppWorld.
