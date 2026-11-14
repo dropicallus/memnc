@@ -67,3 +67,14 @@ Status: confirmed.
   sycophancy, planning style) need their own observation channel.
 - Which tasks go to which model should eventually be decided by pheromones
   (14.15.10), with this file as the human-auditable explanation.
+
+## 2026-11-14 bench smoke (easy tier, rep 0, ollama qwen2.5-coder:32b)
+
+First live bench-report (docs/bench/report-easy-smoke-2026-11-14.md):
+24/24 runs passed. All three arms at 100% on easy - the ceiling effect
+predicted by "More Agents Is All You Need" (gains correlate with task
+difficulty). The easy tier cannot separate the arms; what it DOES show
+is the cost side: mean wallclock A 50s / B 53s / C 420s and mean tokens
+A 435 / B 854 / C 3207. The mesh is 7.4x the token cost of a single
+shot on tasks a single model already solves. Discriminating evidence
+must come from medium/hard tiers where single-shot actually fails.
