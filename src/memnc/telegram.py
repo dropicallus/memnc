@@ -33,9 +33,7 @@ from .bus import Bus
 from .config import Settings
 from .observations import TaskObservation  # noqa: F401  (format_status typing)
 from .schema import (
-    SUBJECT_CONTROL,
     SUBJECT_EVENTS,
-    ControlCommand,
     ModelRequest,
     model_pull_allowed,
 )
@@ -49,11 +47,7 @@ SUBJECT_ALL_EVENTS = SUBJECT_EVENTS.format(task_id="*")
 
 def allowed_chats(allow: str) -> set[str]:
     """Parse TELEGRAM_ALLOW: comma-separated ids, '@' and whitespace stripped."""
-    return {
-        part.strip().lstrip("@").lower()
-        for part in allow.split(",")
-        if part.strip()
-    }
+    return {part.strip().lstrip("@").lower() for part in allow.split(",") if part.strip()}
 
 
 def format_event(envelope: dict[str, Any]) -> str | None:
@@ -115,14 +109,16 @@ def format_trace(snapshot_dict: dict[str, Any], max_entries: int = 25) -> str:
         lines.append(f"({len(entries)} entries, last {max_entries} shown)")
     for entry in entries[-max_entries:]:
         detail = str(entry.get("detail", "")).replace("\n", " ").strip()
-        line = f"- {entry.get('event', '?')}: {detail}" if detail else (
-            f"- {entry.get('event', '?')}"
+        line = (
+            f"- {entry.get('event', '?')}: {detail}" if detail else (f"- {entry.get('event', '?')}")
         )
         lines.append(line[:220])
     return "\n".join(lines)
 
 
-def summarize_tasks(snapshots: list[dict[str, Any]], filter_state: str = "", limit: int = 15) -> str:
+def summarize_tasks(
+    snapshots: list[dict[str, Any]], filter_state: str = "", limit: int = 15
+) -> str:
     """Compact /tasks view: state counts + active tasks + recent completions.
 
     Optional filter_state (e.g. "failed") restricts the detail lines to that
@@ -181,9 +177,10 @@ def format_status(
     counts: dict[str, int] = {}
     for s in snapshots:
         counts[s.get("state", "?")] = counts.get(s.get("state", "?"), 0) + 1
-    lines = [f"{len(snapshots)} tasks: " + " ".join(
-        f"{state}={n}" for state, n in sorted(counts.items(), key=lambda kv: -kv[1])
-    )]
+    lines = [
+        f"{len(snapshots)} tasks: "
+        + " ".join(f"{state}={n}" for state, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+    ]
     active = [s for s in snapshots if s.get("state") not in ("DONE", "FAILED", "CANCELLED")]
     if active:
         parts = [
@@ -200,9 +197,7 @@ def format_status(
         lines.append("nodes: none (mesh empty)")
     open_reqs = [r for r in requests if getattr(r, "status", "") == "pending"]
     lines.append(
-        f"model requests: {len(open_reqs)} pending"
-        if open_reqs
-        else "model requests: none pending"
+        f"model requests: {len(open_reqs)} pending" if open_reqs else "model requests: none pending"
     )
     recent_failed = [o for o in observations if o.outcome != "done"]
     if recent_failed:
@@ -226,8 +221,31 @@ def format_roster(nodes: list[dict[str, Any]]) -> str:
         vram = n.get("vram_gb") or 0
         gpu = n.get("gpu") or "-"
         lines.append(
-            f"{n.get('node_id', '?')} roles={roles} models={models} "
-            f"vram={vram:g}GB gpu={gpu}"
+            f"{n.get('node_id', '?')} roles={roles} models={models} vram={vram:g}GB gpu={gpu}"
+        )
+    return "\n".join(lines)
+
+
+def format_node_detail(data: dict[str, Any]) -> str:
+    """M11a /node <name>: which node, what it runs, which tasks it holds,
+    with each task's content (first line = the actual instruction)."""
+    node = data.get("node") or {}
+    roles = ",".join(node.get("roles") or []) or "-"
+    models = ",".join(node.get("models") or []) or "-"
+    lines = [
+        f"node {node.get('node_id', '?')} roles={roles} models={models} "
+        f"gpu={node.get('gpu') or '-'}"
+    ]
+    tasks = data.get("tasks") or []
+    if not tasks:
+        lines.append("no tasks claimed")
+        return "\n".join(lines)
+    lines.append(f"{len(tasks)} tasks:")
+    for t in tasks:
+        title = (t.get("task") or "").splitlines()[0][:70]
+        claimed = t.get("claimed_by") or "-"
+        lines.append(
+            f"  #{t.get('task_id', '?')[:12]} {t.get('state', '?')} by {claimed}\n    {title}"
         )
     return "\n".join(lines)
 
@@ -239,9 +257,7 @@ def format_model_requests(requests: list[ModelRequest]) -> str:
     lines = [f"{len(requests)} model requests:"]
     for r in requests[:15]:
         disk = f" disk@{','.join(r.nodes_disk)}" if r.nodes_disk else ""
-        lines.append(
-            f"{r.request_id} {r.status} {r.action} {r.model}{disk}"
-        )
+        lines.append(f"{r.request_id} {r.status} {r.action} {r.model}{disk}")
     return "\n".join(lines)
 
 
@@ -289,9 +305,7 @@ class TelegramObserver:
             self._seen_tasks.add(task_id)
             snapshot = await self.bus.get_snapshot(task_id)
             if snapshot is not None:
-                await self.broadcast(
-                    "New task:\n" + format_task(snapshot.model_dump())
-                )
+                await self.broadcast("New task:\n" + format_task(snapshot.model_dump()))
         if self._digest_event(envelope):
             line = format_event(envelope)
             if line is not None:
@@ -357,7 +371,9 @@ class TelegramObserver:
                     await self.broadcast("mesh: " + "; ".join(parts))
                 self._seen_nodes = current
             except Exception as exc:  # noqa: BLE001 - observer must never disturb the mesh
-                log.warning("roster poll failed: %s", _redact(str(exc), getattr(self.bot, "token", "")))
+                log.warning(
+                    "roster poll failed: %s", _redact(str(exc), getattr(self.bot, "token", ""))
+                )
             await asyncio.sleep(max(self.settings.telegram_poll_s, 5))
 
     # -- inbound: commands --------------------------------------------------
@@ -391,14 +407,25 @@ class TelegramObserver:
 
             observations = await self.bus.list_observations()
             model = parts[1].strip() if len(parts) >= 2 else None
-            await self.bot.send_message(
-                chat, format_observations(observations, model)
-            )
+            await self.bot.send_message(chat, format_observations(observations, model))
+        elif cmd in ("node", "nodes"):
+            # M11a: query the mesh API, not local state — this is the
+            # first Telegram command routed through mesh.api.request.*.
+            # /node <name> = detail; /node or /nodes = list.
+            try:
+                from .api import api_request
+
+                if len(parts) >= 2:
+                    reply = await api_request(self.bus, "node.detail", node_id=parts[1].strip())
+                    await self.bot.send_message(chat, format_node_detail(reply["data"]))
+                else:
+                    reply = await api_request(self.bus, "node.list")
+                    await self.bot.send_message(chat, format_roster(reply["data"]))
+            except RuntimeError as exc:
+                await self.bot.send_message(chat, str(exc))
         elif cmd == "roster":
             nodes = await self.bus.list_nodes()
-            await self.bot.send_message(
-                chat, format_roster([n.model_dump() for n in nodes])
-            )
+            await self.bot.send_message(chat, format_roster([n.model_dump() for n in nodes]))
         elif cmd == "trace" and len(parts) >= 2:
             snapshot = await self.bus.get_snapshot(parts[1].lstrip("#").strip())
             if snapshot is None:
@@ -432,47 +459,63 @@ class TelegramObserver:
             await self._decide(chat, cmd, parts[1].lstrip("#").strip())
         elif cmd == "gate" and len(parts) >= 3 and parts[1] in ("approve", "reject"):
             # T3 task approval gate (distinct from T7.5 /approve model requests)
-            await self._control(
-                chat, "decide", f"{parts[2].lstrip('#').strip()} {parts[1]}"
-            )
+            await self._control(chat, "decide", f"{parts[2].lstrip('#').strip()} {parts[1]}")
         elif cmd in ("submit", "cancel", "retry"):
             await self._control(chat, cmd, parts[1] if len(parts) >= 2 else "")
         elif cmd == "stop" and len(parts) >= 3 and parts[1].lower() == "worker":
             await self._control(chat, "stop_worker", parts[2])
         else:
             await self.bot.send_message(
-                chat, "commands: status | tasks [state] | roster | obslast [model] | "
+                chat,
+                "commands: status | tasks [state] | node <name> | roster | "
                 "state <task-id> "
                 "| trace <task-id> | mreqs | mrep | approve|reject <request-id> | gate approve|reject "
                 "<task-id> | submit <task> "
-                "| cancel <task-id> | retry <task-id> | stop worker <node>"
+                "| cancel <task-id> | retry <task-id> | stop worker <node>",
             )
 
-    # -- T2: human intervention via the orchestrator control gate ------------
+    # -- T2: human intervention — Telegram is an M11b API client --------------
     async def _control(self, chat: str, action: str, argument: str) -> None:
-        """Publish a ControlCommand; the orchestrator grant-checks and acts."""
-        # NOTE: KV keys reject ':', so the grantable agent id uses a hyphen.
-        cmd = ControlCommand(
-            action=action, agent_id=f"telegram-{chat}",  # type: ignore[arg-type]
-            task=argument if action == "submit" else "",
-            task_id=argument.split()[0].lstrip("#") if action == "decide" else "",
-            approved=(argument.split()[1] == "approve")
-            if action == "decide" and len(argument.split()) >= 2
-            else None,
-            node=argument if action == "stop_worker" else "",
-        )
+        """Send the command through the mesh API write path.
+
+        The API server forwards it to the orchestrator's mesh.control gate
+        (grant-checked there, deny-by-default). This keeps Telegram a pure
+        API client — one verb surface for every frontend.
+        """
+        from .api import api_request
+
+        verb = {
+            "submit": "task.submit",
+            "cancel": "task.cancel",
+            "retry": "task.retry",
+            "decide": "task.decide",
+            "stop_worker": "node.stop_worker",
+            "pause_node": "node.pause_node",
+            "resume_node": "node.resume_node",
+        }[action]
+        args: dict[str, Any] = {
+            "agent_id": f"telegram-{chat}",  # KV keys reject ':'
+        }
+        if action == "submit":
+            args["task"] = argument
+        elif action == "stop_worker":
+            args["node"] = argument
+        elif action == "decide":
+            words = argument.split()
+            args["task_id"] = words[0].lstrip("#") if words else ""
+            args["approved"] = len(words) >= 2 and words[1] == "approve"
+        elif action in ("cancel", "retry"):
+            args["task_id"] = argument.split()[0].lstrip("#")
+        else:
+            args["node"] = argument
         try:
-            assert self.bus.nc is not None
-            reply = await self.bus.nc.request(
-                SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-            )
-            resp = json.loads(reply.data)
-            if "error" in resp:
-                await self.bot.send_message(chat, f"denied: {resp['error']}")
-            elif action == "submit":
-                await self.bot.send_message(chat, f"submitted: #{resp['task_id']}")
+            resp = await api_request(self.bus, verb, timeout=20, **args)
+            if action == "submit":
+                await self.bot.send_message(chat, f"submitted: #{resp.get('task_id')}")
             else:
                 await self.bot.send_message(chat, f"{action} ok")
+        except RuntimeError as exc:
+            await self.bot.send_message(chat, f"denied: {exc}")
         except Exception as exc:  # noqa: BLE001
             await self.bot.send_message(chat, f"control failed: {exc}")
 
@@ -481,25 +524,20 @@ class TelegramObserver:
         """The ONLY write path: approve/reject on a model request."""
         status = "approved" if action == "approve" else "rejected"
         matches = [
-            r for r in await self.bus.list_model_requests()
-            if r.request_id.startswith(request_id)
+            r for r in await self.bus.list_model_requests() if r.request_id.startswith(request_id)
         ]
         if not matches:
             await self.bot.send_message(chat, f"no model request: {request_id}")
             return
         request = matches[0]
         if request.status != "pending":
-            await self.bot.send_message(
-                chat, f"{request.request_id} already {request.status}"
-            )
+            await self.bot.send_message(chat, f"{request.request_id} already {request.status}")
             return
         # T7: an approved pull is refused when the model is not whitelisted.
         if (
             status == "approved"
             and request.action == "pull"
-            and not model_pull_allowed(
-                request.model, self.settings.model_pull_whitelist
-            )
+            and not model_pull_allowed(request.model, self.settings.model_pull_whitelist)
         ):
             await self.bot.send_message(
                 chat, f"refused: {request.model} not in model_pull_whitelist"
@@ -510,9 +548,7 @@ class TelegramObserver:
         request.decided_at = datetime.now(UTC).isoformat()
         await self.bus.put_model_request(request)
         await self.bus.publish_model_decision(request)
-        await self.bot.send_message(
-            chat, f"{request.request_id} {status} ({request.model})"
-        )
+        await self.bot.send_message(chat, f"{request.request_id} {status} ({request.model})")
 
     # -- main loops ---------------------------------------------------------
     async def run_events(self) -> None:

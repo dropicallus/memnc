@@ -79,9 +79,7 @@ def test_worker_records_route_on_advance():
     asyncio.run(scenario())
 
     stored = bus.snapshots[snapshot.task_id]
-    assert stored.route == {
-        "coder": f"{settings.node_name}:{settings.model_coder}"
-    }
+    assert stored.route == {"coder": f"{settings.node_name}:{settings.model_coder}"}
 
 
 def test_route_absent_when_result_has_no_model():

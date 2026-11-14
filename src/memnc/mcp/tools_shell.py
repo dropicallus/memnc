@@ -37,9 +37,7 @@ async def run_shell(
         # Minimal env: model-driven shell commands must not inherit secrets
         # like NATS_TOKEN or INFERENCE_API_KEY from os.environ.
         shell_env = {
-            k: os.environ[k]
-            for k in ("PATH", "HOME", "LANG", "TERM", "TMPDIR")
-            if k in os.environ
+            k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TERM", "TMPDIR") if k in os.environ
         }
         process = await asyncio.create_subprocess_exec(
             "bash",

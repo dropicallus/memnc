@@ -83,10 +83,7 @@ class OllamaBackend:
             timeout=min(self.timeout, 15),
             retries=1,
         )
-        return [
-            model.get("name") or model.get("model") or ""
-            for model in data.get("models", [])
-        ]
+        return [model.get("name") or model.get("model") or "" for model in data.get("models", [])]
 
 
 def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -105,9 +102,7 @@ def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         arguments = json.loads(arguments or "{}")
                     except json.JSONDecodeError:
                         arguments = {}
-                calls.append(
-                    {"function": {"name": function.get("name"), "arguments": arguments}}
-                )
+                calls.append({"function": {"name": function.get("name"), "arguments": arguments}})
             converted.append(
                 {
                     "role": "assistant",

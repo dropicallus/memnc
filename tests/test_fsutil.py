@@ -69,9 +69,7 @@ def test_apply_artifacts_writes_files(tmp_path):
 
 
 def test_apply_artifacts_skips_oversized(tmp_path):
-    written = apply_artifacts(
-        tmp_path, [{"path": "big.txt", "content": "x" * 50}], max_bytes=10
-    )
+    written = apply_artifacts(tmp_path, [{"path": "big.txt", "content": "x" * 50}], max_bytes=10)
     assert written == []
     assert not (tmp_path / "big.txt").exists()
 

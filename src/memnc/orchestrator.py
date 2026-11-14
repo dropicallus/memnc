@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import acl, clarify
 from .acl import check_registry_write
+from .api import ApiServer
 from .bus import Bus
 from .config import Settings, get_settings
 from .fsm import Event, transition
@@ -68,20 +69,19 @@ class Orchestrator:
             cb=self._on_submit,
         )
         # M10: queryable ledger — any granted agent can read the mesh state.
-        self._ledger_sub = await self.bus.nc.subscribe(
-            SUBJECT_LEDGER, cb=self._on_ledger
-        )
+        self._ledger_sub = await self.bus.nc.subscribe(SUBJECT_LEDGER, cb=self._on_ledger)
         self._heartbeat_sub = await self.bus.nc.subscribe(
             SUBJECT_HEARTBEAT.format(node="*"), cb=self._on_heartbeat
         )
         # T2: human intervention commands (submit/cancel/retry/stop_worker)
         # from approved channels — grant-checked, then ledger-recorded.
-        self._control_sub = await self.bus.nc.subscribe(
-            SUBJECT_CONTROL, cb=self._on_control
-        )
+        self._control_sub = await self.bus.nc.subscribe(SUBJECT_CONTROL, cb=self._on_control)
         self._results = await self.bus.pull_results(
             durable=f"orchestrator-results-{self.settings.node_name}"
         )
+        # M11a: anycast read API on mesh.api.request.* (queue-group mesh-api).
+        self._api = ApiServer(self.settings, self.bus)
+        await self._api.start()
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
         await asyncio.gather(self._result_loop(), self._timeout_loop())
@@ -90,8 +90,10 @@ class Orchestrator:
         self._stop.set()
 
     async def aclose(self) -> None:
-        if hasattr(self, '_router_task'):
+        if hasattr(self, "_router_task"):
             self._router_task.cancel()
+        if getattr(self, "_api", None) is not None:
+            await self._api.stop()
         self._stop.set()
         await self.bus.close()
 
@@ -151,6 +153,7 @@ class Orchestrator:
             depth=submission.depth,
             claimable=submission.claimable,
             needs=submission.needs,
+            prefer_node=submission.prefer_node,
             gate=submission.gate,
             # M14: worker-driven pipeline for claimable tasks
             next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
@@ -240,9 +243,7 @@ class Orchestrator:
                 await self.bus.emit_event(
                     snapshot, "human.decision", f"{verdict} by {cmd.agent_id}"
                 )
-                await self._apply(
-                    snapshot, Event("human_decision", approved=cmd.approved)
-                )
+                await self._apply(snapshot, Event("human_decision", approved=cmd.approved))
                 await message.respond(
                     json.dumps(
                         {
@@ -259,8 +260,7 @@ class Orchestrator:
                     raise ValueError("answer requires text")
                 if snapshot.state is not TaskState.WAIT_INPUT:
                     raise ValueError(
-                        f"task {snapshot.task_id} is not waiting for input "
-                        f"({snapshot.state.value})"
+                        f"task {snapshot.task_id} is not waiting for input ({snapshot.state.value})"
                     )
                 # Feed the answer back into the prompt the agent will see on
                 # re-dispatch — otherwise it would just ask again.
@@ -269,18 +269,12 @@ class Orchestrator:
                     f'"{snapshot.question}" with: {cmd.text}'
                 )
                 snapshot.question = ""
-                snapshot.record(
-                    "human.answered", f"by={cmd.agent_id}: {cmd.text}"
-                )
+                snapshot.record("human.answered", f"by={cmd.agent_id}: {cmd.text}")
                 await self.bus.put_snapshot(snapshot)
-                await self.bus.emit_event(
-                    snapshot, "human.answered", f"answered by {cmd.agent_id}"
-                )
+                await self.bus.emit_event(snapshot, "human.answered", f"answered by {cmd.agent_id}")
                 await self._apply(
                     snapshot,
-                    Event(
-                        "answer", reason=cmd.text, role=snapshot.question_role
-                    ),
+                    Event("answer", reason=cmd.text, role=snapshot.question_role),
                 )
                 await message.respond(
                     json.dumps(
@@ -296,9 +290,7 @@ class Orchestrator:
                 # until resume (heartbeat refreshes keep the flag).
                 if not cmd.node.strip():
                     raise ValueError(f"{cmd.action} needs a node name")
-                node = await self.bus.set_node_paused(
-                    cmd.node.strip(), cmd.action == "pause_node"
-                )
+                node = await self.bus.set_node_paused(cmd.node.strip(), cmd.action == "pause_node")
                 if node is None:
                     raise ValueError(f"unknown node {cmd.node.strip()}")
                 log.info(
@@ -307,9 +299,7 @@ class Orchestrator:
                     extra={"node": cmd.node, "by": cmd.agent_id},
                 )
                 await message.respond(
-                    json.dumps(
-                        {"ok": True, "node": node.node_id, "paused": node.paused}
-                    ).encode()
+                    json.dumps({"ok": True, "node": node.node_id, "paused": node.paused}).encode()
                 )
             elif cmd.action == "stop_worker":
                 if not cmd.node.strip():
@@ -318,9 +308,7 @@ class Orchestrator:
                 # no further work; the process itself keeps running until the
                 # operator stops it on the host (plan §14.6 T2 scope note).
                 caps = await self.bus.list_capabilities()
-                withdrawn = [
-                    cap.agent_id for cap in caps if cap.node == cmd.node.strip()
-                ]
+                withdrawn = [cap.agent_id for cap in caps if cap.node == cmd.node.strip()]
                 for agent_id in sorted(set(withdrawn)):
                     await self.bus.withdraw_capability(agent_id)
                 log.info(
@@ -373,7 +361,9 @@ class Orchestrator:
             )
             await self.bus.emit_event(snapshot, "model.request", detail)
             log.info(
-                "model request %s raised (%s)", request.request_id, detail,
+                "model request %s raised (%s)",
+                request.request_id,
+                detail,
                 extra={"task_id": snapshot.task_id},
             )
         except Exception:  # noqa: BLE001 - model planning is best effort
@@ -383,9 +373,7 @@ class Orchestrator:
     async def _on_ledger(self, message) -> None:
         """Answer mesh.ledger requests with the consolidated mesh state."""
         try:
-            await message.respond(
-                json.dumps(await self.bus.read_ledger()).encode()
-            )
+            await message.respond(json.dumps(await self.bus.read_ledger()).encode())
         except Exception:  # noqa: BLE001 - ledger read is best effort
             log.exception("ledger read failed")
             try:
@@ -404,14 +392,13 @@ class Orchestrator:
         """
         try:
             payload = Envelope.model_validate_json(message.data).payload or {}
-            patterns = [
-                p for p in self.settings.grant_nodes.split(",") if p.strip()
-            ]
+            patterns = [p for p in self.settings.grant_nodes.split(",") if p.strip()]
             for agent_id in acl.auto_grant_agents(payload, patterns):
                 if await self.bus.grant_read(agent_id) is not None:
                     continue
                 await self.bus.issue_grant(
-                    agent_id, level=GrantLevel.CHAIN,
+                    agent_id,
+                    level=GrantLevel.CHAIN,
                     granted_by=f"bootstrap:{self.settings.node_name}",
                 )
                 log.info("auto-granted %s (heartbeat bootstrap)", agent_id)
@@ -452,15 +439,11 @@ class Orchestrator:
         if not self._owns(snapshot):  # M15: another node's orchestrator owns it
             return
         if snapshot.needs_human:  # T3: parked at the approval gate
-            log.info(
-                "ignoring result for parked task", extra={"task_id": snapshot.task_id}
-            )
+            log.info("ignoring result for parked task", extra={"task_id": snapshot.task_id})
             return
         # M16 mesh-clarify: consult results from peers feed the clarify round
         # and must not pass through the normal result handling.
-        if envelope.payload and (envelope.payload.get("output") or {}).get(
-            "consult"
-        ):
+        if envelope.payload and (envelope.payload.get("output") or {}).get("consult"):
             consult = envelope.payload["output"]["consult"]
             await clarify.handle_consult(self.bus, snapshot, envelope, consult)
             return
@@ -504,9 +487,7 @@ class Orchestrator:
         snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]
         # T4 (model-routing-visible): record which node:model ran this step.
         if envelope.role is not None and payload.model:
-            snapshot.route[envelope.role.value] = (
-                f"{envelope.node or '?'}:{payload.model}"
-            )
+            snapshot.route[envelope.role.value] = f"{envelope.node or '?'}:{payload.model}"
 
         event = Event("result", ok=payload.ok, reason=payload.error or "")
         if payload.ok and envelope.role is not None:
@@ -518,9 +499,7 @@ class Orchestrator:
             # output: park the task until a human answers it.
             if event.ok and snapshot.question_output(envelope.role):
                 question = snapshot.question_output(envelope.role)
-                event = Event(
-                    "ask", reason=question, role=envelope.role
-                )
+                event = Event("ask", reason=question, role=envelope.role)
             if (
                 envelope.role is Role.CRITIC
                 and snapshot.critique is not None
@@ -563,9 +542,7 @@ class Orchestrator:
             await clarify.start(self.bus, self.settings, snapshot)
         if envelope.node:
             # visibility for meshctl tail: which node executed this stage
-            await self.bus.emit_event(
-                snapshot, "result.executed_on", envelope.node
-            )
+            await self.bus.emit_event(snapshot, "result.executed_on", envelope.node)
 
     async def _emit_debate(self, snapshot: TaskSnapshot, role: Role) -> None:
         """T5: delegate the debate stream to the shared bus helper."""
@@ -573,9 +550,7 @@ class Orchestrator:
 
         await emit_debate(self.bus, snapshot, role)
 
-    def _store_output(
-        self, snapshot: TaskSnapshot, role: Role, output: dict
-    ) -> None:
+    def _store_output(self, snapshot: TaskSnapshot, role: Role, output: dict) -> None:
         if role is Role.PLANNER:
             snapshot.plan = PlannerOutput.model_validate(output)
         elif role is Role.CODER:
@@ -680,9 +655,7 @@ class Orchestrator:
                 snapshot.record("task.parked", action.reason)
                 await self.bus.put_snapshot(snapshot)
                 verdict = "approved" if event.approved else "rejected"
-                summary = (
-                    snapshot.critique.summary if snapshot.critique else ""
-                )
+                summary = snapshot.critique.summary if snapshot.critique else ""
                 await self.bus.emit_event(
                     snapshot,
                     "task.parked",
@@ -699,8 +672,7 @@ class Orchestrator:
                 await self.bus.emit_event(
                     snapshot,
                     "task.question",
-                    f"question: {action.reason} — /answer {snapshot.task_id} "
-                    f"<text>",
+                    f"question: {action.reason} — /answer {snapshot.task_id} <text>",
                 )
 
         if result.state is TaskState.REVISE:
@@ -739,13 +711,12 @@ class Orchestrator:
                 "context": snapshot.context,
                 "plan": snapshot.plan.model_dump() if snapshot.plan else None,
                 "code": snapshot.code.model_dump() if snapshot.code else None,
-                "critique": snapshot.critique.model_dump()
-                if snapshot.critique
-                else None,
+                "critique": snapshot.critique.model_dump() if snapshot.critique else None,
                 "revisions": snapshot.revisions,
                 "last_error": snapshot.error,
                 "workspace_root": str(self.settings.workspace_root),
                 "role": role.value,
+                "prefer_node": snapshot.prefer_node,
             },
         )
         snapshot.last_action = {
@@ -756,12 +727,8 @@ class Orchestrator:
             "timeout_s": timeout_s,
         }
         await self.bus.put_snapshot(snapshot)
-        await self.bus.publish_envelope(
-            SUBJECT_CMD.format(role=role.value), command
-        )
-        await self.bus.emit_event(
-            snapshot, "dispatch", f"{role.value} command {command.id}"
-        )
+        await self.bus.publish_envelope(SUBJECT_CMD.format(role=role.value), command)
+        await self.bus.emit_event(snapshot, "dispatch", f"{role.value} command {command.id}")
 
     # -- M10: fan-out (hive run_worker shape) -------------------------------
     async def _fanout(self, snapshot: TaskSnapshot) -> None:
@@ -776,8 +743,7 @@ class Orchestrator:
         for step in snapshot.plan.plan:
             submission = TaskSubmission(
                 task=step.description or f"step {step.id}",
-                context=f"fanout parent={snapshot.task_id} step={step.id}: "
-                f"{snapshot.task[:120]}",
+                context=f"fanout parent={snapshot.task_id} step={step.id}: {snapshot.task[:120]}",
                 depth=snapshot.depth + 1,
                 claimable=snapshot.claimable,
             )
@@ -945,8 +911,6 @@ class Orchestrator:
                     extra={"task_id": snapshot.task_id, "state": snapshot.state.value},
                 )
 
-
-
     async def _router_loop(self) -> None:
         """M8: live utility router over NATS.
 
@@ -959,9 +923,7 @@ class Orchestrator:
         while not self._stop.is_set():
             try:
                 nodes = await self.bus.list_nodes()
-                trust = {
-                    t.subject: t.credit for t in await self.bus.list_trust()
-                }
+                trust = {t.subject: t.credit for t in await self.bus.list_trust()}
                 candidates = router_candidates(nodes, trust)
                 ranking = score_candidates(candidates)
                 if ranking:
@@ -970,10 +932,7 @@ class Orchestrator:
                         json.dumps(
                             {
                                 "ts": now_iso(),
-                                "scores": [
-                                    {"agent": a, "score": round(s, 4)}
-                                    for a, s in ranking
-                                ],
+                                "scores": [{"agent": a, "score": round(s, 4)} for a, s in ranking],
                             }
                         ).encode(),
                     )
@@ -997,9 +956,7 @@ async def _main() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(
-                sig, lambda: asyncio.create_task(orchestrator.stop())
-            )
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(orchestrator.stop()))
         except NotImplementedError:  # pragma: no cover
             pass
     try:

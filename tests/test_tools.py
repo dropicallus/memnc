@@ -40,9 +40,7 @@ def test_search_text(tmp_path):
 @pytest.mark.asyncio
 async def test_shell_runs_in_workspace(tmp_path):
     (tmp_path / "here.txt").write_text("x")
-    result = json.loads(
-        await run_shell(tmp_path, "cat here.txt", timeout_s=5, allow_shell=True)
-    )
+    result = json.loads(await run_shell(tmp_path, "cat here.txt", timeout_s=5, allow_shell=True))
     assert result["ok"] is True
     assert result["stdout"] == "x"
     assert result["exit_code"] == 0
@@ -50,9 +48,7 @@ async def test_shell_runs_in_workspace(tmp_path):
 
 @pytest.mark.asyncio
 async def test_shell_timeout_is_killed(tmp_path):
-    result = json.loads(
-        await run_shell(tmp_path, "sleep 5", timeout_s=1, allow_shell=True)
-    )
+    result = json.loads(await run_shell(tmp_path, "sleep 5", timeout_s=1, allow_shell=True))
     assert result["timed_out"] is True
     assert result["ok"] is False
 
@@ -72,8 +68,6 @@ async def test_shell_rejects_cwd_escape(tmp_path):
 
 @pytest.mark.asyncio
 async def test_shell_truncates_output(tmp_path):
-    result = json.loads(
-        await run_shell(tmp_path, "printf 'x%.0s' {1..100}", max_output_bytes=10)
-    )
+    result = json.loads(await run_shell(tmp_path, "printf 'x%.0s' {1..100}", max_output_bytes=10))
     assert result["truncated"] is True
     assert result["stdout"] == "x" * 10

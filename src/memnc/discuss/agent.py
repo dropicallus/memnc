@@ -16,6 +16,7 @@ Env: DISCUSS_AGENT, DISCUSS_SUBJECT, DISCUSS_STANCE, DISCUSS_LANG,
      DISCUSS_PROMPT_FILE, OLLAMA_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
      (NATS settings shared via memnc.discuss.common.Settings)
 """
+
 import asyncio
 import json
 import os
@@ -68,32 +69,35 @@ def build_messages(topic: str, transcript: list) -> list:
         if speaker == AGENT:
             messages.append({"role": "assistant", "content": text})
         elif speaker in ROLE_OTHERS:
-            messages.append({"role": "tool", "tool_call_id": speaker,
-                             "name": speaker, "content": text})
+            messages.append(
+                {"role": "tool", "tool_call_id": speaker, "name": speaker, "content": text}
+            )
         else:
             messages.append({"role": "user", "content": f"{speaker}: {text}"})
-    messages.append({"role": "user",
-                     "content": f"TOPIC: {topic}\n\nYour contribution as {AGENT}:"})
+    messages.append({"role": "user", "content": f"TOPIC: {topic}\n\nYour contribution as {AGENT}:"})
     return messages
 
 
 def call_ollama(messages: list) -> str:
-    payload = json.dumps({
-        "model": MODEL,
-        "messages": messages,
-        "stream": False,
-        "options": {"temperature": 0.7, "num_ctx": NUM_CTX},
-    }).encode()
-    req = urllib.request.Request(OLLAMA_URL + "/api/chat", data=payload,
-                                 headers={"Content-Type": "application/json"})
+    payload = json.dumps(
+        {
+            "model": MODEL,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.7, "num_ctx": NUM_CTX},
+        }
+    ).encode()
+    req = urllib.request.Request(
+        OLLAMA_URL + "/api/chat", data=payload, headers={"Content-Type": "application/json"}
+    )
     with urllib.request.urlopen(req, timeout=600) as r:
         return json.loads(r.read())["message"]["content"].strip()
 
 
 async def main():
     import nats
-    nc = await nats.connect(servers=[NATS_URL], token=NATS_TOKEN,
-                            name=f"discuss-{AGENT}")
+
+    nc = await nats.connect(servers=[NATS_URL], token=NATS_TOKEN, name=f"discuss-{AGENT}")
 
     async def handler(msg):
         t0 = time.time()
@@ -102,11 +106,14 @@ async def main():
             messages = build_messages(req["topic"], req.get("transcript", []))
             text = call_ollama(messages)
             done = DONE_MARK in text
-            resp = {"agent": AGENT, "text": text, "done": done,
-                    "dur_s": round(time.time() - t0, 1)}
+            resp = {"agent": AGENT, "text": text, "done": done, "dur_s": round(time.time() - t0, 1)}
         except Exception as e:
-            resp = {"agent": AGENT, "text": f"[ERROR: {e!r}]", "done": True,
-                    "dur_s": round(time.time() - t0, 1)}
+            resp = {
+                "agent": AGENT,
+                "text": f"[ERROR: {e!r}]",
+                "done": True,
+                "dur_s": round(time.time() - t0, 1),
+            }
         await msg.respond(json.dumps(resp).encode())
         print(f"[{AGENT}] turn in {resp['dur_s']}s done={resp['done']}", flush=True)
 

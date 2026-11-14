@@ -4,6 +4,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Candidate:
     """A candidate for utility scoring in SwarmHarness."""
+
     agent_id: str
     skill: str
     capacity: int
@@ -56,6 +57,7 @@ def score_candidates(
         scored.append((c.agent_id, score))
 
     return sorted(scored, key=lambda x: x[1], reverse=True)
+
 
 def router_candidates(nodes, trust: dict[str, float]):
     """M8: build SwarmHarness Candidates from T6 roster + trust ledger.

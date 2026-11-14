@@ -14,7 +14,12 @@ def envelope(**overrides):
         "state": "CODING",
         "attempt": 0,
         "ts": 1760000000,
-        "payload": {"event": "claimed", "detail": "workspace edit", "state": "CODING", "revisions": 1},
+        "payload": {
+            "event": "claimed",
+            "detail": "workspace edit",
+            "state": "CODING",
+            "revisions": 1,
+        },
     }
     base.update(overrides)
     return base
@@ -35,7 +40,9 @@ def test_format_event_compact_line():
 
 
 def test_format_event_truncates_long_detail():
-    line = format_event(envelope(payload={"event": "e", "detail": "x" * 500, "state": "DONE", "revisions": 0}))
+    line = format_event(
+        envelope(payload={"event": "e", "detail": "x" * 500, "state": "DONE", "revisions": 0})
+    )
     assert len(line) < 400
 
 
@@ -95,6 +102,7 @@ async def test_broadcast_swallows_delivery_errors():
 
 # -- digest filtering ------------------------------------------------------
 
+
 def _observer():
     observer = TelegramObserver.__new__(TelegramObserver)
     observer.settings = type("S", (), {"telegram_verbose": False})()
@@ -105,24 +113,50 @@ def _observer():
 
 async def test_digest_suppresses_same_state_chatter():
     obs = _observer()
-    assert obs._digest_event(envelope()) is True          # CODING transition
-    assert obs._digest_event(envelope(payload={"event": "dispatch", "detail": "cmd", "state": "CODING", "revisions": 1})) is False
+    assert obs._digest_event(envelope()) is True  # CODING transition
+    assert (
+        obs._digest_event(
+            envelope(
+                payload={"event": "dispatch", "detail": "cmd", "state": "CODING", "revisions": 1}
+            )
+        )
+        is False
+    )
     assert obs._digest_event(envelope(node="node-b-coder")) is False  # still CODING
 
 
 async def test_digest_announces_state_transition():
     obs = _observer()
     obs._digest_event(envelope())
-    assert obs._digest_event(envelope(payload={"event": "done", "detail": "", "state": "DONE", "revisions": 2})) is True
+    assert (
+        obs._digest_event(
+            envelope(payload={"event": "done", "detail": "", "state": "DONE", "revisions": 2})
+        )
+        is True
+    )
 
 
 async def test_digest_announces_new_failure_detail_once():
     obs = _observer()
-    fail = envelope(payload={"event": "failed", "detail": "tool step limit (12) exceeded", "state": "FAILED", "revisions": 0})
+    fail = envelope(
+        payload={
+            "event": "failed",
+            "detail": "tool step limit (12) exceeded",
+            "state": "FAILED",
+            "revisions": 0,
+        }
+    )
     assert obs._digest_event(fail) is True
-    assert obs._digest_event(fail) is False               # same detail suppressed
-    other = envelope(payload={"event": "failed", "detail": "artifact apply denied: /workspace", "state": "FAILED", "revisions": 0})
-    assert obs._digest_event(other) is True               # new failure reason
+    assert obs._digest_event(fail) is False  # same detail suppressed
+    other = envelope(
+        payload={
+            "event": "failed",
+            "detail": "artifact apply denied: /workspace",
+            "state": "FAILED",
+            "revisions": 0,
+        }
+    )
+    assert obs._digest_event(other) is True  # new failure reason
 
 
 async def test_digest_verbose_always_broadcasts():
@@ -139,18 +173,27 @@ def test_digest_ignores_non_task_events():
 
 # -- status digest (14.11 P0) -------------------------------------------------
 
+
 def test_format_status_full():
     from memnc.observations import TaskObservation
     from memnc.telegram import format_status
 
     snapshots = [
-        {"task_id": "1a1aaaaa", "state": "CODING", "claimed_by": "node-b-coder", "task": "write docs"},
+        {
+            "task_id": "1a1aaaaa",
+            "state": "CODING",
+            "claimed_by": "node-b-coder",
+            "task": "write docs",
+        },
         {"task_id": "1a1bbbbb", "state": "DONE", "claimed_by": "", "task": "x"},
         {"task_id": "1a1ccccc", "state": "FAILED", "claimed_by": "", "task": "y"},
     ]
     nodes = [{"node_id": "node-a", "roles": ["coder"], "models": ["m"]}]
     obs = TaskObservation(
-        task_id="1a1ccccc", trace_id="t", task="y", outcome="failed",
+        task_id="1a1ccccc",
+        trace_id="t",
+        task="y",
+        outcome="failed",
         route={"coder": "node-a:m"},
     )
     out = format_status(snapshots, nodes, [], [obs])
@@ -195,7 +238,14 @@ async def test_on_event_failed_broadcasts_card_with_retry_hint():
     obs.broadcast = fake_broadcast
     obs._seen_tasks = set()
     obs.bus = type("B", (), {"get_snapshot": staticmethod(fake_snapshot)})()
-    env = envelope(payload={"event": "failed", "detail": "permission denied", "state": "FAILED", "revisions": 1})
+    env = envelope(
+        payload={
+            "event": "failed",
+            "detail": "permission denied",
+            "state": "FAILED",
+            "revisions": 1,
+        }
+    )
     msg = type("M", (), {"data": __import__("json").dumps(env).encode()})()
     await obs.on_event(msg)
     card = sent[-1]

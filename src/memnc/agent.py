@@ -67,9 +67,7 @@ async def run_agent(
 
     steps = 0
     while True:
-        result = await backend.chat(
-            messages, tools=tools or None, model=model, **chat_options
-        )
+        result = await backend.chat(messages, tools=tools or None, model=model, **chat_options)
         if not result.tool_calls:
             return AgentRun(content=result.content, tool_steps=steps, messages=messages)
 

@@ -1,4 +1,3 @@
-
 import pytest
 
 from memnc.agent import AgentLimitError, extract_json, parse_role_output, run_agent
@@ -112,9 +111,7 @@ async def test_agent_converts_tool_errors_into_messages():
 
 @pytest.mark.asyncio
 async def test_agent_honours_step_limit():
-    tool_call = ChatResult(
-        content="", tool_calls=[ToolCall(id="c", name="t", arguments={})]
-    )
+    tool_call = ChatResult(content="", tool_calls=[ToolCall(id="c", name="t", arguments={})])
     backend = ScriptedBackend([tool_call, tool_call, tool_call])
 
     async def execute(name, arguments):

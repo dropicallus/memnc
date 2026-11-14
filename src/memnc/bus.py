@@ -105,7 +105,7 @@ class Bus:
                             "shared token (fail closed)."
                         )
                     self.nc = await nats.connect(
-                        self.settings.nats_url,
+                        self.settings.nats_servers,
                         nkeys_seed=seed_path,
                         name=self.settings.nats_name or self.settings.node_name,
                         max_reconnect_attempts=-1,
@@ -113,7 +113,7 @@ class Bus:
                     )
                 else:
                     self.nc = await nats.connect(
-                        self.settings.nats_url,
+                        self.settings.nats_servers,
                         token=self.settings.nats_token or None,
                         name=self.settings.nats_name or self.settings.node_name,
                         max_reconnect_attempts=-1,
@@ -122,9 +122,7 @@ class Bus:
                 break
             except Exception as exc:  # noqa: BLE001 - retry any connect failure
                 last_error = exc
-                log.warning(
-                    "nats connect failed (%s/%s): %s", attempt, attempts, exc
-                )
+                log.warning("nats connect failed (%s/%s): %s", attempt, attempts, exc)
                 await asyncio.sleep(min(attempt, 5))
         else:
             raise RuntimeError(f"could not connect to NATS: {last_error}")
@@ -185,7 +183,7 @@ class Bus:
             self.kv = await self.js.key_value(self.settings.kv_bucket)
         except NotFoundError:
             self.kv = await self.js.create_key_value(
-                KeyValueConfig(bucket=self.settings.kv_bucket, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=self.settings.kv_bucket, history=10)
             )
             log.info("created KV bucket %s", self.settings.kv_bucket)
 
@@ -198,6 +196,7 @@ class Bus:
         except NotFoundError:
             self._registry = await self.js.create_key_value(
                 KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas,
                     bucket=REGISTRY_BUCKET,
                     history=1,
                     # TTL = presence: expired capability records vanish.
@@ -215,11 +214,11 @@ class Bus:
         """
         assert self._registry is not None
         if self.settings.mesh_gate:
-            decision = acl.check_registry_write(
-                await self.grant_read(cap.agent_id), cap.agent_id
-            )
+            decision = acl.check_registry_write(await self.grant_read(cap.agent_id), cap.agent_id)
             if not decision:
-                raise PermissionError(f"registry write denied for {cap.agent_id}: {decision.reason}")
+                raise PermissionError(
+                    f"registry write denied for {cap.agent_id}: {decision.reason}"
+                )
         await self._registry.put(cap.key(), cap.model_dump_json().encode())
         log.debug("advertised capability %s", cap.key())
 
@@ -260,7 +259,7 @@ class Bus:
             self._roster = await self.js.key_value(ROSTER_BUCKET)
         except NotFoundError:
             self._roster = await self.js.create_key_value(
-                KeyValueConfig(bucket=ROSTER_BUCKET, history=1, ttl=ROSTER_TTL)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=ROSTER_BUCKET, history=1, ttl=ROSTER_TTL)
             )
             log.info("created roster KV bucket %s (ttl=%ss)", ROSTER_BUCKET, ROSTER_TTL)
 
@@ -316,7 +315,7 @@ class Bus:
             self._model_requests = await self.js.key_value(MODEL_REQUESTS_BUCKET)
         except NotFoundError:
             self._model_requests = await self.js.create_key_value(
-                KeyValueConfig(bucket=MODEL_REQUESTS_BUCKET, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=MODEL_REQUESTS_BUCKET, history=10)
             )
             log.info("created model-request KV bucket %s", MODEL_REQUESTS_BUCKET)
 
@@ -330,9 +329,7 @@ class Bus:
         await self.ensure_model_requests()
         assert self._model_requests is not None
         try:
-            entry = await self._model_requests.get(
-                MODEL_REQUEST_KEY.format(request_id=request_id)
-            )
+            entry = await self._model_requests.get(MODEL_REQUEST_KEY.format(request_id=request_id))
         except (KeyError, NotFoundError):
             return None
         return ModelRequest.model_validate_json(entry.value)
@@ -361,9 +358,7 @@ class Bus:
         except (KeyError, KeyNotFoundError):
             return ModelReputation(model=model)
 
-    async def record_reputation(
-        self, model: str, approved: bool
-    ) -> ModelReputation:
+    async def record_reputation(self, model: str, approved: bool) -> ModelReputation:
         """Record a critic verdict against the coder model (T7).
 
         An approval clears the consecutive-rejection streak; a rejection
@@ -404,9 +399,7 @@ class Bus:
             kind=Kind.EVENT,
             payload={"event": "model.decision", "request": request.model_dump()},
         )
-        await self.nc.publish(
-            SUBJECT_MODEL_DECISION, envelope.model_dump_json().encode()
-        )
+        await self.nc.publish(SUBJECT_MODEL_DECISION, envelope.model_dump_json().encode())
 
     # -- M9: capability grants (permission chain) --------------------------
     async def ensure_grants(self) -> None:
@@ -416,7 +409,7 @@ class Bus:
             self._grants = await self.js.key_value(GRANT_BUCKET)
         except NotFoundError:
             self._grants = await self.js.create_key_value(
-                KeyValueConfig(bucket=GRANT_BUCKET, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=GRANT_BUCKET, history=10)
             )
             log.info("created grant KV bucket %s", GRANT_BUCKET)
 
@@ -477,7 +470,7 @@ class Bus:
             self._observations = await self.js.key_value(OBSERVATIONS_BUCKET)
         except NotFoundError:
             self._observations = await self.js.create_key_value(
-                KeyValueConfig(bucket=OBSERVATIONS_BUCKET, history=10)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=OBSERVATIONS_BUCKET, history=10)
             )
             log.info("created observation KV bucket %s", OBSERVATIONS_BUCKET)
 
@@ -485,9 +478,7 @@ class Bus:
         """Write one finished-task observation into the experience graph."""
         await self.ensure_observations()
         assert self._observations is not None
-        await self._observations.put(
-            observation.kv_id(), observation.model_dump_json().encode()
-        )
+        await self._observations.put(observation.kv_id(), observation.model_dump_json().encode())
         log.debug("deposited observation %s", observation.kv_id())
 
     async def list_observations(self) -> list[TaskObservation]:
@@ -512,7 +503,7 @@ class Bus:
             self._trust = await self.js.key_value(TRUST_BUCKET)
         except NotFoundError:
             self._trust = await self.js.create_key_value(
-                KeyValueConfig(bucket=TRUST_BUCKET, history=1)
+                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=TRUST_BUCKET, history=1)
             )
             log.info("created trust KV bucket %s", TRUST_BUCKET)
 
@@ -608,7 +599,6 @@ class Bus:
             "tasks": sorted(tasks, key=lambda t: t["created_at"]),
         }
 
-
     # -- publish -----------------------------------------------------------
     async def publish_envelope(self, subject: str, envelope: Envelope) -> None:
         assert self.js is not None
@@ -633,9 +623,7 @@ class Bus:
                 "revisions": snapshot.revisions,
             },
         )
-        await self.publish_envelope(
-            SUBJECT_EVENTS.format(task_id=snapshot.task_id), envelope
-        )
+        await self.publish_envelope(SUBJECT_EVENTS.format(task_id=snapshot.task_id), envelope)
 
     async def dead_letter(self, envelope: Envelope, reason: str) -> None:
         envelope.payload = {**envelope.payload, "dlq_reason": reason}
@@ -652,9 +640,7 @@ class Bus:
 
     async def put_snapshot(self, snapshot: TaskSnapshot) -> None:
         assert self.kv is not None
-        await self.kv.put(
-            f"task.{snapshot.task_id}", snapshot.model_dump_json().encode()
-        )
+        await self.kv.put(f"task.{snapshot.task_id}", snapshot.model_dump_json().encode())
 
     async def try_claim(
         self, task_id: str, worker_id: str, role: str | None = None
@@ -824,8 +810,7 @@ async def emit_debate(bus: Bus, snapshot: TaskSnapshot, role: Role) -> None:
         name = "debate.critique"
         verdict = "APPROVED" if c.approved else "REJECTED"
         issues = "; ".join(
-            f"[{i.severity}] {i.file or '?'}:{i.line or '?'} {i.issue}"
-            for i in c.issues[:3]
+            f"[{i.severity}] {i.file or '?'}:{i.line or '?'} {i.issue}" for i in c.issues[:3]
         )
         detail = f"{verdict} - {c.summary}"
         if issues:

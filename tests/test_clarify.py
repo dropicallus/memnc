@@ -26,9 +26,7 @@ def _snapshot(task_id: str = "t-clar", **fields) -> TaskSnapshot:
     fields.setdefault("state", TaskState.WAIT_INPUT)
     fields.setdefault("question", "which port should the server use?")
     fields.setdefault("question_role", Role.CODER)
-    return TaskSnapshot(
-        task_id=task_id, trace_id="tr-1", task="do a thing", **fields
-    )
+    return TaskSnapshot(task_id=task_id, trace_id="tr-1", task="do a thing", **fields)
 
 
 class FakeBus:
@@ -124,8 +122,11 @@ def test_start_declined_after_budget_spent():
 def test_start_noop_without_pending_question():
     bus = FakeBus()
     snapshot = TaskSnapshot(
-        task_id="t-0", trace_id="tr-1", task="do a thing",
-        state=TaskState.WAIT_INPUT, question="",
+        task_id="t-0",
+        trace_id="tr-1",
+        task="do a thing",
+        state=TaskState.WAIT_INPUT,
+        question="",
     )
 
     asyncio.run(clarify.start(bus, Settings(), snapshot))
@@ -145,9 +146,7 @@ def test_start_noop_when_already_started():
 # --- consult collection --------------------------------------------------
 
 
-def _consult_envelope(
-    consult: dict, role: Role, node: str = "node-b"
-) -> Envelope:
+def _consult_envelope(consult: dict, role: Role, node: str = "node-b") -> Envelope:
     return Envelope(
         id=f"env-{node}",
         kind=Kind.RESULT,
@@ -168,9 +167,7 @@ def test_handle_consult_with_peer_answer_appends_and_resumes():
         clarify.handle_consult(
             bus,
             snapshot,
-            _consult_envelope(
-                {"answer": "use 8080, it is free"}, Role.PLANNER
-            ),
+            _consult_envelope({"answer": "use 8080, it is free"}, Role.PLANNER),
         )
     )
 
@@ -190,9 +187,7 @@ def test_handle_consult_cannot_answer_leaves_question_with_human():
         clarify.handle_consult(
             bus,
             snapshot,
-            _consult_envelope(
-                {"cannot_answer": "needs the human's preference"}, Role.CODER
-            ),
+            _consult_envelope({"cannot_answer": "needs the human's preference"}, Role.CODER),
         )
     )
 
@@ -243,9 +238,7 @@ def test_orchestrator_routes_consult_results_to_clarify():
     bus = FakeBus()
     orch = Orchestrator(settings=Settings(), bus=bus)
     snapshot = _snapshot(clarify_started=True, pending_consults=["planner"])
-    envelope = _consult_envelope(
-        {"answer": "use 8080, it is free"}, Role.PLANNER
-    )
+    envelope = _consult_envelope({"answer": "use 8080, it is free"}, Role.PLANNER)
     message = type("M", (), {"data": json.dumps(envelope.model_dump()).encode()})()
     asyncio.run(bus.put_snapshot(snapshot))
 
@@ -288,9 +281,9 @@ def test_worker_run_consult_uses_peer_prompt_and_parses_json():
         },
     )
     result = asyncio.run(
-        worker._run_consult(envelope, Role.CRITIC, "fake-model", {
-            "question": "which port?", "from_role": "coder"
-        })
+        worker._run_consult(
+            envelope, Role.CRITIC, "fake-model", {"question": "which port?", "from_role": "coder"}
+        )
     )
 
     assert result.ok is True, result.error
@@ -314,8 +307,14 @@ def test_worker_run_consult_invalid_json_is_declined():
 
     result = asyncio.run(
         worker._run_consult(
-            Envelope(id="e", trace_id="tr-1", kind=Kind.COMMAND,
-                     role=Role.CRITIC, task_id="t", payload={}),
+            Envelope(
+                id="e",
+                trace_id="tr-1",
+                kind=Kind.COMMAND,
+                role=Role.CRITIC,
+                task_id="t",
+                payload={},
+            ),
             Role.CRITIC,
             "m",
             {"question": "q?", "from_role": "coder"},
@@ -332,8 +331,14 @@ def test_worker_run_consult_bad_request_is_declined():
     worker = Worker(Settings(role="critic"), bus=FakeBus())
     result = asyncio.run(
         worker._run_consult(
-            Envelope(id="e", trace_id="tr-1", kind=Kind.COMMAND,
-                     role=Role.CRITIC, task_id="t", payload={}),
+            Envelope(
+                id="e",
+                trace_id="tr-1",
+                kind=Kind.COMMAND,
+                role=Role.CRITIC,
+                task_id="t",
+                payload={},
+            ),
             Role.CRITIC,
             "m",
             {"from_role": "coder"},  # missing question

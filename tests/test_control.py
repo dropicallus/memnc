@@ -65,7 +65,8 @@ class FakeBus:
 
 
 _GRANTED = GrantRecord(
-    agent_id="telegram-123", level=GrantLevel.CHAIN,
+    agent_id="telegram-123",
+    level=GrantLevel.CHAIN,
     granted_by="root",
 )
 

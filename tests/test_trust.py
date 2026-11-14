@@ -28,6 +28,7 @@ def bus(mock_settings):
     bus = Bus(mock_settings)
     # Setup FakeKV in bus
     from test_trust_fake import FakeKV
+
     bus._trust = FakeKV()
     # Mock NATS objects so connect doesn't fail
     bus.js = MagicMock()
@@ -37,23 +38,23 @@ def bus(mock_settings):
 @pytest.mark.asyncio
 async def test_trust_credit_accumulates(bus):
     subject = "agent-1"
-    
+
     # Initial credit logic: starts at TRUST_DEFAULT and accrues TRUST_ACCRUE
     await bus.trust_credit(subject, rating="orchestrator")
     entry = await bus.trust_entry(subject)
     assert entry.credit == TRUST_DEFAULT + TRUST_ACCRUE
-    
+
     # Accrue second time
     await bus.trust_credit(subject, rating="orchestrator")
     entry = await bus.trust_entry(subject)
     assert entry.credit == TRUST_DEFAULT + 2 * TRUST_ACCRUE
 
     # Check clamping: trust_credit clamps at TRUST_MAX (tested via accruals below).
-    
+
     # Testing clamping via multiple accruals
     for _ in range(100):
         await bus.trust_credit(subject, rating="orchestrator")
-    
+
     entry_clamped = await bus.trust_entry(subject)
     assert entry_clamped.credit <= TRUST_MAX
 
@@ -61,12 +62,15 @@ async def test_trust_credit_accumulates(bus):
 @pytest.mark.asyncio
 async def test_trust_decay_multiplies(bus):
     subject = "agent-1"
-    
+
     # Setup initial state
-    await bus.trust_credit(subject, rating="orchestrator") # credit = 1.0
+    await bus.trust_credit(subject, rating="orchestrator")  # credit = 1.0
     # Force credit to 5.0 manually for testing decay
-    await bus._trust.put(f"trust.{subject}", b'{"subject": "agent-1", "rating": "admin", "credit": 5.0, "ts": 0.0, "attribution": []}')
-    
+    await bus._trust.put(
+        f"trust.{subject}",
+        b'{"subject": "agent-1", "rating": "admin", "credit": 5.0, "ts": 0.0, "attribution": []}',
+    )
+
     await bus.trust_decay(subject)
     entry = await bus.trust_entry(subject)
     assert entry.credit == pytest.approx(5.0 * TRUST_DECAY)
@@ -83,7 +87,7 @@ async def test_list_trust_sorted(bus):
     await bus.trust_credit("agent_b", rating="r")
     await bus.trust_credit("agent_a", rating="r")
     await bus.trust_credit("agent_c", rating="r")
-    
+
     entries = await bus.list_trust()
     assert len(entries) == 3
     assert entries[0].subject == "agent_a"
@@ -97,20 +101,21 @@ def test_score_candidates():
         Candidate(agent_id="a2", skill="s", capacity=10, load=0.1, latency=0.1, trust=9.0),
         Candidate(agent_id="a3", skill="s", capacity=20, load=0.8, latency=0.5, trust=1.0),
     ]
-    
+
     # Test sorting and scoring
     scores = score_candidates(candidates)
-    
+
     # a2 should be top because of high trust and low load
     assert scores[0][0] == "a2"
     # check if sorting is descending
     assert scores[0][1] >= scores[1][1] >= scores[2][1]
 
+
 def test_score_favors_higher_capacity_trust():
     # Identical everything except capacity and trust
     c1 = Candidate(agent_id="low", skill="s", capacity=5, load=0.0, latency=0.0, trust=1.0)
     c2 = Candidate(agent_id="high", skill="s", capacity=15, load=0.0, latency=0.0, trust=8.0)
-    
+
     scores = score_candidates([c1, c2])
     assert scores[0][0] == "high"
 
@@ -118,4 +123,5 @@ def test_score_favors_higher_capacity_trust():
 def test_trust_key_rejects_colon_subjects():
     """M8 regression: ':' is illegal in NATS KV keys — sanitizer must strip it."""
     from memnc.bus import Bus
+
     assert Bus._trust_key("node-a-coder:coder") == "trust.node-a-coder.coder"

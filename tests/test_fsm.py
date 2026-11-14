@@ -17,20 +17,14 @@ def test_planner_success_moves_to_coding_and_resets_attempts():
 
 
 def test_planner_failure_retries_then_fails():
-    retry = transition(
-        TaskState.PLANNING, Event("result", ok=False), attempt=0, max_attempts=3
-    )
+    retry = transition(TaskState.PLANNING, Event("result", ok=False), attempt=0, max_attempts=3)
     assert retry.state is TaskState.PLANNING
     assert retry.attempt_delta == 1
 
-    retry2 = transition(
-        TaskState.PLANNING, Event("result", ok=False), attempt=1, max_attempts=3
-    )
+    retry2 = transition(TaskState.PLANNING, Event("result", ok=False), attempt=1, max_attempts=3)
     assert retry2.attempt_delta == 1
 
-    final = transition(
-        TaskState.PLANNING, Event("timeout", ok=False), attempt=2, max_attempts=3
-    )
+    final = transition(TaskState.PLANNING, Event("timeout", ok=False), attempt=2, max_attempts=3)
     assert final.state is TaskState.FAILED
     assert final.actions[0].type == "escalate"
 
@@ -42,9 +36,7 @@ def test_coder_success_moves_to_critique():
 
 
 def test_critic_approval_finishes():
-    result = transition(
-        TaskState.CRITIQUE, Event("result", ok=True, approved=True)
-    )
+    result = transition(TaskState.CRITIQUE, Event("result", ok=True, approved=True))
     assert result.state is TaskState.DONE
     assert result.actions[0].type == "finish"
 
@@ -80,9 +72,7 @@ def test_max_revisions_fails_task():
 
 
 def test_critic_missing_verdict_is_retried():
-    result = transition(
-        TaskState.CRITIQUE, Event("result", ok=True, approved=None), attempt=0
-    )
+    result = transition(TaskState.CRITIQUE, Event("result", ok=True, approved=None), attempt=0)
     assert result.state is TaskState.CRITIQUE
     assert result.attempt_delta == 1
 
@@ -107,9 +97,7 @@ def test_unknown_event_is_noop():
 
 
 def test_ask_parks_task_and_resets_attempt():
-    result = transition(
-        TaskState.PLANNING, Event("ask", reason="which db?", role=Role.PLANNER)
-    )
+    result = transition(TaskState.PLANNING, Event("ask", reason="which db?", role=Role.PLANNER))
     assert result.state is TaskState.WAIT_INPUT
     assert result.attempt_reset is True
     assert result.actions[0].type == "ask"
@@ -118,9 +106,7 @@ def test_ask_parks_task_and_resets_attempt():
 
 
 def test_ask_is_absorbed_when_already_waiting():
-    result = transition(
-        TaskState.WAIT_INPUT, Event("ask", reason="again", role=Role.CODER)
-    )
+    result = transition(TaskState.WAIT_INPUT, Event("ask", reason="again", role=Role.CODER))
     assert result.state is TaskState.WAIT_INPUT
     assert result.actions == ()
 

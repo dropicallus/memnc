@@ -111,10 +111,57 @@ different host per node.
 - NATS is the only shared dependency; use a NATS cluster for HA in production.
 - Inference endpoints are not managed by this repo.
 
+### Reference topologies (framework, not tied to one deployment)
+
+The framework supports any of these via settings only — no code changes:
+
+- **Solo** (1 host): everything in one `docker compose up`. `NATS_URL` single
+  URL, `NATS_KV_REPLICAS=1`. Default.
+- **Duo** (2 hosts, cold standby): active NATS on host A holding the ledger;
+  host B runs workers (+ periodic KV backup). `NATS_KV_REPLICAS=1` — a Raft
+  cluster needs a majority, so 2 servers give replication but NOT automatic
+  failover (losing either one freezes writes). Recovery path: restore the
+  latest backup on B, point clients at B.
+- **Mesh** (>= 3 sites): every site runs a NATS server joined via
+  `NATS_CLUSTER_ROUTES` (comma-separated `nats://host:6222` route URLs,
+  own address included; the third site can be a data-less witness — a tiny
+  VPS suffices). Set `NATS_KV_REPLICAS=3` and a seed list in `NATS_URL`
+  (e.g. `nats://a:4222,nats://b:4222`) — clients round-robin/reconnect
+  across the pool and JetStream Raft elects a new leader automatically on
+  host loss. This is the only topology with zero-loss automatic failover.
+
+The `nats` compose service generates the cluster config block itself when
+`NATS_CLUSTER_ROUTES` is set (`NATS_CLUSTER_NAME` optional, default `memnc`).
+Without it the entrypoint behaves exactly as before (solo).
+
 ## Resource limits
 
 Compose sets per-service `mem_limit`, `cpus` and `pids_limit`. Adjust for your
 host. The containers run read-only with only `/workspace` and `/tmp` writable.
+
+## Cold-standby backup (Duo topology)
+
+Durable state lives in JetStream KV buckets. Raft needs a majority, so a
+2-host setup gives replication but no automatic failover -- the recovery
+story is a periodic dump on the active host plus a documented restore on
+the stand-by. Ephemeral buckets (registry, roster) are skipped on
+purpose: they repopulate from node heartbeats within seconds.
+
+Dump every durable bucket to a JSON file:
+
+    meshctl backup --out /var/backups/memnc-$(date +%F).json
+
+Restore onto a stand-by host (upsert; live-only keys survive):
+
+    meshctl restore /var/backups/memnc-2026-11-13.json
+
+Add `--purge` to delete live keys missing from the backup and make the
+target an exact mirror of the dump. Promote procedure: stop the old
+NATS, start NATS on the stand-by with the same volume/token, run
+`restore`, then point clients at the new host (a comma-separated
+`NATS_URL` seed list already covers the switch). Schedule the backup
+with cron or systemd-timer on the active host; the recovery point is
+the time since the last dump.
 
 ## Security
 

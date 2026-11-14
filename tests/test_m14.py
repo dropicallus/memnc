@@ -66,9 +66,7 @@ def test_self_pipeline_runs_full_task_without_orchestrator():
     )
     asyncio.run(bus.put_snapshot(snap))
 
-    plan = PlannerOutput(
-        plan=[PlanStep(id="s1", description="write it")], notes=""
-    )
+    plan = PlannerOutput(plan=[PlanStep(id="s1", description="write it")], notes="")
     planner = _worker(Role.PLANNER, bus, ResultPayload(ok=True, output=plan.model_dump()))
     claimed = asyncio.run(bus.try_claim("t-m14-1", "b:planner", role="planner"))
     assert claimed is not None
@@ -100,9 +98,7 @@ def test_self_pipeline_runs_full_task_without_orchestrator():
     critic = _worker(
         Role.CRITIC,
         bus,
-        ResultPayload(
-            ok=True, output=CriticOutput(approved=True, summary="fine").model_dump()
-        ),
+        ResultPayload(ok=True, output=CriticOutput(approved=True, summary="fine").model_dump()),
     )
     claimed = asyncio.run(bus.try_claim("t-m14-1", "a:critic", role="critic"))
     assert claimed is not None
@@ -124,9 +120,7 @@ def test_self_pipeline_failed_result_retries_then_fails():
     )
     asyncio.run(bus.put_snapshot(snap))
 
-    failing = _worker(
-        Role.PLANNER, bus, ResultPayload(ok=False, error="boom")
-    )
+    failing = _worker(Role.PLANNER, bus, ResultPayload(ok=False, error="boom"))
     claimed = asyncio.run(bus.try_claim("t-m14-2", "b:planner", role="planner"))
     assert claimed is not None
     asyncio.run(failing._self_pipeline(claimed))
@@ -140,9 +134,7 @@ def test_self_pipeline_failed_result_retries_then_fails():
 
     # exhaust attempts -> FAILED
     for i in range(2, 5):
-        claimed = asyncio.run(
-            bus.try_claim("t-m14-2", f"b:planner-{i}", role="planner")
-        )
+        claimed = asyncio.run(bus.try_claim("t-m14-2", f"b:planner-{i}", role="planner"))
         if claimed is None:
             break
         asyncio.run(failing._self_pipeline(claimed))

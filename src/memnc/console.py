@@ -25,9 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from .bus import Bus
-from .cli import _connect
 from .config import Settings, get_settings
-from .schema import SUBJECT_CONTROL, TERMINAL_STATES, ControlCommand
+from .schema import TERMINAL_STATES
 
 _REFRESH_MS = 3000
 
@@ -190,71 +189,82 @@ def _format_grants(grants) -> list[dict]:
     now = time.time()
     rows = []
     for g in grants:
-        rows.append({
-            "agent_id": g.agent_id,
-            "level": g.level.value,
-            "granted_by": g.granted_by,
-            "expires": (
-                f"in {g.expires_at - now:.0f}s" if g.expires_at > 0 else "never"
-            ),
-        })
+        rows.append(
+            {
+                "agent_id": g.agent_id,
+                "level": g.level.value,
+                "granted_by": g.granted_by,
+                "expires": (f"in {g.expires_at - now:.0f}s" if g.expires_at > 0 else "never"),
+            }
+        )
     return rows
 
 
-async def collect_state(settings) -> dict:
-    bus = Bus(settings)
-    await bus.connect(attempts=2)
-    try:
-        tasks = await bus.list_tasks()
-        caps = await bus.list_capabilities()
-        grants = await bus.list_grants()
-        trust = await bus.list_trust()
-        ledger = await bus.read_ledger()
-        nodes = await bus.list_nodes()
-    finally:
-        await bus.close()
+async def collect_state(settings, bus) -> dict:
+    """M11c: the console is an API client — every field comes from the mesh API.
+
+    No direct KV access: reads ride mesh.api.request.* (anycast, grant-free),
+    same surface Telegram uses. Falls back to direct Bus reads only if the
+    API server is unreachable (e.g. started before the orchestrator).
+    """
+    from .api import api_request
+
+    async def try_api(verb: str, fallback, **args):
+        try:
+            resp = await api_request(bus, verb, timeout=5, **args)
+            return resp["data"]
+        except Exception:  # noqa: BLE001 - degrade to direct read, keep UI alive
+            return await fallback()
+
+    tasks = await try_api("task.list", bus.list_tasks)
+    nodes = await try_api("node.list", bus.list_nodes)
+    caps = await try_api("cap.list", bus.list_capabilities)
+    grants = await try_api("grant.list", bus.list_grants)
+    trust = await try_api("trust.list", bus.list_trust)
+    ledger = await try_api("ledger.read", bus.read_ledger)
     return {
         "nats_url": settings.nats_url,
         "nodes": [
             {
-                "node_id": n.node_id,
-                "roles": n.roles,
-                "models": n.models,
-                "vram_gb": n.vram_gb,
-                "gpu": n.gpu,
-                "paused": n.paused,
-                "updated_at": n.updated_at,
+                "node_id": n["node_id"],
+                "roles": n["roles"],
+                "models": n["models"],
+                "vram_gb": n["vram_gb"],
+                "gpu": n["gpu"],
+                "load": n.get("load", 0.0),
+                "paused": n["paused"],
+                "updated_at": n["updated_at"],
             }
-            for n in sorted(nodes, key=lambda n: n.node_id)
+            for n in sorted(nodes, key=lambda n: n["node_id"])
         ],
         "tasks": [
             {
-                "task_id": t.task_id,
-                "state": t.state.value,
-                "revisions": t.revisions,
-                "created_at": t.created_at,
-                "task": t.task[:80],
-                "terminal": t.state in TERMINAL_STATES,
+                "task_id": t["task_id"],
+                "state": str(t["state"]),
+                "revisions": t["revisions"],
+                "created_at": t["created_at"],
+                "task": t["task"][:80],
+                "terminal": str(t["state"]) in TERMINAL_STATES,
             }
-            for t in sorted(tasks, key=lambda s: s.created_at, reverse=True)
+            for t in sorted(tasks, key=lambda s: s["created_at"], reverse=True)
         ],
         "caps": [
             {
-                "agent_id": c.agent_id,
-                "skill": c.skill,
-                "node": c.node,
-                "load": c.load,
-                "capacity": c.capacity,
-                "model": c.model,
+                "agent_id": c["agent_id"],
+                "skill": c["skill"],
+                "node": c["node"],
+                "load": c["load"],
+                "capacity": c["capacity"],
+                "model": c["model"],
             }
-            for c in sorted(caps, key=lambda c: (c.agent_id, c.skill))
+            for c in sorted(caps, key=lambda c: (c["agent_id"], c["skill"]))
         ],
         "grants": _format_grants(grants),
         "trust": [
             {
-                "subject": t.subject,
-                "score": t.credit,
-                "last_outcome": t.rating,
+                "subject": t["subject"],
+                "score": t["credit"],
+                "last_outcome": t["rating"],
             }
             for t in trust
         ],
@@ -281,7 +291,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if path in ("/", ""):
                 self._send(200, _PAGE.encode(), "text/html; charset=utf-8")
             elif path == "/api/state":
-                data = asyncio.run(collect_state(self.settings))
+                data = asyncio.run(collect_state(self.settings, _shared_bus()))
                 self._send(200, json.dumps(data).encode(), "application/json")
             elif path.startswith("/api/task/"):
                 task_id = path.removeprefix("/api/task/")
@@ -294,18 +304,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(503, body, "application/json")
 
     async def _task(self, task_id: str) -> dict:
-        bus = Bus(self.settings)
-        await bus.connect(attempts=2)
-        try:
-            snapshot = await bus.get_snapshot(task_id)
-            if snapshot is None:
-                return {"error": f"task not found: {task_id}"}
-            return snapshot.model_dump(mode="json")
-        finally:
-            await bus.close()
+        from .api import api_request
+
+        bus = _shared_bus()
+        resp = await api_request(bus, "task.detail", task_id=task_id)
+        return resp["data"]
 
     def do_POST(self) -> None:
-        """T4: forward a human control command as agent 'console' (grant-checked)."""
+        """T4: forward a human control command through the API write path."""
         path = urlparse(self.path).path
         if path != "/api/control":
             self._send(404, b"not found", "text/plain")
@@ -323,32 +329,52 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(503, body, "application/json")
 
     async def _control(self, action: str, payload: dict) -> dict:
-        client = await _connect(self.settings)
-        try:
-            response = await client.request(
-                SUBJECT_CONTROL,
-                ControlCommand(
-                    action=action,  # type: ignore[arg-type]
-                    agent_id="console",
-                    node=str(payload.get("node", "")),
-                    task_id=str(payload.get("task_id", "")).lstrip("#"),
-                ).model_dump_json().encode(),
-                timeout=15,
-            )
-            return json.loads(response.data)
-        finally:
-            await client.close()
+        from .api import api_request
+
+        verb = {
+            "cancel": "task.cancel",
+            "retry": "task.retry",
+            "pause_node": "node.pause_node",
+            "resume_node": "node.resume_node",
+        }[action]
+        args: dict = {"agent_id": "console"}
+        if action in ("cancel", "retry"):
+            args["task_id"] = str(payload.get("task_id", "")).lstrip("#")
+        else:
+            args["node"] = str(payload.get("node", ""))
+        return await api_request(_shared_bus(), verb, timeout=15, **args)
+
+
+_shared: Bus | None = None
+
+
+def _shared_bus() -> Bus:
+    """One connection for the whole console process (M11c API client)."""
+    global _shared
+    if _shared is None:
+        _shared = Bus(ConsoleHandler.settings)  # type: ignore[arg-type]
+    if _shared.nc is None:
+        raise RuntimeError("console bus not connected")
+    return _shared
 
 
 def serve(port: int) -> None:
+    global _shared
     settings = get_settings()
     ConsoleHandler.settings = settings
+    _shared = Bus(settings)
+
+    async def _connect() -> None:
+        assert _shared is not None
+        await _shared.connect(attempts=5)
+
+    asyncio.run(_connect())
     # Loopback by default: the console has no HTTP auth and forwards requests
     # as the trusted "console" identity. Remote access requires a reverse
     # proxy with auth (set CONSOLE_HOST deliberately).
     host = os.environ.get("CONSOLE_HOST", "127.0.0.1")
     server = ThreadingHTTPServer((host, port), ConsoleHandler)
-    print(f"mesh console: http://{host}:{port}  (broker {settings.nats_url})")
+    print(f"mesh console: http://{host}:{port}  (broker {settings.nats_url}, API client)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

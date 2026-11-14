@@ -13,6 +13,14 @@ from datetime import UTC, datetime
 import nats
 
 from .backends import make_backend
+from .backlog import (
+    MAX_ATTEMPTS,
+    BacklogStore,
+    decompose_plan,
+    make_strong_retry,
+    should_strong_retry,
+)
+from .backup import dump_buckets, restore_buckets
 from .bus import Bus
 from .config import Settings, get_settings
 from .schema import (
@@ -40,14 +48,14 @@ async def _connect(settings: Settings):
                 "exist — refusing to fall back to the shared token (fail closed)."
             )
         return await nats.connect(
-            settings.nats_url,
+            settings.nats_servers,
             nkeys_seed=seed_path,
             name=f"meshctl-{settings.node_name}",
             max_reconnect_attempts=2,
             connect_timeout=5,
         )
     return await nats.connect(
-        settings.nats_url,
+        settings.nats_servers,
         token=settings.nats_token or None,
         name=f"meshctl-{settings.node_name}",
         max_reconnect_attempts=2,
@@ -70,9 +78,7 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
             # name so any node's meshctl submits to its own orchestrator.
-            SUBJECT_SUBMIT_NODE.format(
-                node=getattr(args, "node", None) or settings.node_name
-            ),
+            SUBJECT_SUBMIT_NODE.format(node=getattr(args, "node", None) or settings.node_name),
             submission.model_dump_json().encode(),
             timeout=10,
         )
@@ -88,7 +94,16 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
         await client.close()
 
 
-_TERMINAL_EVENTS = {"task.done", "task.failed", "task.cancelled"}
+_TERMINAL_EVENTS = {
+    "task.done",
+    "task.failed",
+    "task.cancelled",
+    # worker/orchestrator emit state.{snapshot.state.value.lower()} on every
+    # transition, so the settled states show up as state.done / state.failed
+    "state.done",
+    "state.failed",
+    "state.cancelled",
+}
 
 
 def _needs_from_args(args: argparse.Namespace):
@@ -119,7 +134,7 @@ async def _watch(client, task_id: str) -> None:
             payload = envelope.get("payload") or {}
             event = payload.get("event", "")
             detail = payload.get("detail", "")
-            print(f"{envelope.get('ts','')} {event:<24} {detail}".rstrip())
+            print(f"{envelope.get('ts', '')} {event:<24} {detail}".rstrip())
             if event in _TERMINAL_EVENTS:
                 return
     except KeyboardInterrupt:
@@ -146,9 +161,7 @@ async def cmd_tail(args: argparse.Namespace, settings: Settings) -> int:
             state = payload.get("state") or envelope.get("state") or ""
             event = payload.get("event", "")
             detail = payload.get("detail", "")
-            print(
-                f"{envelope.get('ts','')} {state:<9} {event:<24} {detail}".rstrip()
-            )
+            print(f"{envelope.get('ts', '')} {state:<9} {event:<24} {detail}".rstrip())
             seen += 1
     except KeyboardInterrupt:
         pass
@@ -221,6 +234,49 @@ async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_synergy(_: argparse.Namespace, settings: Settings) -> int:
+    """14.13 step 3: aggregated model-pair synergy (measurement only)."""
+    from memnc.synergy import compute_synergy_metrics, format_synergy
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        observations = await bus.list_observations()
+        print(format_synergy(compute_synergy_metrics(observations), _.limit))
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_backup(args: argparse.Namespace, settings: Settings) -> int:
+    """Cold-standby backup: dump durable KV buckets to a JSON file."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        data = await dump_buckets(bus)
+    finally:
+        await bus.close()
+    with open(args.out, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+    counts = {k: len(v) for k, v in data["buckets"].items()}
+    print(f"backup written to {args.out}: {counts}")
+    return 0
+
+
+async def cmd_restore(args: argparse.Namespace, settings: Settings) -> int:
+    """Cold-standby restore: write a backup JSON back into the KV buckets."""
+    with open(args.file, encoding="utf-8") as fh:
+        data = json.load(fh)
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        counts = await restore_buckets(bus, data, purge=args.purge)
+    finally:
+        await bus.close()
+    print(f"restored: {counts}")
+    return 0
+
+
 async def cmd_roster(_: argparse.Namespace, settings: Settings) -> int:
     """T6: list live node roster entries (capabilities + presence)."""
     bus = Bus(settings)
@@ -270,8 +326,7 @@ async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
     try:
         status = "approved" if args.action == "approve" else "rejected"
         matches = [
-            r for r in await bus.list_model_requests()
-            if r.request_id.startswith(args.request_id)
+            r for r in await bus.list_model_requests() if r.request_id.startswith(args.request_id)
         ]
         if not matches:
             print(f"no model request matching {args.request_id}")
@@ -309,9 +364,7 @@ async def cmd_gate(args: argparse.Namespace, settings: Settings) -> int:
         approved=args.action == "approve",
     )
     try:
-        response = await client.request(
-            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-        )
+        response = await client.request(SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15)
         data = json.loads(response.data)
         if "error" in data:
             print(f"error: {data['error']}", file=sys.stderr)
@@ -332,9 +385,7 @@ async def cmd_answer(args: argparse.Namespace, settings: Settings) -> int:
         text=" ".join(args.text),
     )
     try:
-        response = await client.request(
-            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-        )
+        response = await client.request(SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15)
         data = json.loads(response.data)
         if "error" in data:
             print(f"error: {data['error']}", file=sys.stderr)
@@ -350,9 +401,7 @@ async def cmd_pause(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
     cmd = ControlCommand(action=args.verb, agent_id=args.by, node=args.node)
     try:
-        response = await client.request(
-            SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15
-        )
+        response = await client.request(SUBJECT_CONTROL, cmd.model_dump_json().encode(), timeout=15)
         data = json.loads(response.data)
         if "error" in data:
             print(f"error: {data['error']}", file=sys.stderr)
@@ -417,8 +466,10 @@ async def cmd_grant(args: argparse.Namespace, settings: Settings) -> int:
         grant = await bus.issue_grant(
             args.agent_id, level=level, granted_by=args.granted_by, ttl_s=args.ttl_s
         )
-        print(f"granted {grant.level.value} to {grant.agent_id} (by {grant.granted_by},"
-              f" ttl={args.ttl_s or 'never'} s)")
+        print(
+            f"granted {grant.level.value} to {grant.agent_id} (by {grant.granted_by},"
+            f" ttl={args.ttl_s or 'never'} s)"
+        )
         return 0
     finally:
         await bus.close()
@@ -505,6 +556,197 @@ def _model_present(model: str, models: list[str]) -> bool:
     return any(candidate.split(":")[0] == base for candidate in models)
 
 
+async def _backlog_store(client) -> BacklogStore:
+    return BacklogStore(client.jetstream())
+
+
+async def _backlog_submit(client, settings: Settings, prompt: str, prefer_node: str = "") -> str:
+    """Submit one backlog task to the mesh, return the mesh task id."""
+    submission = TaskSubmission(task=prompt, context="", fanout=1, claimable=True, prefer_node=prefer_node)
+    response = await client.request(
+        SUBJECT_SUBMIT_NODE.format(node=settings.node_name),
+        submission.model_dump_json().encode(),
+        timeout=10,
+    )
+    data = json.loads(response.data)
+    if "error" in data:
+        raise RuntimeError(data["error"])
+    return str(data["task_id"])
+
+
+async def _backlog_watch(client, task_id: str) -> str:
+    """Follow a mesh task to a terminal event; return the final event name.
+
+    JetStream ordered consumer (deliver_all): fast tasks can hit a terminal
+    event before the core-NATS subscription would be live, so the watcher
+    must receive the retained history too.
+    """
+    subject = SUBJECT_EVENTS.format(task_id=task_id)
+    subscription = await client.jetstream().subscribe(subject, ordered_consumer=True)
+    try:
+        while True:
+            try:
+                message = await subscription.next_msg(timeout=5.0)
+            except Exception:
+                continue
+            try:
+                envelope = json.loads(message.data)
+            except json.JSONDecodeError:
+                continue
+            event = (envelope.get("payload") or {}).get("event", "")
+            if event in _TERMINAL_EVENTS:
+                return event
+    finally:
+        await subscription.unsubscribe()
+
+
+async def cmd_backlog_add(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        task = await store.add(
+            title=args.title,
+            prompt=args.prompt or args.title,
+            plan_id=args.plan_id or "",
+            deps=args.dep or [],
+        )
+        print(task.id)
+        return 0
+    finally:
+        await client.close()
+
+
+async def cmd_backlog_list(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        tasks = await store.list()
+        if args.plan_id:
+            tasks = [t for t in tasks if t.plan_id == args.plan_id]
+        for t in tasks:
+            print(
+                f"{t.id}  {t.status:<8}  plan={t.plan_id or '-':<12} "
+                f"attempts={t.attempts}/{MAX_ATTEMPTS}  "
+                f"mesh={t.mesh_task_id or '-':<20}  {t.title}"
+            )
+        if not tasks:
+            print("backlog empty")
+        return 0
+    finally:
+        await client.close()
+
+
+async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
+    """One claim->submit->watch->mark cycle. Returns True when work was done."""
+    store = await _backlog_store(client)
+    claimed = await store.next_claimable(driver)
+    if claimed is None:
+        return False
+    print(f"{driver}: claimed {claimed.id} ({claimed.title})", flush=True)
+    try:
+        mesh_task_id = await _backlog_submit(
+            client, settings, claimed.prompt, prefer_node=claimed.prefer_node
+        )
+        await store.mark(claimed.id, "claimed", mesh_task_id=mesh_task_id)
+        event = await _backlog_watch(client, mesh_task_id)
+        final = "done" if event == "task.done" else "failed"
+        await store.mark(claimed.id, final, mesh_task_id=mesh_task_id)
+        print(f"{driver}: {claimed.id} -> {final} (mesh {mesh_task_id})", flush=True)
+    except Exception as exc:  # noqa: BLE001 - failed submission burns one attempt
+        final = "failed"
+        await store.mark(claimed.id, "failed")
+        print(f"{driver}: {claimed.id} -> failed ({exc})", flush=True)
+    # Weak->strong routing: one-shot strong-node retry after the attempts
+    # budget is exhausted (mark() flips back to planned while budget lasts).
+    if final == "failed":
+        task = await store.get(claimed.id)
+        if task and should_strong_retry(task, settings.strong_node):
+            retry = make_strong_retry(task, settings.strong_node)
+            await store.add(
+                title=retry.title,
+                prompt=retry.prompt,
+                plan_id=retry.plan_id,
+                deps=retry.deps,
+                prefer_node=retry.prefer_node,
+                strong_retry=True,
+            )
+            print(
+                f"{driver}: strong-retry queued (prefer {retry.prefer_node}) for {claimed.id}",
+                flush=True,
+            )
+    return True
+
+
+async def _backlog_plan(args: argparse.Namespace, settings: Settings) -> int:
+    """Decompose a plan text into backlog entries sharing a plan_id."""
+    tasks = decompose_plan(args.plan)
+    if not tasks:
+        print("error: plan text is empty", file=sys.stderr)
+        return 1
+    if args.dry_run:
+        for i, text in enumerate(tasks, 1):
+            print(f"{i}. {text}")
+        return 0
+
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        prev_id = ""
+        for i, text in enumerate(tasks, 1):
+            words = text.split()
+            title = " ".join(words[:8]) + ("..." if len(words) > 8 else "")
+            deps = [prev_id] if args.chain and prev_id else []
+            task = await store.add(title=title, prompt=text, plan_id=args.plan_id, deps=deps)
+            prev_id = task.id
+            print(f"added {task.id} [{i}/{len(tasks)}] deps={deps} {title}")
+        return 0
+    finally:
+        await client.close()
+
+
+def cmd_backlog_plan(args: argparse.Namespace, settings: Settings):
+    return _backlog_plan(args, settings)
+
+
+async def cmd_backlog_reset(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        task = await store.get(args.backlog_id)
+        if task is None:
+            print("not found")
+            return 1
+        task.status = "planned"
+        task.claimant = ""
+        task.claimed_at = ""
+        task.mesh_task_id = ""
+        task.updated_at = task.updated_at
+        kv = await store._ensure_kv()
+        await kv.put(task.id, task.model_dump_json().encode())
+        print(f"{task.id} -> planned")
+        return 0
+    finally:
+        await client.close()
+
+
+async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        driver = args.driver or f"driver-{settings.node_name}"
+        if args.once:
+            return 0 if await _driver_cycle(client, settings, driver) else 0
+        while True:
+            try:
+                worked = await _driver_cycle(client, settings, driver)
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                print(f"driver error: {exc}", file=sys.stderr, flush=True)
+                worked = False
+            if not worked:
+                await asyncio.sleep(args.idle_sleep)
+    finally:
+        await client.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="meshctl")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -512,23 +754,33 @@ def build_parser() -> argparse.ArgumentParser:
     submit = subparsers.add_parser("submit", help="submit a task")
     submit.add_argument("task")
     submit.add_argument("--context", default="")
-    submit.add_argument("--watch", action="store_true",
-                        help="follow the task's events until it finishes")
-    submit.add_argument("--fanout", action="store_true",
-                        help="M10: split the plan into independent subtasks")
-    submit.add_argument("--claimable", action="store_true",
-                        help="M11: leave in RECEIVED for agents to self-claim")
-    submit.add_argument("--node", default=None,
-                        help="M15: target orchestrator node (default: local node)")
-    submit.add_argument("--needs-vram", type=float, default=0.0,
-                        help="T6: VRAM (GB) the claiming node must have")
-    submit.add_argument("--needs-model", default="",
-                        help="T6: model name the claiming node must serve")
-    submit.add_argument("--needs-role", action="append", default=None,
-                        help="T6: allowed claiming role (repeatable)")
-    submit.add_argument("--gate", default="never",
-                        choices=["always", "fail", "never"],
-                        help="T3: human approval gate at the critique step")
+    submit.add_argument(
+        "--watch", action="store_true", help="follow the task's events until it finishes"
+    )
+    submit.add_argument(
+        "--fanout", action="store_true", help="M10: split the plan into independent subtasks"
+    )
+    submit.add_argument(
+        "--claimable", action="store_true", help="M11: leave in RECEIVED for agents to self-claim"
+    )
+    submit.add_argument(
+        "--node", default=None, help="M15: target orchestrator node (default: local node)"
+    )
+    submit.add_argument(
+        "--needs-vram", type=float, default=0.0, help="T6: VRAM (GB) the claiming node must have"
+    )
+    submit.add_argument(
+        "--needs-model", default="", help="T6: model name the claiming node must serve"
+    )
+    submit.add_argument(
+        "--needs-role", action="append", default=None, help="T6: allowed claiming role (repeatable)"
+    )
+    submit.add_argument(
+        "--gate",
+        default="never",
+        choices=["always", "fail", "never"],
+        help="T3: human approval gate at the critique step",
+    )
     submit.set_defaults(func=cmd_submit)
 
     gate = subparsers.add_parser(
@@ -567,6 +819,12 @@ def build_parser() -> argparse.ArgumentParser:
     obslast.add_argument("--limit", type=int, default=10)
     obslast.set_defaults(func=cmd_obslast)
 
+    synergy = subparsers.add_parser(
+        "synergy", help="14.13 step 3: aggregated model-pair synergy"
+    )
+    synergy.add_argument("--limit", type=int, default=10)
+    synergy.set_defaults(func=cmd_synergy)
+
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
     tail.add_argument("task_id")
     tail.add_argument("--limit", type=int, default=None)
@@ -582,9 +840,7 @@ def build_parser() -> argparse.ArgumentParser:
     tasks = subparsers.add_parser("tasks", help="list tasks")
     tasks.set_defaults(func=cmd_tasks)
 
-    mreqs = subparsers.add_parser(
-        "mreqs", help="T7.5: list model requests (pending first)"
-    )
+    mreqs = subparsers.add_parser("mreqs", help="T7.5: list model requests (pending first)")
     mreqs.set_defaults(func=cmd_mreqs)
 
     decide = subparsers.add_parser(
@@ -598,7 +854,9 @@ def build_parser() -> argparse.ArgumentParser:
     registry = subparsers.add_parser("registry", help="list advertised capability records")
     registry.set_defaults(func=cmd_registry)
 
-    ledger = subparsers.add_parser("ledger", help="M10: query the mesh ledger (registry+grants+trust+tasks)")
+    ledger = subparsers.add_parser(
+        "ledger", help="M10: query the mesh ledger (registry+grants+trust+tasks)"
+    )
     ledger.set_defaults(func=cmd_ledger)
 
     grant = subparsers.add_parser("grant", help="issue a capability grant (M9 permission chain)")
@@ -615,8 +873,62 @@ def build_parser() -> argparse.ArgumentParser:
     revoke.add_argument("agent_id")
     revoke.set_defaults(func=cmd_revoke)
 
+    backup = subparsers.add_parser(
+        "backup", help="cold-standby backup: dump durable KV buckets to JSON"
+    )
+    backup.add_argument("--out", required=True, help="output JSON file")
+    backup.set_defaults(func=cmd_backup)
+
+    restore = subparsers.add_parser(
+        "restore", help="cold-standby restore: write a backup JSON back into KV"
+    )
+    restore.add_argument("file", help="backup JSON file")
+    restore.add_argument(
+        "--purge",
+        action="store_true",
+        help="delete live keys missing from the backup (exact mirror)",
+    )
+    restore.set_defaults(func=cmd_restore)
+
     doctor = subparsers.add_parser("doctor", help="check connectivity and models")
     doctor.set_defaults(func=cmd_doctor)
+
+    backlog_add = subparsers.add_parser(
+        "backlog-add", help="add a task to the backlog (optionally under a plan)"
+    )
+    backlog_add.add_argument("title")
+    backlog_add.add_argument("--prompt", default="", help="coder prompt; defaults to title")
+    backlog_add.add_argument("--plan-id", default="")
+    backlog_add.add_argument("--dep", action="append", help="backlog id this depends on")
+    backlog_add.set_defaults(func=cmd_backlog_add)
+
+    backlog_list = subparsers.add_parser("backlog-list", help="list backlog entries")
+    backlog_list.add_argument("--plan-id", default="", help="filter by plan")
+    backlog_list.set_defaults(func=cmd_backlog_list)
+
+    plan_parser = subparsers.add_parser(
+        "backlog-plan",
+        help="decompose a plan text into backlog tasks sharing a plan_id",
+    )
+    plan_parser.add_argument("plan", help="plan text (numbered/bullet lines or paragraphs)")
+    plan_parser.add_argument("--plan-id", required=True)
+    plan_parser.add_argument("--chain", action="store_true",
+                             help="make each task depend on the previous one (sequential plan)")
+    plan_parser.add_argument("--dry-run", action="store_true", help="print the tasks without adding")
+    plan_parser.set_defaults(func=cmd_backlog_plan)
+
+    backlog_reset = subparsers.add_parser("backlog-reset", help="re-plan a backlog entry")
+    backlog_reset.add_argument("backlog_id")
+    backlog_reset.set_defaults(func=cmd_backlog_reset)
+
+    backlog_run = subparsers.add_parser(
+        "backlog-run", help="driver loop: claim -> submit -> watch -> mark"
+    )
+    backlog_run.add_argument("--once", action="store_true", help="single cycle then exit")
+    backlog_run.add_argument("--driver", default="", help="driver/claimant name")
+    backlog_run.add_argument("--node", default="", help="orchestrator node to submit to")
+    backlog_run.add_argument("--idle-sleep", type=float, default=10.0)
+    backlog_run.set_defaults(func=cmd_backlog_run)
 
     return parser
 

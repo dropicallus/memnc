@@ -1,4 +1,3 @@
-
 import pytest
 
 from memnc.config import Settings
@@ -76,12 +75,8 @@ def test_merge_written_files_prefers_json_artifacts():
 
 def test_note_written_tracks_only_successful_writes(tmp_path):
     worker = make_worker(tmp_path, FakeBus())
-    worker._note_written(
-        "write_file", {"path": "a.py", "content": "x = 1"}, '{"ok": true}'
-    )
-    worker._note_written(
-        "write_file", {"path": "b.py", "content": "y"}, '{"ok": false}'
-    )
+    worker._note_written("write_file", {"path": "a.py", "content": "x = 1"}, '{"ok": true}')
+    worker._note_written("write_file", {"path": "b.py", "content": "y"}, '{"ok": false}')
     worker._note_written("read_file", {"path": "c.py"}, '{"ok": true}')
     assert worker._written_files == {"a.py": "x = 1"}
 
@@ -92,9 +87,7 @@ async def test_tool_results_are_replayed_not_reexecuted(tmp_path):
     worker = make_worker(tmp_path, bus)
     snapshot = TaskSnapshot(task_id="t1", trace_id="tr1", task="x")
     bus.snapshots["t1"] = snapshot
-    envelope = Envelope(
-        id="cmd1", task_id="t1", trace_id="tr1", kind="command", role="coder"
-    )
+    envelope = Envelope(id="cmd1", task_id="t1", trace_id="tr1", kind="command", role="coder")
 
     first = await worker._execute_tool(envelope, "read_file", {"path": "a"})
     second = await worker._execute_tool(envelope, "read_file", {"path": "a"})

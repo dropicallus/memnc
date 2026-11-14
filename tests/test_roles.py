@@ -15,7 +15,5 @@ def test_coder_prompt_includes_previous_failure():
 
 
 def test_planner_prompt_ignores_previous_failure():
-    prompt = build_user_prompt(
-        Role.PLANNER, {"task": "create fib.py", "last_error": "nope"}
-    )
+    prompt = build_user_prompt(Role.PLANNER, {"task": "create fib.py", "last_error": "nope"})
     assert "PREVIOUS ATTEMPT FAILED" not in prompt

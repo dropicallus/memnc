@@ -22,17 +22,14 @@ from memnc.schema import (
 
 def test_pipeline_streams_debate_events():
     bus = SilentBus(Settings())
-    snap = _snapshot(
-        "t-t5-1", state=TaskState.RECEIVED, claimable=True, next_role="planner"
-    )
+    snap = _snapshot("t-t5-1", state=TaskState.RECEIVED, claimable=True, next_role="planner")
     asyncio.run(bus.put_snapshot(snap))
 
     plan = PlannerOutput(plan=[PlanStep(id="s1", description="write it")], notes="")
-    planner = _worker(
-        Role.PLANNER, bus, ResultPayload(ok=True, output=plan.model_dump())
+    planner = _worker(Role.PLANNER, bus, ResultPayload(ok=True, output=plan.model_dump()))
+    asyncio.run(
+        planner._self_pipeline(asyncio.run(bus.try_claim("t-t5-1", "b:planner", role="planner")))
     )
-    asyncio.run(planner._self_pipeline(asyncio.run(bus.try_claim(
-        "t-t5-1", "b:planner", role="planner"))))
 
     # planner output is not part of the debate — no debate event yet
     assert not any(e[0].startswith("debate.") for e in bus.events)
@@ -42,8 +39,7 @@ def test_pipeline_streams_debate_events():
         files=[FileArtifact(path="hello.py", content="print('hi')")],
     )
     coder = _worker(Role.CODER, bus, ResultPayload(ok=True, output=code.model_dump()))
-    asyncio.run(coder._self_pipeline(asyncio.run(bus.try_claim(
-        "t-t5-1", "b:coder", role="coder"))))
+    asyncio.run(coder._self_pipeline(asyncio.run(bus.try_claim("t-t5-1", "b:coder", role="coder"))))
 
     debate = [e for e in bus.events if e[0] == "debate.code"]
     assert len(debate) == 1
@@ -53,12 +49,11 @@ def test_pipeline_streams_debate_events():
     critic = _worker(
         Role.CRITIC,
         bus,
-        ResultPayload(
-            ok=True, output=CriticOutput(approved=True, summary="fine").model_dump()
-        ),
+        ResultPayload(ok=True, output=CriticOutput(approved=True, summary="fine").model_dump()),
     )
-    asyncio.run(critic._self_pipeline(asyncio.run(bus.try_claim(
-        "t-t5-1", "a:critic", role="critic"))))
+    asyncio.run(
+        critic._self_pipeline(asyncio.run(bus.try_claim("t-t5-1", "a:critic", role="critic")))
+    )
 
     critique = [e for e in bus.events if e[0] == "debate.critique"]
     assert len(critique) == 1

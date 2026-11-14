@@ -18,6 +18,8 @@ from .bus import Bus, emit_debate
 from .config import Settings, get_settings
 from .fsm import Event, transition
 from .fsutil import apply_artifacts
+from .harnesses import get_harness
+from .harnesses.workspace import changed_file_contents
 from .mcp.client import MCPClient
 from .roles import (
     CONSULT_SYSTEM_PROMPT,
@@ -52,6 +54,7 @@ from .schema import (
     reputation_key,
     should_propose_retirement,
 )
+from .synergy import compute_server_success, should_withdraw
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,7 @@ log = logging.getLogger(__name__)
 async def _no_tool(name: str, arguments: dict) -> str:  # pragma: no cover
     """Consults run without tools; never called."""
     raise RuntimeError("consult runs have no tools")
+
 
 MAX_TOOL_RESULT_CHARS = 8_000
 MAX_CHECKPOINTS = 32
@@ -232,9 +236,7 @@ def python_syntax_errors(files: dict[str, str]) -> list[str]:
     return errors
 
 
-def merge_written_files(
-    output: CoderOutput, written: dict[str, str]
-) -> dict[str, str]:
+def merge_written_files(output: CoderOutput, written: dict[str, str]) -> dict[str, str]:
     """Combine artifacts returned as JSON with files written through tools.
 
     Small models often use ``write_file`` and then return an empty ``files``
@@ -295,9 +297,7 @@ class Worker:
             self._command_loop(),
             self._heartbeat_loop(),
             self._model_decision_loop(),
-            *(
-                (self._claim_loop(),) if self.settings.mesh_claim else ()
-            ),
+            *((self._claim_loop(),) if self.settings.mesh_claim else ()),
         )
 
     async def stop(self) -> None:
@@ -373,9 +373,7 @@ class Worker:
             # T7: approved pull — whitelist was checked by the approver's side
             # as a guard, but re-check locally; never pull unlisted models.
             if not model_pull_allowed(request.model, self.settings.model_pull_whitelist):
-                log.warning(
-                    "approved pull %s refused: not whitelisted", request.model
-                )
+                log.warning("approved pull %s refused: not whitelisted", request.model)
                 await message.ack()
                 return
             ok = await pull_model(base_url, request.model)
@@ -465,9 +463,7 @@ class Worker:
             # not loaded), refreshed every DISK_MODELS_REFRESH_LOOPS beats.
             try:
                 if self._heartbeat_loops % DISK_MODELS_REFRESH_LOOPS == 0:
-                    self._disk_models = await fetch_disk_models(
-                        self.settings.inference_base_url
-                    )
+                    self._disk_models = await fetch_disk_models(self.settings.inference_base_url)
                 await self.bus.advertise_node(
                     NodeInfo(
                         node_id=self.settings.node_name,
@@ -485,6 +481,17 @@ class Worker:
     # -- command handling --------------------------------------------------
     async def _handle(self, message) -> None:
         envelope = Envelope.model_validate_json(message.data)
+        # Weak->strong routing: a command with prefer_node set is for that
+        # node only — everyone else naks so a matching worker claims it.
+        # Prefix match: worker node_names are role-suffixed (node-a-planner,
+        # node-a-coder, ...) while prefer_node names the host (node-a).
+        prefer = envelope.payload.get("prefer_node", "")
+        if prefer and not self.settings.node_name.startswith(prefer):
+            try:
+                await message.nak(delay=2.0)
+            except Exception:  # noqa: BLE001
+                await message.nak()
+            return
         snapshot = await self.bus.get_snapshot(envelope.task_id)
         if snapshot is None:
             await self.bus.dead_letter(envelope, "unknown task")
@@ -516,9 +523,7 @@ class Worker:
                 result = ResultPayload(ok=False, error="worker timed out")
             except Exception as exc:  # noqa: BLE001
                 log.exception("agent run failed", extra={"task_id": envelope.task_id})
-                result = ResultPayload(
-                    ok=False, error=f"{type(exc).__name__}: {exc}"
-                )
+                result = ResultPayload(ok=False, error=f"{type(exc).__name__}: {exc}")
 
             result_envelope = Envelope(
                 task_id=envelope.task_id,
@@ -587,7 +592,12 @@ class Worker:
             answer = ConsultAnswer.model_validate(extract_json(run.content))
         except (ValueError, ValidationError) as exc:
             return ResultPayload(ok=False, error=f"invalid consult answer: {exc}")
-        log.info("consult %s -> %s: %s", request.question[:60], role.value, answer.answer[:80] if answer.answer else answer.cannot_answer[:80])
+        log.info(
+            "consult %s -> %s: %s",
+            request.question[:60],
+            role.value,
+            answer.answer[:80] if answer.answer else answer.cannot_answer[:80],
+        )
         return ResultPayload(
             ok=True,
             output={"consult": answer.model_dump()},
@@ -601,6 +611,10 @@ class Worker:
         consult = (envelope.payload or {}).get("consult")
         if consult:
             return await self._run_consult(envelope, role, model, consult)
+        # Harness layer (14.14): external harnesses take the coder role via
+        # the generic Harness contract; "inproc" keeps the built-in loop.
+        if role is Role.CODER and self.settings.harness_coder != "inproc":
+            return await self._run_harness(envelope, role, model)
         self._written_files = {}
         tools = (
             list(self.tools.schemas)
@@ -641,16 +655,13 @@ class Worker:
         except (ValueError, ValidationError) as exc:
             output = await self._repair(role, model, run, str(exc))
             if output is None:
-                return ResultPayload(
-                    ok=False, error=f"invalid {role.value} output: {exc}"
-                )
+                return ResultPayload(ok=False, error=f"invalid {role.value} output: {exc}")
 
         if role is Role.CODER and self.settings.apply_artifacts:
             merged = merge_written_files(output, self._written_files)
             if not output.files and merged:
                 output.files = [
-                    FileArtifact(path=path, content=content)
-                    for path, content in merged.items()
+                    FileArtifact(path=path, content=content) for path, content in merged.items()
                 ]
             errors = python_syntax_errors(merged)
             if errors:
@@ -675,6 +686,54 @@ class Worker:
             tool_steps=run.tool_steps,
         )
 
+    async def _run_harness(self, envelope: Envelope, role: Role, model: str) -> ResultPayload:
+        """Run the coder role through an external harness (workspace state).
+
+        The harness edits the workspace directly; we harvest the changed
+        files back into CoderOutput so the orchestrator/critic contract is
+        unchanged (14.14).
+        """
+        if role is not Role.CODER:
+            return ResultPayload(
+                ok=False,
+                error=f"harness {self.settings.harness_coder!r} runs the coder role only",
+            )
+        prompt = build_user_prompt(role, envelope.payload or {})
+        harness = get_harness(self.settings.harness_coder, model=model)
+        workspace = Path(self.settings.workspace_root)
+        try:
+            result = await harness.run(
+                prompt, workspace, timeout_s=self.settings.coder_timeout_s
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ResultPayload(ok=False, error=f"harness error: {exc}")
+        if not result.ok:
+            return ResultPayload(
+                ok=False,
+                error=result.error or f"harness {self.settings.harness_coder} failed",
+                tool_steps=result.tool_events,
+            )
+        changed = await changed_file_contents(
+            workspace, max_bytes=self.settings.max_artifact_bytes
+        )
+        errors = python_syntax_errors(changed)
+        if errors:
+            return ResultPayload(
+                ok=False,
+                error="python syntax error: " + "; ".join(errors),
+                tool_steps=result.tool_events,
+            )
+        output = CoderOutput(
+            summary=result.summary,
+            files=[FileArtifact(path=path, content=content) for path, content in changed.items()],
+        )
+        return ResultPayload(
+            ok=True,
+            output=output.model_dump(),
+            prompt_version=PROMPT_VERSION,
+            tool_steps=result.tool_events,
+        )
+
     async def _repair(self, role: Role, model: str, run, error: str):
         correction = (
             "Your previous response was not valid JSON for the required schema "
@@ -691,9 +750,7 @@ class Worker:
             log.warning("output repair failed", exc_info=True)
             return None
 
-    def _note_written(
-        self, name: str, arguments: dict, output: str
-    ) -> None:
+    def _note_written(self, name: str, arguments: dict, output: str) -> None:
         if name != "write_file":
             return
         try:
@@ -703,9 +760,7 @@ class Worker:
         if result.get("ok") and "path" in arguments and "content" in arguments:
             self._written_files[str(arguments["path"])] = str(arguments["content"])
 
-    async def _execute_tool(
-        self, envelope: Envelope, name: str, arguments: dict
-    ) -> str:
+    async def _execute_tool(self, envelope: Envelope, name: str, arguments: dict) -> str:
         # M11: mesh_submit is a built-in (no MCP needed) — intercept first.
         if name == "mesh_submit":
             return await self._mesh_submit(envelope, arguments)
@@ -769,9 +824,7 @@ class Worker:
             timeout=10,
         )
         data = json.loads(response.data) or {}
-        return json.dumps(
-            {"ok": True, "task_id": data.get("task_id"), "depth": depth}
-        )
+        return json.dumps({"ok": True, "task_id": data.get("task_id"), "depth": depth})
 
     # -- M11: ledger-based self-claiming -------------------------------------
     async def _propose_retirement(self, model: str, rep) -> None:
@@ -811,6 +864,33 @@ class Worker:
                 # refreshes; cleared by resume_node or a process restart).
                 if await self._paused():
                     continue
+                # 14.13 step 5: experience-driven claim gate. One shot per
+                # poll: aggregate the deposited observations and withdraw
+                # from claiming when OUR track record on this role is below
+                # threshold (min-samples guard; CLAIM_SYNERGY_GATE switch).
+                # No central scheduler — the node reads its own history and
+                # politely steps back, leaving work to peers with better
+                # track records on this role.
+                if self.settings.claim_synergy_gate:
+                    _stats = compute_server_success(
+                        await self.bus.list_observations()
+                    )
+                    _server = (
+                        f"{self.settings.node_name}:"
+                        f"{self.settings.model_for(self.role)}"
+                    )
+                    if should_withdraw(
+                        _stats,
+                        _server,
+                        min_samples=self.settings.claim_synergy_min_samples,
+                        min_ratio=self.settings.claim_synergy_min_ratio,
+                    ):
+                        log.info(
+                            "synergy gate: withdrawing from claims "
+                            "(track record below threshold)",
+                            extra={"server": _server},
+                        )
+                        continue
                 for snapshot in await self.bus.list_tasks():
                     if snapshot.state in TERMINAL_STATES:
                         continue
@@ -883,9 +963,7 @@ class Worker:
                     "context": snapshot.context,
                     "plan": snapshot.plan.model_dump() if snapshot.plan else None,
                     "code": snapshot.code.model_dump() if snapshot.code else None,
-                    "critique": snapshot.critique.model_dump()
-                    if snapshot.critique
-                    else None,
+                    "critique": snapshot.critique.model_dump() if snapshot.critique else None,
                     "revisions": snapshot.revisions,
                     "workspace_root": str(self.settings.workspace_root),
                     "role": role.value,
@@ -915,9 +993,7 @@ class Worker:
             )
             # publish for meshctl tail / a running orchestrator (which will
             # skip it: we already recorded the id in seen_result_ids)
-            await self.bus.publish_envelope(
-                SUBJECT_RESULT.format(role=role.value), result_envelope
-            )
+            await self.bus.publish_envelope(SUBJECT_RESULT.format(role=role.value), result_envelope)
             snapshot = await self.bus.get_snapshot(snapshot.task_id) or snapshot
             await self._advance(snapshot, result_envelope, result)
         finally:
@@ -946,9 +1022,7 @@ class Worker:
                 self._store_output(snapshot, envelope.role, output)
                 question = snapshot.question_output(envelope.role)
                 if question:
-                    event = Event(
-                        "ask", reason=question, role=envelope.role
-                    )
+                    event = Event("ask", reason=question, role=envelope.role)
                 # T5: stream the coder/critic debate as events + history
                 await emit_debate(self.bus, snapshot, envelope.role)
             except Exception as exc:  # noqa: BLE001
@@ -963,23 +1037,15 @@ class Worker:
                 # and raise a retirement proposal once the streak is long.
                 coder_model = self.settings.model_coder
                 try:
-                    rep = await self.bus.record_reputation(
-                        coder_model, snapshot.critique.approved
-                    )
-                    if should_propose_retirement(
-                        rep, self.settings.retire_threshold
-                    ):
+                    rep = await self.bus.record_reputation(coder_model, snapshot.critique.approved)
+                    if should_propose_retirement(rep, self.settings.retire_threshold):
                         await self._propose_retirement(coder_model, rep)
                 except Exception:  # noqa: BLE001 - reputation is best effort
                     log.warning("reputation recording failed", exc_info=True)
                 await self._verify_gate(snapshot)
-                event = Event(
-                    "result", ok=True, approved=snapshot.critique.approved
-                )
+                event = Event("result", ok=True, approved=snapshot.critique.approved)
         if envelope.node:
-            await self.bus.emit_event(
-                snapshot, "result.executed_on", envelope.node
-            )
+            await self.bus.emit_event(snapshot, "result.executed_on", envelope.node)
         await self._apply_local(snapshot, event)
 
     async def _verify_gate(self, snapshot: TaskSnapshot) -> None:
@@ -1011,7 +1077,10 @@ class Worker:
                 passed = False
                 continue
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "py_compile", str(path),
+                sys.executable,
+                "-m",
+                "py_compile",
+                str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -1024,15 +1093,15 @@ class Worker:
                 continue
             text = out.decode(errors="replace").strip()
             evidence.append(
-                f"py_compile {f.path}: exit={proc.returncode}"
-                + (f" {text[:200]}" if text else "")
+                f"py_compile {f.path}: exit={proc.returncode}" + (f" {text[:200]}" if text else "")
             )
             if proc.returncode != 0:
                 passed = False
         if passed and len(py_files) == 1:
             path = root / py_files[0].path
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(path),
+                sys.executable,
+                str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -1055,23 +1124,19 @@ class Worker:
         if passed:
             critique.approved = True
             critique.summary = (
-                "[verify-gate] deterministic checks passed; "
-                "LLM critique overridden.\n" + joined
+                "[verify-gate] deterministic checks passed; LLM critique overridden.\n" + joined
             )
             critique.issues = []
         else:
             critique.issues = [
                 CriticIssue(
                     severity="blocker",
-                    issue=f"[verify-gate] deterministic verification "
-                    f"failed:\n{joined}",
+                    issue=f"[verify-gate] deterministic verification failed:\n{joined}",
                     fix="fix the reported runtime/compile errors",
                 )
             ]
 
-    def _store_output(
-        self, snapshot: TaskSnapshot, role: Role, output
-    ) -> None:
+    def _store_output(self, snapshot: TaskSnapshot, role: Role, output) -> None:
         if role is Role.PLANNER:
             snapshot.plan = output
         elif role is Role.CODER:
@@ -1097,8 +1162,7 @@ class Worker:
         for step in snapshot.plan.plan:
             submission = TaskSubmission(
                 task=step.description or f"step {step.id}",
-                context=f"fanout parent={snapshot.task_id} step={step.id}: "
-                f"{snapshot.task[:120]}",
+                context=f"fanout parent={snapshot.task_id} step={step.id}: {snapshot.task[:120]}",
                 depth=snapshot.depth + 1,
                 claimable=True,
             )
@@ -1140,9 +1204,7 @@ class Worker:
             snapshot, "state.coding", f"fanout: {len(snapshot.subtasks)} subtasks"
         )
 
-    async def _apply_local(
-        self, snapshot: TaskSnapshot, event: Event
-    ) -> None:
+    async def _apply_local(self, snapshot: TaskSnapshot, event: Event) -> None:
         result = transition(
             snapshot.state,
             event,
@@ -1153,9 +1215,7 @@ class Worker:
             gate=snapshot.gate,
         )
         snapshot.state = result.state
-        snapshot.attempt = (
-            0 if result.attempt_reset else snapshot.attempt + result.attempt_delta
-        )
+        snapshot.attempt = 0 if result.attempt_reset else snapshot.attempt + result.attempt_delta
         snapshot.revisions += result.revision_delta
         snapshot.record(event.type, event.reason)
         if event.reason and result.state is TaskState.FAILED:
@@ -1191,8 +1251,7 @@ class Worker:
                 await self.bus.emit_event(
                     snapshot,
                     "task.question",
-                    f"question: {action.reason} — /answer {snapshot.task_id} "
-                    f"<text>",
+                    f"question: {action.reason} — /answer {snapshot.task_id} <text>",
                 )
                 # M16 mesh-clarify: consult the peers before the human.
                 await clarify.start(self.bus, self.settings, snapshot)
@@ -1216,9 +1275,7 @@ class Worker:
             return
 
         await self.bus.put_snapshot(snapshot)
-        await self.bus.emit_event(
-            snapshot, f"state.{result.state.value.lower()}", event.reason
-        )
+        await self.bus.emit_event(snapshot, f"state.{result.state.value.lower()}", event.reason)
         log.info(
             "self pipeline transition",
             extra={

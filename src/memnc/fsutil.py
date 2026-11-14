@@ -25,11 +25,7 @@ def safe_path(root: Path, relative: str) -> Path:
     # which nests files under root/workspace/... Strip the redundant prefix
     # so the file lands where the task text means it to.
     root_name = root.name
-    while (
-        root_name
-        and len(candidate.parts) > 1
-        and candidate.parts[0] == root_name
-    ):
+    while root_name and len(candidate.parts) > 1 and candidate.parts[0] == root_name:
         candidate = Path(*candidate.parts[1:])
     if candidate.is_absolute():
         resolved = candidate.resolve()

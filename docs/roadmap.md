@@ -1,6 +1,21 @@
 # Roadmap
 
 ## Built
+
+- **2026-11-13 — §14.13 Step 5, experience-driven claim gate** (commits
+  a8cd309, 9d118b6, 7636e00): workers aggregate their own per-server track
+  record from deposited observations and withdraw from claiming when the
+  ratio drops below 0.3 with >= 3 samples (fail-closed). Live on
+  node-a + node-c.
+- **2026-11-13 — Topology framework** (commit 5856c84): `NATS_URL` accepts
+  comma-separated seed lists (client-side server pool / reconnect across
+  masters), `NATS_KV_REPLICAS` setting wired into every KV bucket, nats
+  compose entrypoint generates a Raft cluster block when
+  `NATS_CLUSTER_ROUTES` is set (port 6222). Reference topologies (Solo /
+  Duo cold-standby / Mesh >= 3 sites incl. witness) documented in
+  `docs/operations.md`. Deployment topology is settings-only — the
+  framework is not tied to any one machine layout.
+
 ## 14. Milestones
 
 | ID | Deliverable | Acceptance |
@@ -318,10 +333,13 @@ early human view (meshctl/Telegram command, e.g. `obslast`) so Frank
 can sanity-check what the mesh remembers before any automatic use.
 
 **Step 3 — Team-synergy aggregation (pure computation, no behavior).**
-From deposited observations, aggregate per model pair: success ratio,
-revision counts, sample size. Surface only (console/Telegram). No
-routing decisions yet — measurement first (
-§14.13 Steps 1–4 (Step 0 done, commit d6cb4fb) |
+DONE for the CLI surface: `compute_synergy_metrics()` +
+`format_synergy()` in `src/memnc/synergy.py` (success ratio, mean
+revisions, sample size per unordered model pair), exposed as
+`meshctl synergy [--limit N]` (verified live against the mesh KV).
+Console dashboard + optional Telegram digest still open. No routing
+decisions — measurement first (
+§14.13 Steps 1–4; remaining: Step 4 similarity/ranked attention (Step 5 claim gate DONE, commits a8cd309/9d118b6) |
 | B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists as a standalone vendored copy** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) |
 | B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
 | B4 | Fisher-Merge pipeline | mergekit-based merge of role adapters with a subspace-divergence check (principal angles) before merging; naive averaging is known to degrade (MoRSE result). | §19 P0 + synthesis.md §5 |
@@ -360,8 +378,8 @@ routing decisions yet — measurement first (
   design. Anthropic's orchestrator-worker engineering write-up is a design
   reference for M16, not a dependency.
 
-**Sequencing:** finish 
-§14.13 Steps 1–4 → Step 5 routing feedback → B3 leader
+**Sequencing:** §14.13 Step 5 claim gate is DONE; next
+Step 4 (similarity/ranked attention) → B3 leader
 prompt layer → B2 role-LoRA training from observations → B4 merges. T1 runs as
 a time-boxed side experiment; T2 rides along with S4; T3 after B2.
 
@@ -411,12 +429,13 @@ The Experience Graph is designed to capture, store, and eventually leverage the 
 
 ### Step 3: Team-Synergy Aggregation (Measurement)
 **Goal:** Surface metrics that quantify how well different model pairings/roles are performing.
-**Status:** Planned (Crucial: No behavioral changes at this stage).
+**Status:** 3.1 + CLI table DONE (`src/memnc/synergy.py`, `meshctl synergy`); console dashboard + Telegram digest open. (Crucial: No behavioral changes at this stage.)
 
 | Task | Description | Targeted Files | Interface/Key Changes | Acceptance Criteria |
 | :--- | :--- | :--- | :--- | :--- |
-| **3.1 Aggregation Engine** | Implement logic to compute success ratios and revision counts from stored observations. | `src/memnc/scoring.py` | `compute_synergy_metrics()` | Correct math for: `Success / Total` per model-pair. |
-| **3.2 Console Dashboard** | Add a summary table to the `memnc` console showing model performance. | `src/memnc/console.py` | New `mesh stats` command | Live table of agent/model synergy metrics. |
+| **3.1 Aggregation Engine** | DONE: success ratio + mean revisions + sample size per unordered model pair. Lives in `src/memnc/synergy.py` (not `scoring.py` — kept the pure computation in its own module). | `src/memnc/synergy.py` | `compute_synergy_metrics()`, `format_synergy()` | 8 unit tests; math verified. |
+| **3.2 CLI Table** | DONE: `meshctl synergy [--limit N]` (name follows the existing `obslast` verb style instead of the planned `mesh stats`). | `src/memnc/cli.py` | `meshctl synergy` | Live table verified against the mesh KV. |
+| **3.2b Console Dashboard** | Add a summary table to the `memnc` console showing model performance. | `src/memnc/console.py` | reuses `format_synergy()` | Live table of agent/model synergy metrics. |
 | **3.3 Telegram Digest** | (Optional) Daily/periodic summary of mesh performance sent via Telegram. | `src/memnc/telegram.py` | Periodic scheduler | High-level overview of mesh drift or stability. |
 
 - **Type:** 💻 Pure Code / Test Work
@@ -682,10 +701,19 @@ reward + corroboration) onto our observations. Still read-only.
 **Step 5 — Routing feedback loop (behavior change, human-gated).**
 Claim decision consults ranked traces alongside the existing configured
 utility score; a config flag (default off) selects the mode. Compare
-both modes on a shadow period before switching. T7 scalar stays as the
+both modes on a shadow period before switching.
+- **DONE (commits a8cd309, 9d118b6):** experience-driven claim gate —
+  workers aggregate deposited observations per server ("node-role:model")
+  via `compute_server_success()` (synergy.py) and withdraw from claiming
+  when their own track record drops below `claim_synergy_min_ratio`
+  (default 0.3, >= `claim_synergy_min_samples` (default 3) required;
+  fail-closed: thin evidence never benches a server). No central
+  scheduler — the node reads its own history (CLAIM_SYNERGY_GATE switch,
+  on by default). First live observation: gate withdrew on 1/3 ratio at
+  the initial 0.34 default -> default retuned to 0.3 (only 0/n benches). T7 scalar stays as the
 human-gated retirement source (two consumers, 
 §14.13) | Observation deposits, trace query, team-synergy aggregation, similarity + ranked attention. This IS the AgentNet edge layer on our KV ledger — no external graph DB needed. |
-# Roadmap — prioritized (2026-11-12)
+# Roadmap — prioritized (2026-11-13)
 
 Inputs: 26-paper corpus (§19), insights from 2026-11-11/12 — MoRAM/CoDyRA
 (growing-LoRA as memory), Fisher-Merge (mergekit), arXiv 2603.01097
@@ -734,10 +762,267 @@ single-LoRA advantage (2603.01097) as working hypothesis.
 - Design doc first, then code. Blocks nothing, open-ended.
 
 ## P3 — M11 Mesh API rollout (M11a-d, concept done)
-M11a reads + listen (JetStream), M11b writes + Telegram API client,
-M11c web UI proxy + resources, M11d NL agent. Channels/human-as-peer
-from 5a feed into S4 (approval gate) — S4 and M11b merge.
+M11a reads + listen (JetStream): DONE (2026-11-12).
+M11b writes + Telegram API client: DONE (2026-11-12) — WRITE_VERBS in
+api.py forward every mutating call over mesh.control (orchestrator stays
+single writer, grant-check + human.* ledger unchanged); Telegram
+`/submit|/cancel|/retry|/gate|/stop worker|/pause|/resume` goes through
+api_request now.
+M11c console proxy + resources: DONE (2026-11-12) — the web console is an
+API client too: collect_state/task detail/control POST go through
+api_request (reads: task.list/node.list + new cap.list/grant.list/
+trust.list/ledger.read verbs; fallback to direct Bus reads if the API
+server is down); node load is part of the resource view.
+Next: M11d NL agent. Channels/human-as-peer from 5a feed into S4
+(approval gate) — S4 and M11b merge.
+
+## P4 — Infra robustness (decided 2026-11-13)
+
+Topology support is DONE (see Built). Open infra slices:
+
+1. **NATS cold-standby backup (Duo topology)**: periodic KV/ledger backup
+   on the active node (nats stream backup / KV export into the nats-data
+   companion), documented promote/restore for the second host. Recovery
+   point = time since last backup; acceptable for a 2-host setup (Raft
+   majority impossible without a 3rd voter). Decision: this is the
+   failover story until the mesh goes productive; a data-less witness
+   (tiny VPS, ~30 MB RAM) is the upgrade path to real automatic failover
+   (Mesh topology, replicas=3).
+2. **Node update logic**: version check at heartbeat, refuse/upgrade
+   stale nodes — motivated by today's manual rsync rollouts.
+3. **Wake-on-backlog (WoL)**: mesh detects backlog, wakes the cold
+   reserve host. Posture: cold reserve capacity, no replication overlap
+   with slice 1.
+
+## 14.14 Harness abstraction layer (pi first, BUILT 2026-11-14)
+
+### Worker wiring (DONE 2026-11-14)
+
+When ``harness_coder != "inproc"``, the worker's coder role routes through the
+harness instead of the in-proc loop:
+
+- ``Worker._run_impl`` dispatches ``Role.CODER`` + non-inproc harness to
+  ``Worker._run_harness`` (worker.py). Non-coder roles are untouched.
+- ``_run_harness`` builds the coder prompt, runs
+  ``get_harness(harness_coder, model=...)`` against ``workspace_root`` with
+  ``coder_timeout_s``, then harvests workspace state:
+  ``harnesses.workspace.changed_file_contents`` (``git add -N .`` +
+  ``git diff --name-only``, untracked files included, non-repo -> empty).
+- Harvested files are syntax-checked (``python_syntax_errors``) and converted
+  to ``CoderOutput(summary, files=FileArtifact...)`` -> ``ResultPayload(ok,
+  output, tool_steps=harness tool_events)``. The orchestrator/critic contract
+  is unchanged: harness results look exactly like in-proc coder results.
+- Harness failure / timeout / exception -> ``ResultPayload(ok=False)`` with
+  the harness error, measured attempts (3x retry) as usual. No routing hack.
+
+Verified live: worker + PiHarness + qwen2.5:7b in a scratch git repo ->
+ok=True, tool_steps=1, hello.txt harvested with exact content. (qwen2.5-coder:32b
+still returns 0 tool events -> empty files -> the known template backlog item.)
+
+### ToolLoopHarness (in-proc loop as a Harness, DONE 2026-11-14)
+
+``harnesses/inproc.py`` wraps ``memnc.agent.run_agent`` so the built-in coder
+loop satisfies the same Harness contract as pi:
+
+- ``ToolLoopHarness(model, backend, tools=None, execute_tool=None,
+  system_prompt=None, max_steps=8, raw_prompt=False)`` -- registered as
+  ``"inproc"`` in the harness registry.
+- ``run(prompt, workspace, timeout_s)``: builds the coder prompt exactly like
+  the worker's in-proc path (``build_user_prompt(Role.CODER, {"task": ...})`` +
+  ``SYSTEM_PROMPTS[Role.CODER]``), runs the tool loop under ``asyncio.wait_for``,
+  parses ``CoderOutput``, applies artifacts into the workspace
+  (``fsutil.apply_artifacts``) and returns the workspace git diff in
+  ``HarnessResult``. Bad JSON / timeout / backend error -> ``ok=False``.
+- ``workspace_diff(workspace)`` helper added to ``harnesses/workspace.py``
+  (git add -N + diff, untracked included); ``pi.py._git_diff`` now reuses it.
+- Probe CLI: ``python -m memnc.harnesses --harness inproc --model M`` builds a
+  backend from settings (model overridden) -- the built-in loop is now probeable
+  from the host without pi.
+
+Verified live: ToolLoopHarness + qwen2.5:7b + scratch git repo -> ok=True,
+CoderOutput parsed, hello.txt applied, full diff harvested.
+
+Tests: tests/test_harnesses.py -- changed_file_contents (untracked + non-repo),
+worker harvest, failure path, broken-python rejection, non-coder roles ignore
+the harness (deterministic via monkeypatch, immune to test pollution), default
+stays inproc.
+
+
+Status: core built + proven end-to-end; worker wiring is the next slice.
+
+The weak->strong proof (7b dirty pass -> produktiv fixer, 11/11 green in
+`~/memnc-harness-wt`) showed the *product* of a coding agent is workspace
+state (git diff + tests), not structured patches. That is the contract the
+new `src/memnc/harnesses/` package formalizes; it sits above the inference
+backends (memnc.backends abstracts *models*, harnesses abstract *how the
+model works on a workspace*).
+
+**Contract (built):**
+- `HarnessResult` — ok, summary, diff, tool_events, exit_code, error.
+- `Harness` protocol — `capabilities()` + `async run(prompt, workspace, timeout_s)`.
+- Registry — `@register`, `get_harness(name, **kwargs)`, `known_harnesses()`.
+
+**Adapters:**
+- `PiHarness` (`harnesses/pi.py`) — spawns `pi -p --mode json --model <m>`
+  with the workspace as cwd, parses the JSONL event stream (tolerant to
+  noise/huge lines), returns the workspace diff (untracked files included
+  via `git add -N`). Carries the proven pitfalls: process-group kill on
+  timeout (orphans otherwise hold the stdout pipe open), `tool_events == 0`
+  as the no-native-tool-calls signal (the 32b template issue), generous
+  timeouts for weak models (7b parallel-tool-call retry loop).
+- Probe CLI `python -m memnc.harnesses --workspace W --model M "prompt"`
+  runs one prompt through a harness from the host and prints a JSON result.
+
+**Config:** `harness_coder: str = "inproc"` in Settings (opt-in; "inproc"
+keeps the worker's own tool loop as default).
+
+**Tests:** `tests/test_harnesses.py` — event parsing (tools/summary/settled,
+noise tolerance, error turns), registry selection, and subprocess behavior
+(ok path, nonzero exit, timeout kills the whole tree <10s, missing binary)
+using throwaway fake `pi` scripts.
+
+**Next slices:**
+1. Worker wiring: when `harness_coder == "pi"`, the coder role builds its
+   usual prompt, runs the harness against a git worktree of the target
+   workspace, and maps `HarnessResult` into the ResultPayload contract
+   (diff -> evidence; Critic stays harness-agnostic).
+2. `ToolLoopHarness`: wrap the worker's in-proc loop in the same protocol so
+   routing sees one interface.
+3. Per-task harness selection (instead of per-node config) — the step toward
+   mesh self-organization: cheap models draft dirty, strong models fix.
+4. `DiscussHarness` (multi-model debate) on the same contract.
+
+## 14.15 Backlog: plan-level task queue with atomic claim (BUILT 2026-11-14)
+
+User driver: "wir brauchen quasi einen Weg, Pläne auf Tasks runter zu
+brechen und die zu blocken wie ein Lock so dass nicht andere damit
+anfangen. Klassisches Scrum für Agents."
+
+**Design:** one level above the mesh task queue (`bus.try_claim`, commit
+a8cd309, KV-revision CAS as lock). `src/memnc/backlog.py`:
+
+- `BacklogTask` model: `id` (`b-{uuid4}`), `plan_id` (groups the tasks
+  decomposed from one plan), `prompt`, `status`
+  (`planned`/`claimed`/`done`/`failed`), `attempts`, `claimed_at`,
+  `claimant`, `mesh_task_id`, timestamps.
+- `BacklogStore` on NATS KV bucket `memnc-backlog`. The lock is the KV
+  revision: `claim()` reads the entry, flips `planned` -> `claimed` (or
+  steals a stale claim), and writes back with
+  `kv.update(key, value, last=entry.revision)`. On racing drivers exactly
+  one CAS succeeds, the losers see a wrong-revision error and move on.
+- Stale-claim reclaim: a `claimed` entry whose `claimed_at` is older than
+  `CLAIM_STALE_S` (15 min) is stealable -- driver died mid-task and the
+  work is not lost. Unparseable timestamps count as stale.
+- `MAX_ATTEMPTS = 3` mirrors the mesh's own retry measurement; `failed`
+  with attempts left goes back to `planned` for the next pass.
+
+**meshctl subcommands:**
+- `backlog-add "<prompt>" --plan-id <id>`: enqueue a task.
+- `backlog-list`: planned/claimed/done/failed with attempts.
+- `backlog-run [--once]`: the driver loop. Claim one entry, submit to the
+  mesh (`TaskSubmission` claimable), mark `mesh_task_id`, watch to a
+  terminal event, then `mark()` done/failed. Without `--once` it loops.
+- `backlog-reset <id>`: re-plan an entry for debugging.
+
+**Two live-bugs found and fixed during the smoke:**
+1. Core-NATS subscribe misses fast tasks: the mesh terminal event can be
+   published before the driver's subscription is live. Fix: the watcher
+   uses a JetStream ordered consumer (`deliver_all`) on
+   `mesh.task.{task_id}.events`, so it replays the retained history.
+2. Terminal-event naming: worker/orchestrator emit
+   `state.{snapshot.state.value.lower()}` on transitions, so the settled
+   states arrive as `state.done`/`state.failed` -- not `task.done`/
+   `task.failed` (those exist only in the orchestrator's own paths).
+
+**Live proof (node-a, 2026-11-14):** add -> claim -> mesh task submitted
+-> `state.failed` watched -> `failed` marked -> back to `planned`
+(attempts 1/3) -> re-claimed twice -> attempts 3/3, entry terminal. Stale
+claim of a killed driver was reclaimed by the next `--once` pass. Full
+suite 372 passed + 2 skipped. Commit 22ef1a2.
+
+**Next slices on this level:**
+1. Plan decomposition helper: turn a plan doc into N `backlog-add` calls
+   with a shared `plan_id` (the Scrum planning step).
+2. Run the driver as a daemon (systemd unit / cron) so the machines
+   consume work instead of idling (Auto-Driver stage 1).
+3. Weak->strong routing rule on top of `attempts` (stage 2 of the
+   orchestration design).
 
 ## Not pursuing
 - CI maintenance (stopped by decision), Fabro clone (prior art
   suffices), HTTP mesh-to-mesh, federation v1.
+
+### 14.15.1 Slice: plan-decomposition helper `backlog-plan` (BUILT 2026-11-15 night, commit 5378963)
+
+`decompose_plan(text)` in `backlog.py` turns a written plan document into task prompts:
+numbered (`1.`) or bullet (`- ` / `* `) lines win when >=2 exist, else blank-line-separated
+paragraphs, else the whole text as one block.
+
+`meshctl backlog-plan --plan-id <id> [--chain] [--dry-run] "<plan text>"` adds N backlog
+entries sharing plan_id; `--chain` links each entry to its predecessor via `deps` so the
+driver (`next_claimable`) consumes the chain in order. Gotcha: the FIRST entry must get
+`deps=[]` — `deps=['']` (empty prev_id) makes the task unclaimable forever because no id
+ever reaches `done`. Fixed in 5378963 (guard: `args.chain and prev_id`).
+
+Live-proven: `night1` plan decomposed into 2 chained entries; the running driver daemon
+claimed task 1 and submitted it into the mesh.
+
+### 14.15.2 Infra findings (night 2026-11-15)
+
+- All backlog attempts 404'd with `Client error '404 Not Found' for url 'http://host.docker.internal:11434/api/chat'` — root causes, both fixed/known:
+  1. `docker-compose.node.yml` had no `extra_hosts: host.docker.internal:host-gateway` (root compose already did) — fixed in commit e8ccf47; node-c stack recreated with it. NOTE: the repo on node-c (`~/memnc`, branch feat/m8-live-router with local mods) is a separate checkout — the compose fix was copied over manually and the node-c repo needs a proper re-sync later.
+  2. node-c's ollama does NOT have `qwen2.5:7b` (planner) nor `qwen2.5-coder:32b` (coder) — ollama answers 404 for unknown models, which looks identical to a network error in the agent error string. node-c only has `qwen2.5-coder:7b`, `llama3.2:3b`, `swift`, `gemma4`, and a 27B/35B MoE coder. FIX PENDING (needs user OK, .env edit on node-c blocked overnight): point node-c's MODEL_PLANNER/MODEL_CODER/MODEL_CRITIC at `qwen2.5-coder:7b` — weak node, weak models, exactly the weak->strong routing slice's premise (node-a has the strong models: qwen2.5:7b, qwen2.5-coder:32b, produktiv, signal-27b...). No model download needed.
+- Design lesson for slice 3 (weak->strong routing): the 3x-fail -> FAILED measurement is exactly the signal the router needs — a task failing 3/3 on a weak node should be retried on a strong node before terminal failure, not just counted.
+
+### 14.15.3 Slice: weak->strong routing via backlog attempts (BUILT 2026-11-15 night, commits 16ee63c + c370a03)
+
+Slice 3 from the "Next slices" list. Mechanism, no new subjects and no
+--needs-model hack:
+
+- `TaskSubmission.prefer_node` / `TaskSnapshot.prefer_node` ("" = unconstrained).
+- The orchestrator copies it into every dispatch command payload.
+- A worker whose `node_name` differs naks the command (2 s delay) so a worker
+  on the preferred node picks it up — targeting rides the existing role
+  command queue (shared JetStream durable).
+- The backlog driver: when `mark()` leaves a task terminally failed
+  (attempts >= MAX_ATTEMPTS=3, `mark()` re-plans while budget remains), the
+  driver queues ONE `[strong-retry]` copy (same prompt/plan_id/deps,
+  `strong_retry=True`, `prefer_node=STRONG_NODE`). `should_strong_retry()`
+  guards the loop: strong-retries never spawn further retries.
+- `Settings.strong_node` (env `STRONG_NODE`, default "") disables the path.
+- Gotcha (c370a03): worker node_names are role-suffixed (node-a-planner,
+  node-a-coder, ...). A task dispatches to several roles, so exact-match
+  targeting can never satisfy every dispatch — `prefer_node` names the HOST
+  and workers match by prefix (`node_name.startswith(prefer_node)`).
+
+Semantics: a weak node burns its 3 attempts on the weak pool first — that
+measured failure is the routing signal — then the work item migrates to the
+strong node exactly once. Failed-chain semantics (a terminal failure should
+release or fail dependents) remain a design decision for a later slice.
+
+### 14.15.4 Slice: daemonize the backlog driver (BUILT 2026-11-15 night)
+
+Slice 2 from the "Next slices" list. The driver loop itself already exists
+(`meshctl backlog-run`); the slice replaces the fragile nohup-from-/tmp
+invocation with a repo-shipped service:
+
+- `scripts/backlog-driver.sh`: launcher that encodes the client-env rules —
+  never `source .env` (extract `NATS_TOKEN` with the plain-match awk pattern),
+  host-side clients use `nats://127.0.0.1:4222` (the .env URL is the
+  compose-internal hostname), empty tokens are never exported, PYTHONPATH is
+  stripped, and it `exec`s `.venv/bin/meshctl backlog-run`.
+- `scripts/systemd/memnc-backlog-driver.service`: systemd **user** unit
+  (no root anywhere), `Restart=on-failure` + `RestartSec=10`. Killing the
+  driver loses nothing — stale claims are reclaimed by the next pass.
+- Install (per host): `cp scripts/systemd/memnc-backlog-driver.service
+  ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl
+  --user enable --now memnc-backlog-driver`. Requires lingering for
+  boot-time start (`loginctl enable-linger`), otherwise it runs while the
+  user session is up.
+- `STRONG_NODE` passes through the environment (14.15.3 weak->strong
+  routing), e.g. `Environment=STRONG_NODE=node-a` in the unit override.
+- Tests: `tests/test_backlog_daemon.py` pins the invariants (executable
+  launcher, no `source .env`, guarded token export, loopback default,
+  PYTHONPATH strip, Restart policy, no root).
+
+Deployment note: node-a swapped from the nohup driver to the user unit.

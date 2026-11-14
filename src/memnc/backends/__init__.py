@@ -151,9 +151,7 @@ class FallbackBackend:
         mapped = self.model_map.get(model, model)
         if not self._degraded:
             try:
-                return await self.primary.chat(
-                    messages, tools=tools, model=model, **options
-                )
+                return await self.primary.chat(messages, tools=tools, model=model, **options)
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 log.warning(
                     "primary inference unreachable, degrading to fallback: %s",
@@ -164,17 +162,13 @@ class FallbackBackend:
             # Periodically re-probe the primary so we recover automatically.
             if self._calls % self.probe_every == 0:
                 try:
-                    result = await self.primary.chat(
-                        messages, tools=tools, model=model, **options
-                    )
+                    result = await self.primary.chat(messages, tools=tools, model=model, **options)
                     log.info("primary inference recovered, leaving fallback")
                     self._degraded = False
                     return result
                 except (httpx.TransportError, httpx.TimeoutException):
                     log.debug("primary still unreachable, staying on fallback")
-        return await self.fallback.chat(
-            messages, tools=tools, model=mapped, **options
-        )
+        return await self.fallback.chat(messages, tools=tools, model=mapped, **options)
 
 
 def endpoint(base_url: str, path: str) -> str:

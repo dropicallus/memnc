@@ -55,9 +55,7 @@ class MCPClient:
         self._stack = AsyncExitStack()
         try:
             read, write = await self._stack.enter_async_context(stdio_client(params))
-            self._session = await self._stack.enter_async_context(
-                ClientSession(read, write)
-            )
+            self._session = await self._stack.enter_async_context(ClientSession(read, write))
             await self._session.initialize()
             listing = await self._session.list_tools()
             self.schemas = [_to_openai_tool(tool) for tool in listing.tools]
@@ -71,11 +69,7 @@ class MCPClient:
         if self._session is None:
             raise RuntimeError("mcp session is not available")
         result = await self._session.call_tool(name, arguments)
-        parts = [
-            block.text
-            for block in result.content
-            if getattr(block, "type", None) == "text"
-        ]
+        parts = [block.text for block in result.content if getattr(block, "type", None) == "text"]
         text = "\n".join(parts) if parts else ""
         if getattr(result, "isError", False):
             return f"tool error: {text}"

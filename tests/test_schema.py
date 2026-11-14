@@ -5,6 +5,7 @@ from memnc.schema import (
     CoderOutput,
     CriticOutput,
     Envelope,
+    NodeInfo,
     PlannerOutput,
     ResultPayload,
     TaskSnapshot,
@@ -67,6 +68,11 @@ def test_snapshot_history_is_trimmed():
     for index in range(150):
         snapshot.record("event", str(index))
     assert len(snapshot.history) == 100
+
+
+def test_node_info_default_version():
+    info = NodeInfo(node_id="test")
+    assert info.version == "dev"
 
 
 def test_result_payload_requires_ok():

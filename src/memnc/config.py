@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # identity / transport
     role: Role = Role.CODER
     node_name: str = Field(default_factory=socket.gethostname)
+    # Weak->strong routing: node that receives strong-retry tasks after a
+    # weak node exhausts its attempt budget ("" = disabled).
+    strong_node: str = ""
+
     # T6: node capabilities advertised into the roster KV (roster.<node>).
     # node_vram_gb = VRAM the mesh may plan around (0 = unknown/none);
     # node_gpu = free-form label (e.g. "test-gpu-a").
@@ -31,6 +35,33 @@ class Settings(BaseSettings):
     node_gpu: str = ""
     nats_url: str = "nats://127.0.0.1:4222"
     nats_token: str | None = None
+    # Topology (framework, not Frank's setup): nats_url accepts a
+    # comma-separated seed list ("nats://a:4222,nats://b:4222") — the
+    # client round-robins/reconnects across it. kv_replicas follows the
+    # deployment topology: 1 = solo/duo (single JetStream), 3 = mesh
+    # (Raft-replicated, needs a >=3-voter NATS cluster).
+    nats_kv_replicas: int = 1
+    # M11d: model-mediated API agent. Backend is pluggable — any
+    # OpenAI-compatible /v1 endpoint works (local llauncher, trace-proxy,
+    # LM Studio, cloud). agent_allowed_verbs is the fail-closed allowlist.
+    agent_llm_base_url: str = "http://127.0.0.1:4000/v1"
+    agent_llm_model: str = "local"
+    @property
+    def nats_servers(self) -> list[str]:
+        """Split NATS_URL into a server pool (comma-separated seed list)."""
+        return [u.strip() for u in self.nats_url.split(",") if u.strip()]
+
+    # 14.13 step 5: experience-driven claim gate. A server whose own track
+    # record (from deposited observations) is below claim_synergy_min_ratio
+    # with at least claim_synergy_min_samples stops claiming that role —
+    # the mesh routes by its own history, no central scheduler.
+    claim_synergy_gate: bool = True
+    claim_synergy_min_samples: int = 3
+    claim_synergy_min_ratio: float = 0.3
+    agent_allowed_verbs: str = (
+        "task.list,task.detail,node.list,node.detail,"
+        "cap.list,grant.list,trust.list,ledger.read,task.submit"
+    )
     # H4: per-node NKey identity. When set, this seed file replaces the
     # shared token entirely (transport-level identity binding); the token
     # is then ignored. Fail closed: a configured seed path must exist.
@@ -50,8 +81,11 @@ class Settings(BaseSettings):
     grant_nodes: str = ""
 
     @field_validator(
-        "inference_fallback_provider", "inference_fallback_api_key",
-        "inference_api_key", "nats_token", "nats_name",
+        "inference_fallback_provider",
+        "inference_fallback_api_key",
+        "inference_api_key",
+        "nats_token",
+        "nats_name",
         mode="before",
     )
     @classmethod
@@ -79,6 +113,11 @@ class Settings(BaseSettings):
     clarify_timeout_s: int = 120
     planner_timeout_s: int = 180
     coder_timeout_s: int = 600
+    # Harness for the coder role: "inproc" (default, the worker's own tool
+    # loop) or "pi" (external pi CLI against the workspace; host-side for
+    # now -- see docs/roadmap.md 14.14). Harnesses share one contract
+    # (memnc.harnesses.Harness), so weak->strong handoff stays routing policy.
+    harness_coder: str = "inproc"
     critic_timeout_s: int = 180
     orchestrator_grace_s: int = 30
     apply_artifacts: bool = True

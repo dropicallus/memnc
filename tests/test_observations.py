@@ -117,19 +117,14 @@ class TestObservationFromSnapshot:
 
     def test_non_terminal_state_returns_none(self) -> None:
         assert (
-            observation_from_snapshot(
-                _snapshot(TaskState.PLANNING, {"planner": "n:llama"})
-            )
-            is None
+            observation_from_snapshot(_snapshot(TaskState.PLANNING, {"planner": "n:llama"})) is None
         )
 
     def test_no_route_returns_none(self) -> None:
         assert observation_from_snapshot(_snapshot(TaskState.DONE, {})) is None
 
     def test_schema_version_stamp(self) -> None:
-        obs = observation_from_snapshot(
-            _snapshot(TaskState.DONE, {"coder": "n:llama"})
-        )
+        obs = observation_from_snapshot(_snapshot(TaskState.DONE, {"coder": "n:llama"}))
         assert obs is not None
         assert obs.schema_version == OBSERVATION_SCHEMA_VERSION
 
@@ -164,7 +159,6 @@ class TestBusDeposit:
     async def test_deposit_and_list_roundtrip(self) -> None:
         from test_trust_fake import FakeKV
 
-
         bus = Bus(_bus_settings())
         bus.js = MagicMock()
         bus._observations = FakeKV()
@@ -184,22 +178,17 @@ class TestBusDeposit:
     async def test_deposit_creates_bucket_once(self) -> None:
         from test_trust_fake import FakeKV
 
-
         bus = Bus(_bus_settings())
         bus.js = MagicMock()
         bus._observations = None
         # js.key_value raises NotFoundError -> create_key_value returns the fake
-        bus.js.key_value = AsyncMock(
-            side_effect=Exception("bucket missing")
-        )
+        bus.js.key_value = AsyncMock(side_effect=Exception("bucket missing"))
         bus.js.create_key_value = AsyncMock(return_value=FakeKV())
         # NotFoundError is what nats raises; emulate with the real error type
         from nats.js.errors import NotFoundError
 
         bus.js.key_value = AsyncMock(side_effect=NotFoundError)
-        obs = TaskObservation(
-            task_id="t1", trace_id="tr1", task="x", outcome="done"
-        )
+        obs = TaskObservation(task_id="t1", trace_id="tr1", task="x", outcome="done")
         await bus.deposit_observation(obs)
         bus.js.create_key_value.assert_awaited_once()
         assert bus._observations is not None
