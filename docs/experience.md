@@ -185,3 +185,31 @@ the context window = our workflow_state KV / NATS layer; the
 architecture thesis is confirmed from the outside. Candidate follow-up
 arm C2/D: mesh with an adversarial critic agent + plan held in KV
 instead of the planner's context.
+
+## 2026-11-14 external evidence: ReAct (arXiv 2210.03629, Frank)
+
+ReAct (Yao et al., ICLR 2023) interleaves Thought-Action-Observation.
+HotpotQA failure analysis (200 hand-labeled trajectories): CoT fails
+through hallucination (56% of its failures, false-positive rate 14% vs
+ReAct 6%); ReAct fails through reasoning errors (47%, including
+repetition loops) and non-informative search (23% - a bad search result
+derails the trajectory and it struggles to recover). Best prompting is
+a fallback combination: ReAct -> CoT-SC when no answer within 7 steps,
+CoT-SC -> ReAct when the internal majority answer is unsure.
+
+The finding that matters for our memory thesis: finetuning on 3,000
+self-generated ReAct trajectories makes PaLM-8B outperform ALL 62B
+prompting methods, and PaLM-62B outperform ALL 540B prompting methods.
+Finetuning Standard or CoT teaches models to memorize (potentially
+hallucinated) knowledge FACTS; finetuning ReAct teaches the
+generalizable SKILL of how to reason and act to retrieve information.
+
+This is direct empirical support for our split: procedural skill ->
+weights (trainable, generalizable), facts -> external (retrieved, never
+memorized). Connections: (1) arm D doubly motivated - Codacus says the
+small specialist needs search, ReAct gives the concrete format (and
+shows act-only without reasoning traces is worse than the interleave);
+(2) the finetuning result is the capacity argument for growing-LoRA: a
+small model with the trained procedure beats a big model with
+prompting; (3) the internal-unsure-then-external fallback is a concrete
+routing signal for the pheromone slice 14.15.10.
