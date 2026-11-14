@@ -1213,9 +1213,13 @@ Status (2026-11-14): stage 2 done — `memnc.bench.runner`:
     identical prompts, only temperature varies).
   - `bench-report.md` with success rates, Wilson score intervals,
     tokens and wallclock per arm. Tests: tests/test_bench_runner.py
-    (9 tests, FakeBackend scripted). First live report: smoke run in
-    progress (easy tier, local ollama); full overnight run over the
-    backlog driver next.
+    (9 tests, FakeBackend scripted). First live reports (rep 0,
+    qwen2.5-coder:32b via local ollama, docs/bench/): easy 24/24 and
+    medium 24/24 pass in ALL arms (ceiling effect - only the hard tier
+    discriminates). Hard: A 6/8, B 8/8, C 6/8 - SELF-REFLECTION beat
+    the mesh, which matched single-shot at ~7x the token cost. First
+    repo-own evidence for the single-agent>multi-structure finding;
+    full seeded run (reps>=5) + raised inference timeout next.
 
 ### 14.15.10 Slice: pheromone routing (PROPOSED 2026-11-14, gated on bench evidence)
 
