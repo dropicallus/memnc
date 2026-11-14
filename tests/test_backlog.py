@@ -234,3 +234,85 @@ def test_make_strong_retry_copies_prompt_and_sets_target() -> None:
     assert retry.prefer_node == "node-a"
     assert retry.title.startswith("[strong-retry] ")
     assert retry.id != src.id
+
+
+def _mark_failed(store, task_id: str):
+    """Drive one task through the full attempt budget."""
+    for _ in range(MAX_ATTEMPTS):
+        claimed = asyncio.run(store.claim(task_id, "drv"))
+        assert claimed is not None
+        asyncio.run(store.mark(task_id, "failed"))
+
+
+def test_terminal_failure_cascades_to_direct_dependents():
+    store, _ = _store()
+    a = asyncio.run(store.add("a"))
+    b = asyncio.run(store.add("b", deps=[a.id]))
+    c = asyncio.run(store.add("c", deps=[a.id]))
+    _mark_failed(store, a.id)
+    tasks = {t.id: t for t in asyncio.run(store.list())}
+    assert tasks[a.id].status == "failed"
+    assert tasks[b.id].status == "failed"
+    assert tasks[c.id].status == "failed"
+    # cascade-failed tasks never ran: attempts stay 0
+    assert tasks[b.id].attempts == 0
+
+
+def test_cascade_is_transitive():
+    store, _ = _store()
+    a = asyncio.run(store.add("a"))
+    b = asyncio.run(store.add("b", deps=[a.id]))
+    c = asyncio.run(store.add("c", deps=[b.id]))
+    _mark_failed(store, a.id)
+    tasks = {t.id: t for t in asyncio.run(store.list())}
+    assert tasks[b.id].status == "failed"
+    assert tasks[c.id].status == "failed"
+
+
+def test_cascade_spares_independent_and_inflight_tasks():
+    store, _ = _store()
+    a = asyncio.run(store.add("a"))
+    dep = asyncio.run(store.add("dep", deps=[a.id]))
+    free = asyncio.run(store.add("free"))
+    asyncio.run(store.claim(free.id, "drv"))  # in flight
+    _mark_failed(store, a.id)
+    tasks = {t.id: t for t in asyncio.run(store.list())}
+    assert tasks[free.id].status == "claimed"
+    assert tasks[dep.id].status == "failed"
+
+
+def test_non_terminal_failure_does_not_cascade():
+    store, _ = _store()
+    a = asyncio.run(store.add("a"))
+    b = asyncio.run(store.add("b", deps=[a.id]))
+    claimed = asyncio.run(store.claim(a.id, "drv"))
+    assert claimed is not None
+    asyncio.run(store.mark(a.id, "failed"))  # attempt 1/3 -> back to planned
+    tasks = {t.id: t for t in asyncio.run(store.list())}
+    assert tasks[a.id].status == "planned"
+    assert tasks[b.id].status == "planned"
+
+
+def test_done_dep_still_gates_next_claimable():
+    store, _ = _store()
+    a = asyncio.run(store.add("a"))
+    b = asyncio.run(store.add("b", deps=[a.id]))
+    # claim a (it is claimable itself), complete it, then b unlocks
+    got = asyncio.run(store.next_claimable("drv"))
+    assert got is not None and got.id == a.id
+    asyncio.run(store.mark(a.id, "done", mesh_task_id="m1"))
+    got = asyncio.run(store.next_claimable("drv"))
+    assert got is not None and got.id == b.id
+
+
+def test_cascade_ids_still_claimable_after_done_dep():
+    store, _ = _store()
+    a = asyncio.run(store.add("a"))
+    b = asyncio.run(store.add("b", deps=[a.id]))
+    c = asyncio.run(store.add("c", deps=[a.id]))
+    _mark_failed(store, a.id)
+    # the whole chain is terminal: nothing is claimable, no deadlock loop
+    assert asyncio.run(store.next_claimable("drv")) is None
+    assert {t.status for t in asyncio.run(store.list())} == {"failed"}
+    assert len({t.id for t in asyncio.run(store.list())}) == 3
+    assert b.id and c.id  # keep names referenced

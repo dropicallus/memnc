@@ -206,11 +206,45 @@ class BacklogStore:
         if status == BACKLOG_FAILED:
             task.attempts += 1
             # retry budget exhausted -> stay failed, otherwise back to planned
-            if task.attempts < MAX_ATTEMPTS:
+            if task.attempts >= MAX_ATTEMPTS:
+                # failed-chain semantics: dependents of a terminally failed
+                # task can never run, so cascade-fail them (planned only).
+                await self.fail_dependents(backlog_id)
+            else:
                 task.status = "planned"
                 task.claimant = ""
         await kv.put(backlog_id, task.model_dump_json().encode())
         return task
+
+    async def fail_dependents(self, failed_id: str) -> list[str]:
+        """Cascade-fail every planned task that (transitively) depends on a
+        terminally failed task.
+
+        A dependent whose dep can never reach ``done`` would deadlock
+        ``next_claimable`` forever. Claimed dependents are left alone: they
+        are in flight and will terminate (and cascade) on their own.
+        Cascade-failed tasks keep their attempts (they never ran).
+        """
+        tasks = await self.list()
+        by_id = {t.id: t for t in tasks}
+        failed = {failed_id}
+        cascaded: list[str] = []
+        changed = True
+        while changed:
+            changed = False
+            for task in tasks:
+                if task.id in failed or task.status != "planned":
+                    continue
+                if any(dep in failed for dep in task.deps):
+                    task.status = BACKLOG_FAILED
+                    task.updated_at = _now()
+                    failed.add(task.id)
+                    cascaded.append(task.id)
+                    changed = True
+        for task_id in cascaded:
+            kv = await self._ensure_kv()
+            await kv.put(task_id, by_id[task_id].model_dump_json().encode())
+        return cascaded
 
     async def next_claimable(self, claimant: str) -> BacklogTask | None:
         """First planned task whose deps are all done; claims it atomically."""
