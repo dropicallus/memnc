@@ -1159,3 +1159,34 @@ Status (2026-11-14): stage 1 done — `memnc.bench` package:
     accept them and reject a stub (tests/test_bench.py, 10 tests).
   Checker protocol: `check_<task_id>(workdir) -> list[str]`; empty list
   = pass. `verify_task()` is the single entry point for the runner.
+
+### 14.15.10 Slice: pheromone routing (PROPOSED 2026-11-14, gated on bench evidence)
+
+Frank's framing: "Ich komme ja aus den Routing Algorithmen" — routing as the
+mental model for mesh coordination. Synthesis of AMRO-S (arXiv 2603.12933),
+Meta-Harness (2603.28052) and SkillDuet (2611.12109v2) into mesh vocabulary:
+
+1. Adjacency matrix -> roster graph: nodes = agents (node-a/b/c + roles),
+   edge weights = cost / latency / success rate per (edge, task_type).
+2. Label-Setting = today's FSM: Dijkstra-fixiert, deterministic. This is
+   WHY models don't "discuss": exactly one path is chosen, no alternatives
+   are ever explored.
+3. Label-Correcting = multiple pitches: k parallel coder drafts on the same
+   task; convergence via verify + voting, NOT via open debate (sycophancy:
+   correct answers flip under pressure — "Talk Isn't Always Cheap", 2025).
+4. Ant colony = KV pheromones: tau in a `routing` KV bucket per
+   (task_type, edge); deposit only on quality-gated success (task.done with
+   deterministic verify pass), evaporation via a decay job, selection
+   p proportional to tau^alpha * eta^beta, epsilon-exploration so unused
+   edges stay reachable.
+5. SkillDuet-Strength = the deposit rule: paired A/B comparison (log-prob
+   shift with/without a note); no shift = internalized = drop the note.
+   (Frank validated this as valid, together with point 6.)
+6. Konsens-Protokoll direkt: agents agree directly — peer-to-peer voting
+   over pitches in KV — no central FSM that decides alone.
+
+Gate (Frank, 2026-11-14): "Lass uns aber erst den Benchmark und die
+Evidenz aufsetzen" — do NOT implement routing before bench-report.md
+numbers exist. Initialize alpha/beta/tau0 from measured benchmark data,
+not guesses. Evidence and model profiles land in docs/experience.md
+(shared, committed experience store).
