@@ -106,3 +106,51 @@ gap is now first REPO-OWN evidence for the single-agent>multi-structure
 finding - more structure bought zero success over self-reflection.
 Next: full 3-tier x 3-arm run with >=5 seeded reps for tight CIs, and
 the harness arm question (execution tools) stays open as arm D.
+
+## 2026-11-14 external evidence: Codacus video + weightpatch (planner sizing + search for specialists)
+
+Two external sources, read at Frank's request, both map onto the bench
+results and the routing roadmap.
+
+Codacus video (youtube PZQWdlTi9B0, "Is this how Local AI reaches
+Frontier Capabilities?", 2026-11-14): a team of small specialists on one
+RTX 3060 LOST to its own planner running alone on 4 real jobs with
+pre-locked checkers. His root cause was the BRIEF - experts only saw
+the planner's summary, never the original request. We verified our
+runner does NOT have this failure mode: task.prompt goes to coder AND
+critic in every arm (runner.py:171/260/342), so our B-vs-C gap is
+CLEANER evidence than his - structure itself failed, not information
+loss at the handoff. Two further findings: (1) per-step-easy,
+whole-job-fails - a 30-step terminal job compounds small mistakes via
+self-conditioning (own error in context raises next-error probability;
+terminal-bench spread GPT-5.5 85% vs T-Max-9B 27%). This explains why
+our arm B self-reflection won: reflection breaks the loop. (2) His
+weight-editing attempt (Sparks of Weight-Space Programming / Boncio
+toolkit) confirms weight surgery only works on one clear bug at one
+place (24% -> 16-17%, model reroutes); a habit spread across a long job
+is a decision repeated at every step - needs a better planner, not
+neuron removal. Support for the parametric-memory thesis: real capacity
+comes from training (Carbon-X mid-training on 300B DNA tokens), not
+surgery.
+
+Core recommendation (Frank-emphasized): the PLANNER must be big - the
+best model the card fits - and the small specialists need SEARCH,
+because facts do not fit in small weights ("the student goes to the
+library"). Skill lives in weights (coaching), facts come from outside
+(library). For memnc: (a) the planner role should route to the
+strongest node - a planner-capacity bonus for the pheromone-routing
+slice 14.15.10; (b) "specialist + search tools" is the clean arm-D
+hypothesis (our bench agents run tools=None by design, so arm D =
+execution/retrieval tools, not just a harness); (c) no RAG conflict -
+the split matches ours: procedural skill -> weights, facts -> retrieve.
+
+weightpatch (github SuperMarioYL/weightpatch v0.1.0, MIT): the missing
+HANDOFF layer for weight edits. diff two safetensors dirs into a sparse
+.wpatch (changed slices only, raw machine words, BF16 bit-exact),
+apply/revert (byte-identical)/stack, and screen verifies which edited
+slices survived requantization into a single-file GGUF (name remap,
+GGML ne-order transposition, packed blocks). Content-addressed id,
+per-tensor before_sha256 pre-image check. Directly relevant to the
+growing-LoRA / Fisher-merge memory vision: sparse, revertable,
+content-addressed patches with a post-quantization check are a
+candidate transfer format for weight-borne memory BETWEEN nodes.
