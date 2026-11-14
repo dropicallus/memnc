@@ -2,6 +2,17 @@
 
 ## Built
 
+- **2026-11-14 — Retry with intent (P1 item 6)**: `/retry <id> --model
+  <name>` reruns a FAILED/CANCELLED task on a chosen model. `ControlCommand`
+  gains `model_override`; the retry branch in the orchestrator stamps it on
+  the snapshot (`TaskSnapshot.model_override`) and the re-dispatch payload
+  carries it, so the worker's `_run_impl` uses it instead of the role
+  default for every re-dispatch of that snapshot (plain retries keep the
+  previously recorded override). Telegram parses the flag, the API write
+  verb `task.retry` forwards it, and buttons still work unchanged. Tests:
+  `tests/test_retry_intent.py` (7 cases: orchestrator stamping, payload
+  forwarding, worker model choice, Telegram parsing).
+
 - **2026-11-14 — Node revocation tombstones (§21.3)**: `meshctl
   revoke-node <id> --reason --by` writes a tombstone into the new KV bucket
   `mesh_revocations` (durable, included in cold-standby backup), withdraws
@@ -584,10 +595,9 @@ today.
 5. **Task output delivered to chat.** On completion, push the result
    artifact (or its path/summary) with the final event, not just ledger
    state. Fix: no second tool hop to read what the mesh produced.
-6. **Retry with intent.** `/retry <id> --model qwen2.5-coder:7b` (or a
-   button variant) overrides the model for the rerun; `/retry` alone
-   keeps the recorded route. Fixes: rerunning a task into the same
-   failing configuration.
+6. **~~Retry with intent.~~ DONE 2026-11-14** — `/retry <id> --model <name>`
+   overrides the model for the rerun; `/retry` alone keeps the recorded
+   route. See the Built entry below.
 7. **Command discovery.** Register the command list with BotFather
    (setMyCommands) so Telegram autocompletes; `/help` prints the same
    list grouped (view / act / decide). Fix: the dense one-line usage

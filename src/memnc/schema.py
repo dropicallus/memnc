@@ -130,6 +130,7 @@ class ControlCommand(BaseModel):
     approved: bool | None = None  # decide only
     text: str = ""  # answer only: the human's reply to the agent's question
     gate: str = ""  # submit only: "always" | "fail" | "never"
+    model_override: str = ""  # retry only: rerun with this model instead of the role default
     reason: str = ""
 
     def gate_value(self) -> Literal["always", "fail", "never"]:
@@ -650,6 +651,9 @@ class TaskSnapshot(BaseModel):
     # 14.14 per-task harness: carried over from TaskSubmission.harness; the
     # dispatch/claim payload carries it to the coder worker ("" = node default).
     harness: str = ""
+    # Retry-with-intent: model set by a human retry command; workers use it
+    # instead of their role default for every re-dispatch of this snapshot.
+    model_override: str = ""
     # T4 (model-routing-visible): role -> "node:model" for every executed
     # step, recorded from the worker's result payloads. Shows which model
     # actually handled each pipeline stage.

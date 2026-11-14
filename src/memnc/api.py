@@ -140,6 +140,7 @@ class ApiServer:
             node=str(args.get("node") or ""),
             approved=args.get("approved"),
             gate=str(args.get("gate") or ""),
+            model_override=str(args.get("model_override") or ""),
         )
         assert self.bus.nc is not None
         reply = await self.bus.nc.request(

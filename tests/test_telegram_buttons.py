@@ -148,7 +148,7 @@ def test_retry_command_resolves_prefix():
     obs = _observer(_FakeBus([_snap(SNAP_A)]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -160,7 +160,7 @@ def test_retry_ambiguous_prefix_sends_no_control_call():
     obs = _observer(_FakeBus([_snap("aabbcc11223344"), _snap("aabbcc55667788")]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -173,7 +173,7 @@ def test_retry_short_prefix_is_refused():
     obs = _observer(_FakeBus([_snap(SNAP_A)]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -192,7 +192,7 @@ def test_gate_command_resolves_prefix():
     obs = _observer(_FakeBus([_snap(SNAP_A)]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -207,7 +207,7 @@ def test_callback_task_retry_routes_to_control_and_edits_card():
     obs = _observer(_FakeBus([]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -220,7 +220,7 @@ def test_callback_task_cancel_routes_to_control():
     obs = _observer(_FakeBus([]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -245,7 +245,7 @@ def test_callback_node_pause_resume_routes_to_control():
     obs = _observer(_FakeBus([]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -267,7 +267,7 @@ def test_run_callback_unauthorized_chat_only_answers():
     obs = _observer(_FakeBus([]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]
@@ -286,7 +286,7 @@ def test_run_callback_authorized_press_end_to_end():
     obs = _observer(_FakeBus([]))
     calls: list[tuple] = []
 
-    async def fake_control(chat, action, argument):
+    async def fake_control(chat, action, argument, model_override: str = ""):
         calls.append((chat, action, argument))
 
     obs._control = fake_control  # type: ignore[method-assign]

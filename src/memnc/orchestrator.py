@@ -221,6 +221,10 @@ class Orchestrator:
                     raise ValueError(
                         f"retry needs a FAILED/CANCELLED task, {snapshot.task_id} is {snapshot.state.value}"
                     )
+                # Retry-with-intent: a non-empty --model override reroutes every
+                # re-dispatch of this snapshot; a plain retry keeps the old value.
+                if cmd.model_override.strip():
+                    snapshot.model_override = cmd.model_override.strip()
                 snapshot.state = TaskState.RECEIVED
                 snapshot.record("human.retry", f"by={cmd.agent_id}")
                 await self.bus.put_snapshot(snapshot)
@@ -720,6 +724,7 @@ class Orchestrator:
                 "role": role.value,
                 "prefer_node": snapshot.prefer_node,
                 "harness": snapshot.harness,
+                "model_override": snapshot.model_override,
                 # P4 slice 2: mesh code fingerprint — stale workers refuse.
                 "mesh_version": code_version(),
             },

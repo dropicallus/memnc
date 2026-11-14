@@ -632,7 +632,9 @@ class Worker:
 
     async def _run_impl(self, envelope: Envelope, snapshot: TaskSnapshot) -> ResultPayload:
         role = envelope.role or self.role
-        model = self.settings.model_for(role)
+        # Retry-with-intent: an explicit model override on the snapshot wins
+        # over the worker's role default.
+        model = (envelope.payload or {}).get("model_override") or self.settings.model_for(role)
         # M16 mesh-clarify: this command is a peer consult, not a role run.
         consult = (envelope.payload or {}).get("consult")
         if consult:
@@ -1032,6 +1034,7 @@ class Worker:
                     "workspace_root": str(self.settings.workspace_root),
                     "role": role.value,
                     "harness": snapshot.harness,
+                    "model_override": snapshot.model_override,
                 },
             )
             try:

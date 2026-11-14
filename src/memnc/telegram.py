@@ -553,12 +553,32 @@ class TelegramObserver:
                 await self._control(chat, "decide", f"{tid} {parts[1]}")
         elif cmd in ("submit", "cancel", "retry"):
             argument = parts[1] if len(parts) >= 2 else ""
+            if cmd == "retry" and len(parts) >= 3:
+                # Retry flags ride in the third split part ("--model <name>").
+                argument = f"{argument} {parts[2]}"
+            model_override = ""
+            if cmd == "retry":
+                # Retry-with-intent: "/retry <id> --model <name>" reruns the
+                # task on a different model; plain "/retry <id>" keeps the old.
+                words = argument.split()
+                if "--model" in words:
+                    idx = words.index("--model")
+                    if idx + 1 < len(words):
+                        model_override = words[idx + 1]
+                        words = words[:idx] + words[idx + 2 :]
+                    else:
+                        model_override = "__missing__"
+                if words:
+                    argument = words[0]
             if cmd in ("cancel", "retry") and argument:
                 tid = await self._resolve_task(chat, argument)
                 if not tid:
                     return
                 argument = tid
-            await self._control(chat, cmd, argument)
+            if model_override == "__missing__":
+                await self.bot.send_message(chat, "usage: /retry <task-id> --model <name>")
+                return
+            await self._control(chat, cmd, argument, model_override=model_override)
         elif cmd == "stop" and len(parts) >= 3 and parts[1].lower() == "worker":
             await self._control(chat, "stop_worker", parts[2])
         else:
@@ -621,7 +641,9 @@ class TelegramObserver:
                 except Exception:  # noqa: BLE001 - cosmetic only
                     pass
 
-    async def _control(self, chat: str, action: str, argument: str) -> None:
+    async def _control(
+        self, chat: str, action: str, argument: str, model_override: str = ""
+    ) -> None:
         """Send the command through the mesh API write path.
 
         The API server forwards it to the orchestrator's mesh.control gate
@@ -652,6 +674,8 @@ class TelegramObserver:
             args["approved"] = len(words) >= 2 and words[1] == "approve"
         elif action in ("cancel", "retry"):
             args["task_id"] = argument.split()[0].lstrip("#")
+            if model_override:
+                args["model_override"] = model_override
         else:
             args["node"] = argument
         try:
