@@ -45,7 +45,7 @@ def test_watcher_ignores_state_failed_then_sees_done() -> None:
     assert asyncio.run(run()) == "task.done"
 
 
-def test_watcher_done_via_state_done() -> None:
+def test_watcher_done_via_state_event_maps_to_done() -> None:
     events = ["state.coding", "state.done"]
     client = MagicMock()
     client.jetstream = MagicMock(
