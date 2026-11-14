@@ -78,3 +78,14 @@ is the cost side: mean wallclock A 50s / B 53s / C 420s and mean tokens
 A 435 / B 854 / C 3207. The mesh is 7.4x the token cost of a single
 shot on tasks a single model already solves. Discriminating evidence
 must come from medium/hard tiers where single-shot actually fails.
+
+## 2026-11-14 bench medium tier (rep 0, ollama qwen2.5-coder:32b)
+
+Medium: 24/24 passed, all arms 100% - qwen2.5-coder:32b solves the whole
+medium tier single-shot. Cost gap persists: tokens A 521 / B 1913 /
+C 4346 (8.3x), wallclock A ~52s / C ~10min. Interesting: arm B used
+0.75 self-critique rounds on average (the model sometimes reflects even
+when right), arm C needed 1.88 revision rounds. Difficulty must come
+from the hard tier; easy AND medium are saturated by the strong coder
+model. Next: hard tier overnight; consider weaker coder for tier
+contrast or more reps for tighter CIs.
