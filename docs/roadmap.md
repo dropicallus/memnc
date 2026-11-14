@@ -1190,3 +1190,48 @@ Evidenz aufsetzen" — do NOT implement routing before bench-report.md
 numbers exist. Initialize alpha/beta/tau0 from measured benchmark data,
 not guesses. Evidence and model profiles land in docs/experience.md
 (shared, committed experience store).
+
+### 14.15.11 Slice: swarm-to-human legibility (PROPOSED 2026-11-14, discussion first)
+
+Frank's insight (2026-11-14): memnc analyzes model-to-model interaction, but the
+real product interface is **swarm-to-human** — a human directing, observing and
+collaborating with the mesh. Kreative Mensch-Agenten-Kollaboration ist kaum im
+Mainstream angekommen; das Feld heisst in der Forschung Human-Swarm Interaction
+(HSI, aus Robotik/UAV) + Human-Agent Teaming (HAT). Edge-Thema, mega spannend.
+
+Research grounding (2026-11-14 chat, sources verified):
+1. Human-Swarm Interaction (arXiv 2504.02250): humans steer swarms via collective
+   variables (situational awareness, task allocation, collective perception), not
+   per-agent dialog. 10 design principles from goal-directed task analysis.
+2. "From Conversation to Orchestration" (ACM 2025): interaction paradigm shifts
+   from dialog to orchestration — open HCI problems: making orchestration and
+   conflict resolution visible, accountability (WHO of the 5 said this),
+   control over a nondeterministic collective.
+3. "Multi-Agents are Social Groups" (arXiv 2411.04578, n=94): a swarm exerts REAL
+   social group pressure on the human — 3 disagreeing agents shift opinion more
+   than 1. BUT 5 agents != more influence than 3; larger groups tip into
+   polarization and rejection. Human analog of the N_c critical-group-size result.
+4. CASA vs machine-heuristic (Human Communication Research 2025): humans treat
+   machines as-if social (mindless social scripts) but the swarm has no social
+   accountability — you get human-side sycophancy excuses ("5 agreed") without
+   real consolidation behind it.
+5. Gricean maxims for human-LLM (arXiv 2503.00858): common ground breaks; maxims
+   must be reinterpreted (quantity = manage cognitive load; quality = evidential
+   trust-building; relevance = context management).
+
+Design consequence for memnc: humans need not more dialogue but LEGIBILITY.
+- (a) Present the collective as ONE entity: roster + pheromone heat as the
+  swarm's "mood"/state, aggregated views (bench-report style), not per-agent logs.
+- (b) Provenance everywhere: which model produced which contribution, at what
+  confidence — docs/experience.md is the human-readable "who is good at what" layer.
+- (c) Surface conflicts, don't hide them: dissenting pitches shown as pitches,
+  verify-gate outcomes as first-class UI objects.
+- (d) Discount group pressure: "3 agents agree" is a WEAKER signal than one
+  passed deterministic check. Verify-gate > Konsens remains the ground rule —
+  the swarm-to-human asymmetry (CASA without accountability) is exactly why.
+- (e) Shared mental model (HAT): the human's model of "who can what" must be
+  kept calibrated (trust calibration) — experience.md + routing KV as its basis.
+
+Status: DISCUSSION POINT (Frank: "Ja mach rein ... mega spannend"). No UI work
+yet — writes-before-code rule. Candidate content for the UI P0 slice and the
+meshctl surface; independent of bench, can start after stage-2 runner.
