@@ -97,6 +97,9 @@ class BacklogTask(BaseModel):
     # set) once this one exhausts its attempts on the weak pool.
     strong_retry: bool = False
     prefer_node: str = ""
+    # 14.14 per-task harness: forwarded into the TaskSubmission the driver
+    # builds ("" = node default Settings.harness_coder).
+    harness: str = ""
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
 
@@ -126,6 +129,7 @@ class BacklogStore:
         deps: list[str] | None = None,
         prefer_node: str = "",
         strong_retry: bool = False,
+        harness: str = "",
     ) -> BacklogTask:
         task = BacklogTask(
             title=title,
@@ -134,6 +138,7 @@ class BacklogStore:
             deps=deps or [],
             prefer_node=prefer_node,
             strong_retry=strong_retry,
+            harness=harness,
         )
         kv = await self._ensure_kv()
         await kv.put(task.id, task.model_dump_json().encode())
@@ -287,4 +292,5 @@ def make_strong_retry(task: BacklogTask, strong_node: str) -> BacklogTask:
         deps=list(task.deps),
         strong_retry=True,
         prefer_node=strong_node,
+        harness=task.harness,
     )

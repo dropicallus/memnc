@@ -639,8 +639,9 @@ class Worker:
             return await self._run_consult(envelope, role, model, consult)
         # Harness layer (14.14): external harnesses take the coder role via
         # the generic Harness contract; "inproc" keeps the built-in loop.
-        if role is Role.CODER and self.settings.harness_coder != "inproc":
-            return await self._run_harness(envelope, role, model)
+        harness_name = (envelope.payload or {}).get("harness") or self.settings.harness_coder
+        if role is Role.CODER and harness_name != "inproc":
+            return await self._run_harness(envelope, role, model, harness_name)
         self._written_files = {}
         tools = (
             list(self.tools.schemas)
@@ -720,20 +721,23 @@ class Worker:
             tool_steps=run.tool_steps,
         )
 
-    async def _run_harness(self, envelope: Envelope, role: Role, model: str) -> ResultPayload:
+    async def _run_harness(
+        self, envelope: Envelope, role: Role, model: str, harness_name: str = ""
+    ) -> ResultPayload:
         """Run the coder role through an external harness (workspace state).
 
         The harness edits the workspace directly; we harvest the changed
         files back into CoderOutput so the orchestrator/critic contract is
         unchanged (14.14).
         """
+        harness_name = harness_name or self.settings.harness_coder
         if role is not Role.CODER:
             return ResultPayload(
                 ok=False,
-                error=f"harness {self.settings.harness_coder!r} runs the coder role only",
+                error=f"harness {harness_name!r} runs the coder role only",
             )
         prompt = build_user_prompt(role, envelope.payload or {})
-        harness = get_harness(self.settings.harness_coder, model=model)
+        harness = get_harness(harness_name, model=model)
         workspace = Path(self.settings.workspace_root)
         try:
             result = await harness.run(
@@ -744,7 +748,7 @@ class Worker:
         if not result.ok:
             return ResultPayload(
                 ok=False,
-                error=result.error or f"harness {self.settings.harness_coder} failed",
+                error=result.error or f"harness {harness_name} failed",
                 tool_steps=result.tool_events,
             )
         changed = await changed_file_contents(
@@ -1027,6 +1031,7 @@ class Worker:
                     "revisions": snapshot.revisions,
                     "workspace_root": str(self.settings.workspace_root),
                     "role": role.value,
+                    "harness": snapshot.harness,
                 },
             )
             try:

@@ -155,6 +155,7 @@ class Orchestrator:
             claimable=submission.claimable,
             needs=submission.needs,
             prefer_node=submission.prefer_node,
+            harness=submission.harness,
             gate=submission.gate,
             # M14: worker-driven pipeline for claimable tasks
             next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
@@ -718,6 +719,7 @@ class Orchestrator:
                 "workspace_root": str(self.settings.workspace_root),
                 "role": role.value,
                 "prefer_node": snapshot.prefer_node,
+                "harness": snapshot.harness,
                 # P4 slice 2: mesh code fingerprint — stale workers refuse.
                 "mesh_version": code_version(),
             },

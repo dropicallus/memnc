@@ -865,7 +865,8 @@ the harness (deterministic via monkeypatch, immune to test pollution), default
 stays inproc.
 
 
-Status: core built + proven end-to-end; worker wiring is the next slice.
+Status: core built + proven end-to-end; worker wiring and per-task selection
+are built (see above). Remaining: DiscussHarness.
 
 The weak->strong proof (7b dirty pass -> produktiv fixer, 11/11 green in
 `~/memnc-harness-wt`) showed the *product* of a coding agent is workspace
@@ -893,6 +894,27 @@ model works on a workspace*).
 **Config:** `harness_coder: str = "inproc"` in Settings (opt-in; "inproc"
 keeps the worker's own tool loop as default).
 
+### Per-task harness selection (slice 3, DONE 2026-11-14)
+
+The harness is now selectable per task, not only per node, so one mesh can
+mix cheap dirty drafts and strong fixes:
+
+- `TaskSubmission.harness` ("" = node default) -> `TaskSnapshot.harness`.
+  The orchestrator's claim payload carries it (`"harness": snapshot.harness`),
+  as does the worker-driven self-pipeline payload.
+- `Worker._run_impl` resolves the coder harness as
+  `envelope.payload.get("harness") or settings.harness_coder`; `""`/missing
+  falls back to the node default, and a payload `harness == "inproc"` forces
+  the built-in loop even on a node configured for an external harness.
+- `meshctl submit --harness <name>` sets it on a direct submission;
+  `meshctl backlog-add --harness` and `meshctl backlog-plan --harness`
+  stamp every generated backlog entry, and the backlog driver forwards
+  `claimed.harness` into its `TaskSubmission` (strong retries preserve it
+  via `make_strong_retry`).
+- Tests: payload override wins over the node default, payload `inproc`
+  bypasses the node's external harness, empty payload falls back, backlog
+  roundtrip + claim + strong-retry carry the field.
+
 **Tests:** `tests/test_harnesses.py` — event parsing (tools/summary/settled,
 noise tolerance, error turns), registry selection, and subprocess behavior
 (ok path, nonzero exit, timeout kills the whole tree <10s, missing binary)
@@ -905,7 +927,8 @@ using throwaway fake `pi` scripts.
    (diff -> evidence; Critic stays harness-agnostic).
 2. `ToolLoopHarness`: wrap the worker's in-proc loop in the same protocol so
    routing sees one interface.
-3. Per-task harness selection (instead of per-node config) — the step toward
+3. ~~Per-task harness selection (instead of per-node config)~~ DONE (see
+   "Per-task harness selection" above) — the step toward
    mesh self-organization: cheap models draft dirty, strong models fix.
 4. `DiscussHarness` (multi-model debate) on the same contract.
 

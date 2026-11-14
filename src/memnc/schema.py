@@ -599,6 +599,9 @@ class TaskSubmission(BaseModel):
     # Weak->strong routing: when set, workers on other nodes nak the command
     # (skip it) so only this node's worker picks it up. "" = any node.
     prefer_node: str = ""
+    # 14.14 per-task harness selection: overrides Settings.harness_coder for
+    # this task's coder role ("" = fall back to the node default).
+    harness: str = ""
 
     @field_validator("task")
     @classmethod
@@ -644,6 +647,9 @@ class TaskSnapshot(BaseModel):
     needs: TaskNeeds | None = None
     # Weak->strong routing: carried over from TaskSubmission.prefer_node.
     prefer_node: str = ""
+    # 14.14 per-task harness: carried over from TaskSubmission.harness; the
+    # dispatch/claim payload carries it to the coder worker ("" = node default).
+    harness: str = ""
     # T4 (model-routing-visible): role -> "node:model" for every executed
     # step, recorded from the worker's result payloads. Shows which model
     # actually handled each pipeline stage.

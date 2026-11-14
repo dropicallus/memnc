@@ -77,6 +77,7 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             # T6: optional capability constraints for the claim gate.
             needs=_needs_from_args(args),
             gate=args.gate,  # type: ignore[arg-type]
+            harness=getattr(args, "harness", "") or "",
         )
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
@@ -577,9 +578,14 @@ async def _backlog_store(client) -> BacklogStore:
     return BacklogStore(client.jetstream())
 
 
-async def _backlog_submit(client, settings: Settings, prompt: str, prefer_node: str = "") -> str:
+async def _backlog_submit(
+    client, settings: Settings, prompt: str, prefer_node: str = "", harness: str = ""
+) -> str:
     """Submit one backlog task to the mesh, return the mesh task id."""
-    submission = TaskSubmission(task=prompt, context="", fanout=1, claimable=True, prefer_node=prefer_node)
+    submission = TaskSubmission(
+        task=prompt, context="", fanout=1, claimable=True,
+        prefer_node=prefer_node, harness=harness,
+    )
     response = await client.request(
         SUBJECT_SUBMIT_NODE.format(node=settings.node_name),
         submission.model_dump_json().encode(),
@@ -626,6 +632,7 @@ async def cmd_backlog_add(args: argparse.Namespace, settings: Settings) -> int:
             prompt=args.prompt or args.title,
             plan_id=args.plan_id or "",
             deps=args.dep or [],
+            harness=args.harness or "",
         )
         print(task.id)
         return 0
@@ -662,7 +669,11 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
     print(f"{driver}: claimed {claimed.id} ({claimed.title})", flush=True)
     try:
         mesh_task_id = await _backlog_submit(
-            client, settings, claimed.prompt, prefer_node=claimed.prefer_node
+            client,
+            settings,
+            claimed.prompt,
+            prefer_node=claimed.prefer_node,
+            harness=claimed.harness,
         )
         await store.mark(claimed.id, "claimed", mesh_task_id=mesh_task_id)
         event = await _backlog_watch(client, mesh_task_id)
@@ -686,6 +697,7 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
                 deps=retry.deps,
                 prefer_node=retry.prefer_node,
                 strong_retry=True,
+                harness=retry.harness,
             )
             print(
                 f"{driver}: strong-retry queued (prefer {retry.prefer_node}) for {claimed.id}",
@@ -713,7 +725,10 @@ async def _backlog_plan(args: argparse.Namespace, settings: Settings) -> int:
             words = text.split()
             title = " ".join(words[:8]) + ("..." if len(words) > 8 else "")
             deps = [prev_id] if args.chain and prev_id else []
-            task = await store.add(title=title, prompt=text, plan_id=args.plan_id, deps=deps)
+            task = await store.add(
+                title=title, prompt=text, plan_id=args.plan_id, deps=deps,
+                harness=args.harness or "",
+            )
             prev_id = task.id
             print(f"added {task.id} [{i}/{len(tasks)}] deps={deps} {title}")
         return 0
@@ -837,6 +852,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["always", "fail", "never"],
         help="T3: human approval gate at the critique step",
     )
+    submit.add_argument(
+        "--harness", default="", help="14.14: coder harness for this task (e.g. pi); empty = node default"
+    )
     submit.set_defaults(func=cmd_submit)
 
     gate = subparsers.add_parser(
@@ -956,6 +974,10 @@ def build_parser() -> argparse.ArgumentParser:
     backlog_add.add_argument("--prompt", default="", help="coder prompt; defaults to title")
     backlog_add.add_argument("--plan-id", default="")
     backlog_add.add_argument("--dep", action="append", help="backlog id this depends on")
+    backlog_add.add_argument(
+        "--harness", default="",
+        help="coder harness for this task (e.g. pi); empty = node default",
+    )
     backlog_add.set_defaults(func=cmd_backlog_add)
 
     backlog_list = subparsers.add_parser("backlog-list", help="list backlog entries")
@@ -971,6 +993,10 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--chain", action="store_true",
                              help="make each task depend on the previous one (sequential plan)")
     plan_parser.add_argument("--dry-run", action="store_true", help="print the tasks without adding")
+    plan_parser.add_argument(
+        "--harness", default="",
+        help="coder harness for every generated task (e.g. pi); empty = node default",
+    )
     plan_parser.set_defaults(func=cmd_backlog_plan)
 
     backlog_reset = subparsers.add_parser("backlog-reset", help="re-plan a backlog entry")
