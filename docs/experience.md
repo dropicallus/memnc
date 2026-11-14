@@ -89,3 +89,20 @@ when right), arm C needed 1.88 revision rounds. Difficulty must come
 from the hard tier; easy AND medium are saturated by the strong coder
 model. Next: hard tier overnight; consider weaker coder for tier
 contrast or more reps for tighter CIs.
+
+## 2026-11-14 bench hard tier (rep 0, ollama qwen2.5-coder:32b) - THE discriminator
+
+Hard: A 6/8 (75%), B 8/8 (100%), C 6/8 (75%). The single tier that
+separates the arms - and the winner is SELF-REFLECTION, not the mesh:
+B rescued both A-failures (rate_limiter burst rule, dijkstra edge case)
+with just 0.75 critique rounds on average. C matched A, not B, at 7x
+the token cost (mean 4369 vs 610 in+out per task) - one legit failure
+(rate_limiter, same wrong burst rule as A) and one infra artifact
+(ReadTimeout at 2070s: the 32b backend exceeded the default inference
+timeout on a long revision turn; runner labels model-code exceptions
+as 'checker error' too, which reads misleading). Full-run notes:
+(1) raise the inference timeout for hard-tier mesh runs, (2) the B-vs-C
+gap is now first REPO-OWN evidence for the single-agent>multi-structure
+finding - more structure bought zero success over self-reflection.
+Next: full 3-tier x 3-arm run with >=5 seeded reps for tight CIs, and
+the harness arm question (execution tools) stays open as arm D.
