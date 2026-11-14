@@ -238,6 +238,39 @@ async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_similar(args: argparse.Namespace, settings: Settings) -> int:
+    """14.13 step 4: ranked attention over deposited observations (read-only)."""
+    from memnc.experience import format_ranked, ranked_attention
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        observations = await bus.list_observations()
+        if args.task_id:
+            source = next(
+                (o for o in observations if o.task_id == args.task_id), None
+            )
+            if source is None:
+                print(f"unknown observation task id: {args.task_id}")
+                return 1
+            observations = [o for o in observations if o.task_id != args.task_id]
+            query = source.task
+        else:
+            query = " ".join(args.query).strip()
+            if not query:
+                print("provide a query text or --task-id")
+                return 1
+        results = ranked_attention(
+            query,
+            observations,
+            half_life_days=args.half_life,
+        )
+        print(format_ranked(results, args.limit))
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_synergy(_: argparse.Namespace, settings: Settings) -> int:
     """14.13 step 3: aggregated model-pair synergy (measurement only)."""
     from memnc.synergy import compute_synergy_metrics, format_synergy
@@ -939,6 +972,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     synergy.add_argument("--limit", type=int, default=10)
     synergy.set_defaults(func=cmd_synergy)
+
+    similar = subparsers.add_parser(
+        "similar",
+        help="14.13 step 4: rank past task observations against a query",
+    )
+    similar.add_argument("query", nargs="*", help="free-text task query")
+    similar.add_argument(
+        "--task-id", default=None, help="use this deposited observation's task as query"
+    )
+    similar.add_argument("--limit", type=int, default=10)
+    similar.add_argument("--half-life", type=float, default=14.0, help="days")
+    similar.set_defaults(func=cmd_similar)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
     tail.add_argument("task_id")

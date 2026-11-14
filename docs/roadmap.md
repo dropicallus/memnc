@@ -2,6 +2,17 @@
 
 ## Built
 
+- **2026-11-14 — Similarity + ranked attention (§14.13 Step 4)**: Jaccard
+  similarity over task text ranks deposited observations against a free-text
+  query; `ranked_attention` scores each match by similarity x half-life decay
+  (default 14 days) x outcome reward (done 1.0, failed 0.25, cancelled drops)
+  x corroboration (sufficiently-similar sibling observations boost the score,
+  capped at 2x). Deterministic and read-only — no RNG, no wall-clock reads
+  (`now` injectable), no ledger mutation. Surface: `meshctl similar "<query>"`
+  or `--task-id <id>` (uses that observation's task as the query, excludes it
+  from results), plus `--limit`/`--half-life`. Embedding upgrade stays open.
+  Tests: `tests/test_experience.py` (18 cases).
+
 - **2026-11-14 — Task output delivered to chat (P1 item 5)**: DONE events
   broadcast a completion card instead of a bare state line — `format_done_card`
   shows task title, the coder summary (400-char excerpt) and produced file
@@ -394,7 +405,7 @@ revisions, sample size per unordered model pair), exposed as
 `meshctl synergy [--limit N]` (verified live against the mesh KV).
 Console dashboard + optional Telegram digest still open. No routing
 decisions — measurement first (
-§14.13 Steps 1–4; remaining: Step 4 similarity/ranked attention (Step 5 claim gate DONE, commits a8cd309/9d118b6) |
+§14.13 Steps 1–4 all DONE (Step 4 similarity/ranked attention: `experience.py`, commit below); console dashboard + Telegram digest still open |
 | B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists as a standalone vendored copy** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) |
 | B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
 | B4 | Fisher-Merge pipeline | mergekit-based merge of role adapters with a subspace-divergence check (principal angles) before merging; naive averaging is known to degrade (MoRSE result). | §19 P0 + synthesis.md §5 |
@@ -740,11 +751,14 @@ Items 9–10 wait for the robustness classifier /
 §14.4 guardrail).
 
 **Step 4 — Similarity + ranked attention (first real graph step).**
-Jaccard similarity over task text/type as the first basis (embedding
-upgrade stays open, 
-§14.12 open point (a)). Port the deterministic
-ranked attention from `context_attention.py` (half-life decay + outcome
-reward + corroboration) onto our observations. Still read-only.
+- **DONE (2026-11-14):** Jaccard similarity over task text (embedding
+  upgrade stays open, §14.12 open point (a)). Deterministic ranked
+  attention ported onto the observation ledger in `experience.py`:
+  score = similarity x half-life decay (default 14 days) x outcome reward
+  (done 1.0, failed 0.25, cancelled drops) x corroboration (similar
+  sibling observations boost, capped 2x). Read-only, no RNG, injectable
+  clock. Surface: `meshctl similar "<query>"` / `--task-id <id>`.
+  Tests: `tests/test_experience.py`.
 
 **Step 5 — Routing feedback loop (behavior change, human-gated).**
 Claim decision consults ranked traces alongside the existing configured
