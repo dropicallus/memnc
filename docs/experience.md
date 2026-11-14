@@ -154,3 +154,34 @@ per-tensor before_sha256 pre-image check. Directly relevant to the
 growing-LoRA / Fisher-merge memory vision: sparse, revertable,
 content-addressed patches with a post-quantization check are a
 candidate transfer format for weight-borne memory BETWEEN nodes.
+
+## 2026-11-14 external evidence: Anthropic "ultracode" (dynamic workflows)
+
+ultracode is a Claude Code setting that turns on automatic dynamic
+workflows: Claude writes a JavaScript orchestration script per
+substantive task and a runtime executes it OUTSIDE the conversation
+context - only the final answer returns to the chat. Primitives:
+agent() spawns one subagent (optional JSON schema, validated with
+retries), pipeline(items, fn) one agent per item, parallel() a batch,
+phase() groups progress. Caps: 16 agents concurrent (env-tunable to
+256), 1000 agents per run; scripts are saved in .claude/workflows/,
+readable and diffable.
+
+The quality pattern is adversarial: independent agents attack the
+problem from separate angles, OTHER agents try to refute what they
+found, and the run iterates until answers converge. Anthropic states
+explicitly this is why a workflow reaches results a single pass
+cannot. The plan lives in script variables, not in any model context
+- no brief-loss, no plan drift across revisions, resumable after
+interrupts.
+
+Reading against our bench: ultracode is arm C (planner->coder->critic)
+done differently. (1) Adversarial refutation instead of our one-shot
+critic approve/reject - our arm B self-reflect (8/8 hard) is already
+closer to their pattern than our arm C (6/8 at 7x tokens). (2)
+Plan-as-code avoids planner context dilution - the exact
+self-conditioning failure Codacus describes. (3) Coordination outside
+the context window = our workflow_state KV / NATS layer; the
+architecture thesis is confirmed from the outside. Candidate follow-up
+arm C2/D: mesh with an adversarial critic agent + plan held in KV
+instead of the planner's context.
