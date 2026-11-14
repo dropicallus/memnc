@@ -149,6 +149,7 @@ class NodeInfo(BaseModel):
     """T6: a node's advertised capabilities (refreshed by its workers)."""
 
     node_id: str
+    version: str = "dev"
     roles: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=list)
     disk_models: list[str] = Field(default_factory=list)  # T7.5: loadable, not loaded
