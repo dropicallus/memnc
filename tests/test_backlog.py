@@ -1,0 +1,156 @@
+"""Tests for the KV-backed backlog with CAS claiming."""
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+from nats.js.errors import NotFoundError
+
+from memnc.backlog import (
+    BACKLOG_BUCKET,
+    CLAIM_STALE_S,
+    MAX_ATTEMPTS,
+    BacklogStore,
+    BacklogTask,
+)
+
+
+class FakeEntry:
+    def __init__(self, value: bytes, revision: int) -> None:
+        self.value = value
+        self.revision = revision
+
+
+class FakeKV:
+    """Minimal KV: get/put/update with revision counting (CAS semantics)."""
+
+    def __init__(self) -> None:
+        self.data: dict[str, tuple[bytes, int]] = {}
+        self._rev = 0
+
+    async def get(self, key: str) -> FakeEntry:
+        if key not in self.data:
+            raise NotFoundError()
+        value, rev = self.data[key]
+        return FakeEntry(value, rev)
+
+    async def put(self, key: str, value: bytes) -> int:
+        self._rev += 1
+        self.data[key] = (value, self._rev)
+        return self._rev
+
+    async def update(self, key: str, value: bytes, last: int) -> int:
+        if key not in self.data or self.data[key][1] != last:
+            raise RuntimeError("wrong last sequence number")
+        return await self.put(key, value)
+
+    async def keys(self) -> list[str]:
+        return sorted(self.data)
+
+
+class FakeJS:
+    def __init__(self) -> None:
+        self.kv = FakeKV()
+        self.created: list[str] = []
+
+    async def key_value(self, bucket: str):
+        if bucket != BACKLOG_BUCKET:
+            raise RuntimeError("no such bucket")
+        return self.kv
+
+    async def create_key_value(self, bucket: str = "", **_kwargs):
+        self.created.append(bucket)
+        return self.kv
+
+
+def _store() -> tuple[BacklogStore, FakeJS]:
+    js = FakeJS()
+    return BacklogStore(js), js  # type: ignore[arg-type]
+
+
+def test_add_and_list_roundtrip():
+    store, _ = _store()
+    task = asyncio.run(store.add("do the thing", prompt="p", plan_id="plan1"))
+    tasks = asyncio.run(store.list())
+    assert [t.id for t in tasks] == [task.id]
+    assert tasks[0].title == "do the thing"
+    assert tasks[0].status == "planned"
+
+
+def test_claim_is_exclusive():
+    store, _ = _store()
+    task = asyncio.run(store.add("build it"))
+    first = asyncio.run(store.claim(task.id, "driver-a"))
+    second = asyncio.run(store.claim(task.id, "driver-b"))
+    assert first is not None and first.claimant == "driver-a"
+    assert second is None
+
+
+def test_claim_nonexistent_returns_none():
+    store, _ = _store()
+    assert asyncio.run(store.claim("b-missing", "driver-a")) is None
+
+
+def test_claim_only_planned():
+    store, _ = _store()
+    task = asyncio.run(store.add("build it"))
+    asyncio.run(store.mark(task.id, "done"))
+    assert asyncio.run(store.claim(task.id, "driver-a")) is None
+
+
+def test_mark_done_and_failed_with_retry_budget():
+    store, _ = _store()
+    task = asyncio.run(store.add("flaky job"))
+    asyncio.run(store.claim(task.id, "driver-a"))
+    for expected_attempts in range(1, MAX_ATTEMPTS):
+        t = asyncio.run(store.mark(task.id, "failed", mesh_task_id="m1"))
+        assert t is not None
+        assert t.attempts == expected_attempts
+        assert t.status == "planned"  # back to planned for retry
+    t = asyncio.run(store.mark(task.id, "failed"))
+    assert t is not None
+    assert t.status == "failed"  # budget exhausted: stays failed
+    assert t.attempts == MAX_ATTEMPTS
+
+
+def test_next_claimable_respects_deps_and_skips_locked():
+    store, _ = _store()
+    a = asyncio.run(store.add("first"))
+    b = asyncio.run(store.add("second", deps=[a.id]))
+    # b depends on a: not claimable yet
+    assert asyncio.run(store.next_claimable("driver-a")) is not None
+    # driver-b claimed it first -> a is claimed, next claimable is None
+    got = asyncio.run(store.next_claimable("driver-b"))
+    assert got is None  # a was claimed by driver-a inside the previous call
+    asyncio.run(store.mark(a.id, "done"))
+    got = asyncio.run(store.next_claimable("driver-b"))
+    assert got is not None and got.id == b.id
+
+
+def test_next_claimable_none_when_all_terminal():
+    store, _ = _store()
+    asyncio.run(store.add("only one"))
+    t = asyncio.run(store.next_claimable("d"))
+    assert t is not None
+    asyncio.run(store.mark(t.id, "done"))
+    assert asyncio.run(store.next_claimable("d2")) is None
+
+
+def test_stale_claim_is_reclaimed():
+    store, _ = _store()
+    task = asyncio.run(store.add("abandoned"))
+    asyncio.run(store.claim(task.id, "dead-driver"))
+    # backdate the claim past CLAIM_STALE_S
+    stale = datetime.now(UTC) - timedelta(seconds=CLAIM_STALE_S + 60)
+    async def _backdate():
+        kv = await store._ensure_kv()
+        entry = await kv.get(task.id)
+        obj = BacklogTask.model_validate_json(entry.value)
+        obj.claimed_at = stale.strftime("%Y-%m-%dT%H:%M:%SZ")
+        await kv.put(task.id, obj.model_dump_json().encode())
+
+    asyncio.run(_backdate())
+    reclaimed = asyncio.run(store.claim(task.id, "driver-b"))
+    assert reclaimed is not None and reclaimed.claimant == "driver-b"
+    # fresh claim is NOT stealable
+    fresh = asyncio.run(store.claim(task.id, "driver-c"))
+    assert fresh is None

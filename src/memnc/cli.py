@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import nats
 
 from .backends import make_backend
+from .backlog import MAX_ATTEMPTS, BacklogStore
 from .backup import dump_buckets, restore_buckets
 from .bus import Bus
 from .config import Settings, get_settings
@@ -87,7 +88,16 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
         await client.close()
 
 
-_TERMINAL_EVENTS = {"task.done", "task.failed", "task.cancelled"}
+_TERMINAL_EVENTS = {
+    "task.done",
+    "task.failed",
+    "task.cancelled",
+    # worker/orchestrator emit state.{snapshot.state.value.lower()} on every
+    # transition, so the settled states show up as state.done / state.failed
+    "state.done",
+    "state.failed",
+    "state.cancelled",
+}
 
 
 def _needs_from_args(args: argparse.Namespace):
@@ -540,6 +550,145 @@ def _model_present(model: str, models: list[str]) -> bool:
     return any(candidate.split(":")[0] == base for candidate in models)
 
 
+async def _backlog_store(client) -> BacklogStore:
+    return BacklogStore(client.jetstream())
+
+
+async def _backlog_submit(client, settings: Settings, prompt: str) -> str:
+    """Submit one backlog task to the mesh, return the mesh task id."""
+    submission = TaskSubmission(task=prompt, context="", fanout=1, claimable=True)
+    response = await client.request(
+        SUBJECT_SUBMIT_NODE.format(node=settings.node_name),
+        submission.model_dump_json().encode(),
+        timeout=10,
+    )
+    data = json.loads(response.data)
+    if "error" in data:
+        raise RuntimeError(data["error"])
+    return str(data["task_id"])
+
+
+async def _backlog_watch(client, task_id: str) -> str:
+    """Follow a mesh task to a terminal event; return the final event name.
+
+    JetStream ordered consumer (deliver_all): fast tasks can hit a terminal
+    event before the core-NATS subscription would be live, so the watcher
+    must receive the retained history too.
+    """
+    subject = SUBJECT_EVENTS.format(task_id=task_id)
+    subscription = await client.jetstream().subscribe(subject, ordered_consumer=True)
+    try:
+        while True:
+            try:
+                message = await subscription.next_msg(timeout=5.0)
+            except Exception:
+                continue
+            try:
+                envelope = json.loads(message.data)
+            except json.JSONDecodeError:
+                continue
+            event = (envelope.get("payload") or {}).get("event", "")
+            if event in _TERMINAL_EVENTS:
+                return event
+    finally:
+        await subscription.unsubscribe()
+
+
+async def cmd_backlog_add(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        task = await store.add(
+            title=args.title,
+            prompt=args.prompt or args.title,
+            plan_id=args.plan_id or "",
+            deps=args.dep or [],
+        )
+        print(task.id)
+        return 0
+    finally:
+        await client.close()
+
+
+async def cmd_backlog_list(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        tasks = await store.list()
+        if args.plan_id:
+            tasks = [t for t in tasks if t.plan_id == args.plan_id]
+        for t in tasks:
+            print(
+                f"{t.id}  {t.status:<8}  plan={t.plan_id or '-':<12} "
+                f"attempts={t.attempts}/{MAX_ATTEMPTS}  "
+                f"mesh={t.mesh_task_id or '-':<20}  {t.title}"
+            )
+        if not tasks:
+            print("backlog empty")
+        return 0
+    finally:
+        await client.close()
+
+
+async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
+    """One claim->submit->watch->mark cycle. Returns True when work was done."""
+    store = await _backlog_store(client)
+    claimed = await store.next_claimable(driver)
+    if claimed is None:
+        return False
+    print(f"{driver}: claimed {claimed.id} ({claimed.title})", flush=True)
+    try:
+        mesh_task_id = await _backlog_submit(client, settings, claimed.prompt)
+        await store.mark(claimed.id, "claimed", mesh_task_id=mesh_task_id)
+        event = await _backlog_watch(client, mesh_task_id)
+        final = "done" if event == "task.done" else "failed"
+        await store.mark(claimed.id, final, mesh_task_id=mesh_task_id)
+        print(f"{driver}: {claimed.id} -> {final} (mesh {mesh_task_id})", flush=True)
+    except Exception as exc:  # noqa: BLE001 - failed submission burns one attempt
+        await store.mark(claimed.id, "failed")
+        print(f"{driver}: {claimed.id} -> failed ({exc})", flush=True)
+    return True
+
+
+async def cmd_backlog_reset(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        store = await _backlog_store(client)
+        task = await store.get(args.backlog_id)
+        if task is None:
+            print("not found")
+            return 1
+        task.status = "planned"
+        task.claimant = ""
+        task.claimed_at = ""
+        task.mesh_task_id = ""
+        task.updated_at = task.updated_at
+        kv = await store._ensure_kv()
+        await kv.put(task.id, task.model_dump_json().encode())
+        print(f"{task.id} -> planned")
+        return 0
+    finally:
+        await client.close()
+
+
+async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
+    client = await _connect(settings)
+    try:
+        driver = args.driver or f"driver-{settings.node_name}"
+        if args.once:
+            return 0 if await _driver_cycle(client, settings, driver) else 0
+        while True:
+            try:
+                worked = await _driver_cycle(client, settings, driver)
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                print(f"driver error: {exc}", file=sys.stderr, flush=True)
+                worked = False
+            if not worked:
+                await asyncio.sleep(args.idle_sleep)
+    finally:
+        await client.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="meshctl")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -685,6 +834,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor", help="check connectivity and models")
     doctor.set_defaults(func=cmd_doctor)
+
+    backlog_add = subparsers.add_parser(
+        "backlog-add", help="add a task to the backlog (optionally under a plan)"
+    )
+    backlog_add.add_argument("title")
+    backlog_add.add_argument("--prompt", default="", help="coder prompt; defaults to title")
+    backlog_add.add_argument("--plan-id", default="")
+    backlog_add.add_argument("--dep", action="append", help="backlog id this depends on")
+    backlog_add.set_defaults(func=cmd_backlog_add)
+
+    backlog_list = subparsers.add_parser("backlog-list", help="list backlog entries")
+    backlog_list.add_argument("--plan-id", default="", help="filter by plan")
+    backlog_list.set_defaults(func=cmd_backlog_list)
+
+    backlog_reset = subparsers.add_parser("backlog-reset", help="re-plan a backlog entry")
+    backlog_reset.add_argument("backlog_id")
+    backlog_reset.set_defaults(func=cmd_backlog_reset)
+
+    backlog_run = subparsers.add_parser(
+        "backlog-run", help="driver loop: claim -> submit -> watch -> mark"
+    )
+    backlog_run.add_argument("--once", action="store_true", help="single cycle then exit")
+    backlog_run.add_argument("--driver", default="", help="driver/claimant name")
+    backlog_run.add_argument("--node", default="", help="orchestrator node to submit to")
+    backlog_run.add_argument("--idle-sleep", type=float, default=10.0)
+    backlog_run.set_defaults(func=cmd_backlog_run)
 
     return parser
 
