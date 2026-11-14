@@ -483,8 +483,10 @@ class Worker:
         envelope = Envelope.model_validate_json(message.data)
         # Weak->strong routing: a command with prefer_node set is for that
         # node only — everyone else naks so a matching worker claims it.
+        # Prefix match: worker node_names are role-suffixed (node-a-planner,
+        # node-a-coder, ...) while prefer_node names the host (node-a).
         prefer = envelope.payload.get("prefer_node", "")
-        if prefer and prefer != self.settings.node_name:
+        if prefer and not self.settings.node_name.startswith(prefer):
             try:
                 await message.nak(delay=2.0)
             except Exception:  # noqa: BLE001
