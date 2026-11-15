@@ -102,7 +102,13 @@ class TestOrchestratorWiring:
 
     def test_flag_off_records_nothing(self, tmp_path) -> None:
         path = os.path.join(tmp_path, "exp.json")
-        orch = self._orch(Settings(experience_store_path=path), _RecordingBus())
+        # Explicit False: Settings is a pydantic BaseSettings reading .env, so
+        # a deployment .env with EXPERIENCE_FROM_OBSERVATIONS=1 must not leak
+        # into this test (init kwargs outrank env values).
+        orch = self._orch(
+            Settings(experience_store_path=path, experience_from_observations=False),
+            _RecordingBus(),
+        )
         asyncio.run(orch._deposit_observation(self._snapshot()))
         assert not os.path.exists(path)
 

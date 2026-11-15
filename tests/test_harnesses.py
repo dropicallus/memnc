@@ -504,3 +504,118 @@ def test_worker_empty_payload_harness_falls_back_to_node_default(tmp_path):
         _REGISTRY.pop("fake-default", None)
     assert result.ok is False
     assert result.error == "default ran"
+
+
+# --- 15.4 OpenCode harness -------------------------------------------------
+
+
+def test_opencode_registry_contains_opencode():
+    assert "opencode" in known_harnesses()
+
+
+def test_opencode_parse_counts_tool_markers_and_tail_summary():
+    from memnc.harnesses.opencode import parse_output
+
+    stream = (
+        "build · ollama/mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M\n"
+        "← Write hello.py\n"
+        "Wrote file successfully.\n"
+        "\n"
+        "$ python3 hello.py\n"
+        "HELLO_FROM_OPENCODE\n"
+    )
+    parsed = parse_output(stream)
+    assert parsed["tool_events"] == 2
+    assert "HELLO_FROM_OPENCODE" in parsed["summary"]
+
+
+def test_opencode_parse_tolerates_garbage():
+    from memnc.harnesses.opencode import parse_output
+
+    parsed = parse_output("random noise only, no markers\n")
+    assert parsed["tool_events"] == 0
+    assert parsed["summary"]
+
+
+def _write_fake_opencode(tmp_path: Path, body: str) -> str:
+    script = tmp_path / "fake-opencode.sh"
+    script.write_text(textwrap.dedent(body))
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script)
+
+
+def test_opencode_harness_run_ok(tmp_path):
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    oc_bin = _write_fake_opencode(
+        tmp_path,
+        """#!/bin/sh
+        # args: run <prompt> --model <model>
+        printf '%s\\n' '← Write hello.py'
+        printf '%s\\n' '$ python3 hello.py'
+        printf '%s\\n' 'HELLO'
+        """,
+    )
+    harness = OpenCodeHarness(model="ollama/x", opencode_bin=oc_bin)
+    result = asyncio.run(harness.run("do it", tmp_path / "ws"))
+    assert result.ok is True
+    assert result.tool_events == 2
+    assert result.summary.endswith("HELLO")
+    assert result.error is None
+    assert (tmp_path / "ws").is_dir()
+
+
+def test_opencode_harness_reports_nonzero_exit(tmp_path):
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\nexit 3\n")
+    harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
+    result = asyncio.run(harness.run("do it", tmp_path))
+    assert result.ok is False
+    assert result.exit_code == 3
+
+
+def test_opencode_harness_stderr_only_is_error(tmp_path):
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\necho boom >&2\nexit 0\n")
+    harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
+    result = asyncio.run(harness.run("do it", tmp_path))
+    assert result.ok is False
+    assert result.error == "boom"
+
+
+def test_opencode_harness_timeout_kills_whole_tree(tmp_path):
+    import time
+
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\nsleep 30\n")
+    harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
+    started = time.monotonic()
+    result = asyncio.run(harness.run("do it", tmp_path, timeout_s=1))
+    elapsed = time.monotonic() - started
+    assert result.ok is False
+    assert "timed out" in (result.error or "")
+    assert elapsed < 10
+
+
+def test_opencode_harness_missing_binary(tmp_path):
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    harness = OpenCodeHarness(model="x", opencode_bin=str(tmp_path / "no-such-oc"))
+    result = asyncio.run(harness.run("do it", tmp_path))
+    assert result.ok is False
+    assert "cannot start opencode" in (result.error or "")
+
+
+def test_opencode_harness_clean_state_flag(tmp_path, monkeypatch):
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    state = Path.home() / ".local/share/opencode"
+    monkeypatch.setenv("OPENCODE_CLEAN_STATE", "1")
+    oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\nexit 0\n")
+    harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
+    result = asyncio.run(harness.run("do it", tmp_path))
+    assert result.ok is True
+    assert not state.exists()  # wiped (and NOT recreated by the fake)
