@@ -1576,3 +1576,57 @@ terminal transitions (task-type = prompt-head slug, edge = `mesh` until more
 strategies exist), the A->B->C escalation floor, and the `meshctl pheromone`
 view. Still open: consuming `choose_edge()` in bench arm selection and the
 live pipeline, evaporation/decay job, and planner-capacity penalty deposits.
+
+## 15.4 OpenCode harness (design note, 2026-11-15, not yet implemented)
+
+Motivation: node-c (maco) now runs opencode 1.19.5 against the local ollama
+27b coder (`mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M`), which DOES emit native
+tool_calls (verified 2026-11-15: full create-file + run + confirm loop,
+TASK_COMPLETE). The node-c image predates the pi harness (d44fc60); opencode
+is installed there, pi is not. Making opencode a registered harness lets the
+weak->strong loop hand off to node-c's coder without rebuilding the image
+around pi.
+
+Design — mirror `harnesses/pi.py` exactly, differences only where opencode
+differs:
+
+- `name = "opencode"`; caps: native_tools=True, external_process=True.
+- Command: `opencode run "<prompt>" --model <provider/model>` with cwd=workspace.
+  Model string is provider-qualified (e.g. `ollama/mannix/...`), so the worker
+  setting for harness models must carry the full id, not just the ollama name.
+  We leave a bare model name alone (opencode then uses its own default
+  provider from `~/.config/opencode/opencode.json`).
+- Event parsing: opencode `run` prints a human-readable stream; unlike pi it
+  has no `--mode json`. Parser strategy (tolerant, like pi's):
+  - count tool executions by lines matching the tool-event markers
+    ("← Write", "→ Edit", "← Read", "$ ", "Bash("); start with a small
+    verified marker set, extend after first live run;
+  - summary = last non-empty line block of stdout;
+  - "settled" = process exit 0 (no settled marker exists);
+  - error = non-zero exit, or stderr tail.
+- Optional machine-readable follow-up (only if the marker heuristic proves
+  brittle): `opencode run ... --print-logs --log-level DEBUG` and parse
+  structured lines; keep OUT of v1.
+- `opencode run` reuses `~/.local/share/opencode` state; on stale state it can
+  hang (observed). Harness never cleans user state automatically; worker
+  env var `OPENCODE_CLEAN_STATE=1` (opt-in) makes the harness
+  `rm -rf ~/.local/share/opencode` before the run. Document the observed
+  stall + fix in the harness docstring.
+- Timeout: same 900 s default, kill process group (start_new_session).
+- Product stays the workspace diff (shared `workspace_diff` helper).
+- Registry: add `opencode` to the lazy import list in `harnesses/__init__.py`
+  (inproc, pi, opencode) — both `get_harness` and `known_harnesses`.
+- Tests (mirror `tests/test_harnesses_pi.py`):
+  1. parse: fake stdout with tool markers + summary -> counts;
+  2. parse: garbage/malformed lines skipped, no crash;
+  3. run: fake opencode shell script as bin -> ok result with diff;
+  4. timeout: hanging fake -> HarnessResult(ok=False, error contains timeout).
+- Routing signal: `tool_events == 0` again means the provider template has no
+  tools (same signal as pi). On the ollama 27b template we verified >0.
+
+Open questions for the live run (answer after first real handoff):
+- Does opencode need `--format`/any non-default flag to suppress interactive
+  TUI remnants in `run` mode? (Current smoke: no.)
+- Exact timing budget: smoke task took ~3-4 min incl. model load; the
+  900 s default should hold, but the worker-level timeout for coder tasks on
+  node-c may need to rise to 1200 s.
