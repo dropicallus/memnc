@@ -98,6 +98,12 @@ MODEL_REQUEST_KEY = "mreq.{request_id}"
 REPUTATION_KEY = "model_rep.{model}"
 
 
+def background_key(task_id: str) -> str:
+    """workflow_state companion key for a task's persistent Background
+    (docs/design-message-tuple.md)."""
+    return f"background.{task_id}"
+
+
 def reputation_key(model: str) -> str:
     """KV-safe reputation key (KV charset forbids ':' — ollama tags use it)."""
     return REPUTATION_KEY.format(model=model.replace(":", "_"))
@@ -130,6 +136,7 @@ class ControlCommand(BaseModel):
     approved: bool | None = None  # decide only
     text: str = ""  # answer only: the human's reply to the agent's question
     gate: str = ""  # submit only: "always" | "fail" | "never"
+    model_override: str = ""  # retry only: rerun with this model instead of the role default
     reason: str = ""
 
     def gate_value(self) -> Literal["always", "fail", "never"]:
@@ -166,6 +173,9 @@ class NodeInfo(BaseModel):
         """Union of two heartbeat entries for the same node (multi-process)."""
         return NodeInfo(
             node_id=self.node_id,
+            # P4: carry the code fingerprint; the freshest non-default wins
+            # (a "dev" entry must not mask a real fingerprint in the merge).
+            version=self.version if self.version and self.version != "dev" else other.version,
             roles=sorted(set(self.roles) | set(other.roles)),
             models=sorted(set(self.models) | set(other.models)),
             disk_models=sorted(set(self.disk_models) | set(other.disk_models)),
@@ -540,6 +550,37 @@ ROLE_OUTPUT: dict[Role, type[BaseModel]] = {
 }
 
 
+# Structured communication tuple (TalkHier-derived, docs/design-message-tuple.md):
+# every debate hop carries (message, background, intermediate_output) instead of
+# re-derived prose. The background is persistent per task; the intermediate
+# output lives only inside the current hop's envelope payload.
+class Background(BaseModel):
+    """Persistent, shared context for one task. Written once per hop, read by
+    every subsequent hop; never re-summarized per hop."""
+
+    task: str
+    context: str = ""
+    plan: PlannerOutput | None = None
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class IntermediateOutput(BaseModel):
+    """The producing role's working result, superseded by the next hop."""
+
+    role: Role
+    summary: str = ""
+    files: list[FileArtifact] = Field(default_factory=list)
+    issues: list[CriticIssue] = Field(default_factory=list)
+
+
+class MessageTuple(BaseModel):
+    """One hop in the debate pipeline."""
+
+    message: str
+    background: Background
+    intermediate_output: IntermediateOutput | None = None
+
+
 class ResultPayload(BaseModel):
     ok: bool
     output: dict[str, Any] = Field(default_factory=dict)
@@ -594,6 +635,9 @@ class TaskSubmission(BaseModel):
     # Weak->strong routing: when set, workers on other nodes nak the command
     # (skip it) so only this node's worker picks it up. "" = any node.
     prefer_node: str = ""
+    # 14.14 per-task harness selection: overrides Settings.harness_coder for
+    # this task's coder role ("" = fall back to the node default).
+    harness: str = ""
 
     @field_validator("task")
     @classmethod
@@ -639,6 +683,12 @@ class TaskSnapshot(BaseModel):
     needs: TaskNeeds | None = None
     # Weak->strong routing: carried over from TaskSubmission.prefer_node.
     prefer_node: str = ""
+    # 14.14 per-task harness: carried over from TaskSubmission.harness; the
+    # dispatch/claim payload carries it to the coder worker ("" = node default).
+    harness: str = ""
+    # Retry-with-intent: model set by a human retry command; workers use it
+    # instead of their role default for every re-dispatch of this snapshot.
+    model_override: str = ""
     # T4 (model-routing-visible): role -> "node:model" for every executed
     # step, recorded from the worker's result payloads. Shows which model
     # actually handled each pipeline stage.

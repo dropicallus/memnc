@@ -46,6 +46,12 @@ x-mesh-env: &mesh-env
   # model tags. Enable explicitly in .env, e.g.:
   #   MODEL_PULL_WHITELIST=["llama3.2:3b","llama3.1:8b","qwen2.5:7b","qwen2.5-coder:7b","gemma*"]
   MODEL_PULL_WHITELIST: ${MODEL_PULL_WHITELIST:-[]}
+  # 15.3 item 5: experience store. Default off = no deposits written;
+  # enable in .env (EXPERIENCE_FROM_OBSERVATIONS=1). The store file path is
+  # relative to the orchestrator workdir (persist it with a volume in .env
+  # deployments that want durable experience).
+  EXPERIENCE_FROM_OBSERVATIONS: ${EXPERIENCE_FROM_OBSERVATIONS:-0}
+  EXPERIENCE_STORE_PATH: ${EXPERIENCE_STORE_PATH:-data/experience-store.json}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-mesh-service: &mesh-service

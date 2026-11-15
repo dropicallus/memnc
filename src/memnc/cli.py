@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -35,6 +36,8 @@ from .schema import (
     TaskSubmission,
     model_pull_allowed,
 )
+from .version import code_version, is_stale
+from .wol import WolWaker, send_wol
 
 
 async def _connect(settings: Settings):
@@ -74,6 +77,7 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             # T6: optional capability constraints for the claim gate.
             needs=_needs_from_args(args),
             gate=args.gate,  # type: ignore[arg-type]
+            harness=getattr(args, "harness", "") or "",
         )
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
@@ -98,11 +102,11 @@ _TERMINAL_EVENTS = {
     "task.done",
     "task.failed",
     "task.cancelled",
-    # worker/orchestrator emit state.{snapshot.state.value.lower()} on every
-    # transition, so the settled states show up as state.done / state.failed
+    # state.done is also final: the worker-driven pipeline only RECORDS
+    # task.done without emitting it, so a successful debate ends in state.done.
+    # state.failed must NOT be terminal -- it fires once per debate attempt
+    # while the orchestrator keeps retrying; an exhausted task emits task.failed.
     "state.done",
-    "state.failed",
-    "state.cancelled",
 }
 
 
@@ -220,6 +224,15 @@ async def cmd_tasks(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_exp(args: argparse.Namespace, settings: Settings) -> int:
+    """15.3 item 5: read the automated experience store (no NATS connection)."""
+    from memnc.experience_store import ExperienceStore, format_bullets
+
+    store = ExperienceStore(settings.experience_store_path).load()
+    print(format_bullets(store, args.topic, args.limit))
+    return 0
+
+
 async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
     """14.13 step 2: latest deposited observations, optional model filter."""
     from memnc.observations import format_observations
@@ -229,6 +242,39 @@ async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
     try:
         observations = await bus.list_observations()
         print(format_observations(observations, args.model, args.limit))
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_similar(args: argparse.Namespace, settings: Settings) -> int:
+    """14.13 step 4: ranked attention over deposited observations (read-only)."""
+    from memnc.experience import format_ranked, ranked_attention
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        observations = await bus.list_observations()
+        if args.task_id:
+            source = next(
+                (o for o in observations if o.task_id == args.task_id), None
+            )
+            if source is None:
+                print(f"unknown observation task id: {args.task_id}")
+                return 1
+            observations = [o for o in observations if o.task_id != args.task_id]
+            query = source.task
+        else:
+            query = " ".join(args.query).strip()
+            if not query:
+                print("provide a query text or --task-id")
+                return 1
+        results = ranked_attention(
+            query,
+            observations,
+            half_life_days=args.half_life,
+        )
+        print(format_ranked(results, args.limit))
         return 0
     finally:
         await bus.close()
@@ -497,12 +543,53 @@ async def cmd_grants(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
-async def cmd_revoke(args: argparse.Namespace, settings: Settings) -> int:
+async def cmd_revoke_grant(args: argparse.Namespace, settings: Settings) -> int:
     bus = Bus(settings)
     await bus.connect()
     try:
         await bus.revoke_grant(args.agent_id)
         print(f"revoked grant for {args.agent_id}")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_revoke_node(args: argparse.Namespace, settings: Settings) -> int:
+    """M7: revoke a whole node — roster cut + capability withdrawal + claim gate."""
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        record = await bus.revoke_node(args.node_id, reason=args.reason, by=args.by)
+        print(f"revoked node {record.node_id} (reason={record.reason or '-'} by={record.by})")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_reinstate_node(args: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        if await bus.reinstate_node(args.node_id):
+            print(f"reinstate: tombstone for {args.node_id} removed")
+        else:
+            print(f"{args.node_id} was not revoked")
+        return 0
+    finally:
+        await bus.close()
+
+
+async def cmd_revocations(_: argparse.Namespace, settings: Settings) -> int:
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        revocations = await bus.list_revocations()
+        if not revocations:
+            print("no revoked nodes")
+            return 0
+        for record in sorted(revocations, key=lambda r: r.node_id):
+            print(f"{record.node_id}  by={record.by}  reason={record.reason or '-'}")
+        print(f"{len(revocations)} node(s) revoked")
         return 0
     finally:
         await bus.close()
@@ -521,6 +608,20 @@ async def cmd_doctor(_: argparse.Namespace, settings: Settings) -> int:
         info = await bus.js.stream_info(settings.stream_name)
         print(f"stream     {info.config.name}  messages={info.state.messages}")
         print(f"kv         {settings.kv_bucket}  ok")
+        # P4 slice 2: report nodes whose roster fingerprint differs from
+        # this host's code — the upgrade list for the fleet.
+        try:
+            nodes = await bus.list_nodes()
+            mine = code_version()
+            print(f"code       {mine}")
+            for node in nodes:
+                stale = is_stale(node.version, mine)
+                mark = "STALE" if stale else "ok"
+                print(f"  node {node.node_id:<20} {node.version}  {mark}")
+                if stale:
+                    ok = False
+        except Exception:  # noqa: BLE001 - roster view is best effort
+            print("roster     unavailable", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"stream     FAILED: {exc}", file=sys.stderr)
         ok = False
@@ -560,9 +661,14 @@ async def _backlog_store(client) -> BacklogStore:
     return BacklogStore(client.jetstream())
 
 
-async def _backlog_submit(client, settings: Settings, prompt: str, prefer_node: str = "") -> str:
+async def _backlog_submit(
+    client, settings: Settings, prompt: str, prefer_node: str = "", harness: str = ""
+) -> str:
     """Submit one backlog task to the mesh, return the mesh task id."""
-    submission = TaskSubmission(task=prompt, context="", fanout=1, claimable=True, prefer_node=prefer_node)
+    submission = TaskSubmission(
+        task=prompt, context="", fanout=1, claimable=True,
+        prefer_node=prefer_node, harness=harness,
+    )
     response = await client.request(
         SUBJECT_SUBMIT_NODE.format(node=settings.node_name),
         submission.model_dump_json().encode(),
@@ -609,6 +715,7 @@ async def cmd_backlog_add(args: argparse.Namespace, settings: Settings) -> int:
             prompt=args.prompt or args.title,
             plan_id=args.plan_id or "",
             deps=args.dep or [],
+            harness=args.harness or "",
         )
         print(task.id)
         return 0
@@ -645,11 +752,15 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
     print(f"{driver}: claimed {claimed.id} ({claimed.title})", flush=True)
     try:
         mesh_task_id = await _backlog_submit(
-            client, settings, claimed.prompt, prefer_node=claimed.prefer_node
+            client,
+            settings,
+            claimed.prompt,
+            prefer_node=claimed.prefer_node,
+            harness=claimed.harness,
         )
         await store.mark(claimed.id, "claimed", mesh_task_id=mesh_task_id)
         event = await _backlog_watch(client, mesh_task_id)
-        final = "done" if event == "task.done" else "failed"
+        final = "done" if event in ("task.done", "state.done") else "failed"
         await store.mark(claimed.id, final, mesh_task_id=mesh_task_id)
         print(f"{driver}: {claimed.id} -> {final} (mesh {mesh_task_id})", flush=True)
     except Exception as exc:  # noqa: BLE001 - failed submission burns one attempt
@@ -669,6 +780,7 @@ async def _driver_cycle(client, settings: Settings, driver: str) -> bool:
                 deps=retry.deps,
                 prefer_node=retry.prefer_node,
                 strong_retry=True,
+                harness=retry.harness,
             )
             print(
                 f"{driver}: strong-retry queued (prefer {retry.prefer_node}) for {claimed.id}",
@@ -696,7 +808,10 @@ async def _backlog_plan(args: argparse.Namespace, settings: Settings) -> int:
             words = text.split()
             title = " ".join(words[:8]) + ("..." if len(words) > 8 else "")
             deps = [prev_id] if args.chain and prev_id else []
-            task = await store.add(title=title, prompt=text, plan_id=args.plan_id, deps=deps)
+            task = await store.add(
+                title=title, prompt=text, plan_id=args.plan_id, deps=deps,
+                harness=args.harness or "",
+            )
             prev_id = task.id
             print(f"added {task.id} [{i}/{len(tasks)}] deps={deps} {title}")
         return 0
@@ -729,8 +844,32 @@ async def cmd_backlog_reset(args: argparse.Namespace, settings: Settings) -> int
         await client.close()
 
 
+async def _maybe_wake_idle(
+    get_store, settings: Settings, waker: WolWaker
+) -> bool:
+    """P4 slice 3: planned backlog work + WOL config -> wake the reserve host.
+
+    ``get_store`` is a zero-arg callable returning the BacklogStore (in the
+    driver loop: a partial of ``_backlog_store`` over the connected client).
+    Throttling lives in the WolWaker, so an idle loop cannot flood the
+    sleeping host with packets.
+    """
+    if not waker.enabled:
+        return False
+    result = get_store() if callable(get_store) else get_store
+    store = await result if inspect.isawaitable(result) else result
+    planned = [t for t in await store.list() if t.status == "planned"]
+    if not planned:
+        return False
+    sent = waker.maybe_wake()
+    if sent:
+        print(f"backlog: {len(planned)} planned -> WOL packet sent", flush=True)
+    return sent
+
+
 async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
     client = await _connect(settings)
+    waker = WolWaker(settings.wol_mac, settings.wol_min_interval_s)
     try:
         driver = args.driver or f"driver-{settings.node_name}"
         if args.once:
@@ -742,9 +881,24 @@ async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
                 print(f"driver error: {exc}", file=sys.stderr, flush=True)
                 worked = False
             if not worked:
+                await _maybe_wake_idle(lambda: _backlog_store(client), settings, waker)
                 await asyncio.sleep(args.idle_sleep)
     finally:
         await client.close()
+
+
+def cmd_wol(args: argparse.Namespace, settings: Settings) -> int:
+    mac = args.mac or settings.wol_mac
+    if not mac:
+        print("no MAC: pass --mac or set WOL_MAC", file=sys.stderr)
+        return 2
+    try:
+        send_wol(mac)
+    except ValueError as exc:
+        print(f"invalid MAC: {exc}", file=sys.stderr)
+        return 2
+    print(f"WOL packet sent to {mac}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -781,6 +935,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["always", "fail", "never"],
         help="T3: human approval gate at the critique step",
     )
+    submit.add_argument(
+        "--harness", default="", help="14.14: coder harness for this task (e.g. pi); empty = node default"
+    )
     submit.set_defaults(func=cmd_submit)
 
     gate = subparsers.add_parser(
@@ -812,6 +969,15 @@ def build_parser() -> argparse.ArgumentParser:
     roster = subparsers.add_parser("roster", help="T6: list live node capabilities")
     roster.set_defaults(func=cmd_roster)
 
+    exp = subparsers.add_parser(
+        "exp", help="15.3 item 5: read the automated experience store"
+    )
+    exp.add_argument("--topic", default=None, help="only bullets in TOPIC")
+    exp.add_argument(
+        "--limit", type=int, default=50, help="max bullets to print (default 50)"
+    )
+    exp.set_defaults(func=cmd_exp)
+
     obslast = subparsers.add_parser(
         "obslast", help="14.13 step 2: latest deposited task observations"
     )
@@ -824,6 +990,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     synergy.add_argument("--limit", type=int, default=10)
     synergy.set_defaults(func=cmd_synergy)
+
+    similar = subparsers.add_parser(
+        "similar",
+        help="14.13 step 4: rank past task observations against a query",
+    )
+    similar.add_argument("query", nargs="*", help="free-text task query")
+    similar.add_argument(
+        "--task-id", default=None, help="use this deposited observation's task as query"
+    )
+    similar.add_argument("--limit", type=int, default=10)
+    similar.add_argument("--half-life", type=float, default=14.0, help="days")
+    similar.set_defaults(func=cmd_similar)
 
     tail = subparsers.add_parser("tail", help="follow a task's event stream")
     tail.add_argument("task_id")
@@ -871,7 +1049,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     revoke = subparsers.add_parser("revoke", help="revoke an agent's capability grant")
     revoke.add_argument("agent_id")
-    revoke.set_defaults(func=cmd_revoke)
+    revoke.set_defaults(func=cmd_revoke_grant)
+    revoke_node = subparsers.add_parser(
+        "revoke-node", help="M7: revoke a whole node (roster cut, caps withdrawn, claims denied)"
+    )
+    revoke_node.add_argument("node_id")
+    revoke_node.add_argument("--reason", default="")
+    revoke_node.add_argument("--by", default="meshctl")
+    revoke_node.set_defaults(func=cmd_revoke_node)
+    reinstate = subparsers.add_parser(
+        "reinstate", help="M7: remove a node revocation tombstone (node rejoins on next heartbeat)"
+    )
+    reinstate.add_argument("node_id")
+    reinstate.set_defaults(func=cmd_reinstate_node)
+    revocations = subparsers.add_parser("revocations", help="list revoked nodes")
+    revocations.set_defaults(func=cmd_revocations)
 
     backup = subparsers.add_parser(
         "backup", help="cold-standby backup: dump durable KV buckets to JSON"
@@ -900,6 +1092,10 @@ def build_parser() -> argparse.ArgumentParser:
     backlog_add.add_argument("--prompt", default="", help="coder prompt; defaults to title")
     backlog_add.add_argument("--plan-id", default="")
     backlog_add.add_argument("--dep", action="append", help="backlog id this depends on")
+    backlog_add.add_argument(
+        "--harness", default="",
+        help="coder harness for this task (e.g. pi); empty = node default",
+    )
     backlog_add.set_defaults(func=cmd_backlog_add)
 
     backlog_list = subparsers.add_parser("backlog-list", help="list backlog entries")
@@ -915,11 +1111,21 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--chain", action="store_true",
                              help="make each task depend on the previous one (sequential plan)")
     plan_parser.add_argument("--dry-run", action="store_true", help="print the tasks without adding")
+    plan_parser.add_argument(
+        "--harness", default="",
+        help="coder harness for every generated task (e.g. pi); empty = node default",
+    )
     plan_parser.set_defaults(func=cmd_backlog_plan)
 
     backlog_reset = subparsers.add_parser("backlog-reset", help="re-plan a backlog entry")
     backlog_reset.add_argument("backlog_id")
     backlog_reset.set_defaults(func=cmd_backlog_reset)
+
+    wol = subparsers.add_parser(
+        "wol", help="send one Wake-on-LAN magic packet (P4: wake-on-backlog)"
+    )
+    wol.add_argument("--mac", default="", help="target MAC (default: WOL_MAC setting)")
+    wol.set_defaults(func=cmd_wol)
 
     backlog_run = subparsers.add_parser(
         "backlog-run", help="driver loop: claim -> submit -> watch -> mark"

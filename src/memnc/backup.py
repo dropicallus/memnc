@@ -16,12 +16,13 @@ from datetime import UTC, datetime
 
 from .config import Settings
 from .observations import OBSERVATIONS_BUCKET
+from .revocation import REVOCATIONS_BUCKET
 from .schema import GRANT_BUCKET, REGISTRY_BUCKET, ROSTER_BUCKET, TRUST_BUCKET
 
 log = logging.getLogger(__name__)
 
 #: buckets that hold durable state (backed up and restored)
-DURABLE_BUCKETS = (GRANT_BUCKET, OBSERVATIONS_BUCKET, TRUST_BUCKET)
+DURABLE_BUCKETS = (GRANT_BUCKET, OBSERVATIONS_BUCKET, REVOCATIONS_BUCKET, TRUST_BUCKET)
 
 #: presence-only buckets, never backed up (TTL repopulation is the design)
 EPHEMERAL_BUCKETS = (REGISTRY_BUCKET, ROSTER_BUCKET)

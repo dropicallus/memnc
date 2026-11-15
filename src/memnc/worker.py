@@ -21,6 +21,7 @@ from .fsutil import apply_artifacts
 from .harnesses import get_harness
 from .harnesses.workspace import changed_file_contents
 from .mcp.client import MCPClient
+from .observations import TaskObservation
 from .roles import (
     CONSULT_SYSTEM_PROMPT,
     PROMPT_VERSION,
@@ -36,12 +37,14 @@ from .schema import (
     SUBJECT_RESULT,
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
+    Background,
     CoderOutput,
     ConsultAnswer,
     ConsultRequest,
     CriticIssue,
     Envelope,
     FileArtifact,
+    MessageTuple,
     ModelRequest,
     NodeInfo,
     ResultPayload,
@@ -55,6 +58,7 @@ from .schema import (
     should_propose_retirement,
 )
 from .synergy import compute_server_success, should_withdraw
+from .version import code_version, is_stale
 
 log = logging.getLogger(__name__)
 
@@ -467,6 +471,7 @@ class Worker:
                 await self.bus.advertise_node(
                     NodeInfo(
                         node_id=self.settings.node_name,
+                        version=code_version(),
                         roles=[self.role.value],
                         models=[model],
                         disk_models=list(self._disk_models),
@@ -487,6 +492,26 @@ class Worker:
         # node-a-coder, ...) while prefer_node names the host (node-a).
         prefer = envelope.payload.get("prefer_node", "")
         if prefer and not self.settings.node_name.startswith(prefer):
+            try:
+                await message.nak(delay=2.0)
+            except Exception:  # noqa: BLE001
+                await message.nak()
+            return
+        # P4 slice 2: refuse commands from a mesh running different code.
+        # The orchestrator stamps mesh_version into every dispatch; a stale
+        # worker naks (like prefer_node) so the command stays available for
+        # a compliant node; if none exists it eventually dead-letters —
+        # the visible "upgrade this node" signal.
+        expected = (envelope.payload or {}).get("mesh_version", "")
+        if expected and self.settings.enforce_node_version and is_stale(expected, code_version()):
+            log.warning(
+                "version mismatch, refusing command",
+                extra={
+                    "task_id": envelope.task_id,
+                    "expected": expected,
+                    "running": code_version(),
+                },
+            )
             try:
                 await message.nak(delay=2.0)
             except Exception:  # noqa: BLE001
@@ -606,15 +631,18 @@ class Worker:
 
     async def _run_impl(self, envelope: Envelope, snapshot: TaskSnapshot) -> ResultPayload:
         role = envelope.role or self.role
-        model = self.settings.model_for(role)
+        # Retry-with-intent: an explicit model override on the snapshot wins
+        # over the worker's role default.
+        model = (envelope.payload or {}).get("model_override") or self.settings.model_for(role)
         # M16 mesh-clarify: this command is a peer consult, not a role run.
         consult = (envelope.payload or {}).get("consult")
         if consult:
             return await self._run_consult(envelope, role, model, consult)
         # Harness layer (14.14): external harnesses take the coder role via
         # the generic Harness contract; "inproc" keeps the built-in loop.
-        if role is Role.CODER and self.settings.harness_coder != "inproc":
-            return await self._run_harness(envelope, role, model)
+        harness_name = (envelope.payload or {}).get("harness") or self.settings.harness_coder
+        if role is Role.CODER and harness_name != "inproc":
+            return await self._run_harness(envelope, role, model, harness_name)
         self._written_files = {}
         tools = (
             list(self.tools.schemas)
@@ -628,7 +656,9 @@ class Worker:
             {"role": "system", "content": SYSTEM_PROMPTS[role]},
             {
                 "role": "user",
-                "content": build_user_prompt(role, envelope.payload or {}),
+                "content": build_user_prompt(
+                    role, envelope.payload or {}, self._message_tuple(envelope)
+                ),
             },
         ]
 
@@ -650,6 +680,14 @@ class Worker:
         except Exception as exc:  # noqa: BLE001
             return ResultPayload(ok=False, error=f"agent error: {exc}")
 
+        log.info(
+            "raw role output",
+            extra={
+                "role": role.value,
+                "tool_steps": run.tool_steps,
+                "content": (run.content or "")[:400],
+            },
+        )
         try:
             output = parse_role_output(role, run.content)
         except (ValueError, ValidationError) as exc:
@@ -686,36 +724,35 @@ class Worker:
             tool_steps=run.tool_steps,
         )
 
-    async def _run_harness(self, envelope: Envelope, role: Role, model: str) -> ResultPayload:
+    async def _run_harness(
+        self, envelope: Envelope, role: Role, model: str, harness_name: str = ""
+    ) -> ResultPayload:
         """Run the coder role through an external harness (workspace state).
 
         The harness edits the workspace directly; we harvest the changed
         files back into CoderOutput so the orchestrator/critic contract is
         unchanged (14.14).
         """
+        harness_name = harness_name or self.settings.harness_coder
         if role is not Role.CODER:
             return ResultPayload(
                 ok=False,
-                error=f"harness {self.settings.harness_coder!r} runs the coder role only",
+                error=f"harness {harness_name!r} runs the coder role only",
             )
-        prompt = build_user_prompt(role, envelope.payload or {})
-        harness = get_harness(self.settings.harness_coder, model=model)
+        prompt = build_user_prompt(role, envelope.payload or {}, self._message_tuple(envelope))
+        harness = get_harness(harness_name, model=model)
         workspace = Path(self.settings.workspace_root)
         try:
-            result = await harness.run(
-                prompt, workspace, timeout_s=self.settings.coder_timeout_s
-            )
+            result = await harness.run(prompt, workspace, timeout_s=self.settings.coder_timeout_s)
         except Exception as exc:  # noqa: BLE001
             return ResultPayload(ok=False, error=f"harness error: {exc}")
         if not result.ok:
             return ResultPayload(
                 ok=False,
-                error=result.error or f"harness {self.settings.harness_coder} failed",
+                error=result.error or f"harness {harness_name} failed",
                 tool_steps=result.tool_events,
             )
-        changed = await changed_file_contents(
-            workspace, max_bytes=self.settings.max_artifact_bytes
-        )
+        changed = await changed_file_contents(workspace, max_bytes=self.settings.max_artifact_bytes)
         errors = python_syntax_errors(changed)
         if errors:
             return ResultPayload(
@@ -846,6 +883,21 @@ class Worker:
             extra={"model": model, "request": request.request_id},
         )
 
+    @staticmethod
+    def _claim_permitted(snapshot: TaskSnapshot, node_name: str, withdrawn: bool) -> bool:
+        """Weak->strong routing on the M14 claim path.
+
+        A snapshot with prefer_node set may only be claimed by the preferred
+        host (prefix match: worker node_names are role-suffixed while
+        prefer_node names the host). An explicit preference overrides the
+        synergy-gate withdraw — the driver deliberately picked that node.
+        """
+        prefer = snapshot.prefer_node
+        matches = bool(prefer) and node_name.startswith(prefer)
+        if prefer and not matches:
+            return False
+        return matches or not withdrawn
+
     async def _claim_loop(self) -> None:
         """Poll the ledger and CAS-claim tasks matching our next role.
 
@@ -871,26 +923,21 @@ class Worker:
                 # No central scheduler — the node reads its own history and
                 # politely steps back, leaving work to peers with better
                 # track records on this role.
+                withdrawn = False
                 if self.settings.claim_synergy_gate:
-                    _stats = compute_server_success(
-                        await self.bus.list_observations()
-                    )
-                    _server = (
-                        f"{self.settings.node_name}:"
-                        f"{self.settings.model_for(self.role)}"
-                    )
-                    if should_withdraw(
+                    _stats = compute_server_success(await self.bus.list_observations())
+                    _server = f"{self.settings.node_name}:{self.settings.model_for(self.role)}"
+                    withdrawn = should_withdraw(
                         _stats,
                         _server,
                         min_samples=self.settings.claim_synergy_min_samples,
                         min_ratio=self.settings.claim_synergy_min_ratio,
-                    ):
+                    )
+                    if withdrawn:
                         log.info(
-                            "synergy gate: withdrawing from claims "
-                            "(track record below threshold)",
+                            "synergy gate: withdrawing from claims (track record below threshold)",
                             extra={"server": _server},
                         )
-                        continue
                 for snapshot in await self.bus.list_tasks():
                     if snapshot.state in TERMINAL_STATES:
                         continue
@@ -900,6 +947,12 @@ class Worker:
                         continue
                     # M14: role gate — only the scheduled next role claims.
                     if snapshot.next_role and snapshot.next_role != self.role.value:
+                        continue
+                    # Weak->strong routing on the claim path: prefer_node
+                    # binds a snapshot to its preferred host, and an explicit
+                    # preference overrides the synergy-gate withdraw (the
+                    # driver deliberately picked that node).
+                    if not self._claim_permitted(snapshot, self.settings.node_name, withdrawn):
                         continue
                     # T7: a retired model is not claimable through — the node
                     # that retired it unloads it, so planning around it would
@@ -967,6 +1020,8 @@ class Worker:
                     "revisions": snapshot.revisions,
                     "workspace_root": str(self.settings.workspace_root),
                     "role": role.value,
+                    "harness": snapshot.harness,
+                    "model_override": snapshot.model_override,
                 },
             )
             try:
@@ -1020,6 +1075,14 @@ class Worker:
                 output_model = _OUTPUT_SCHEMA[envelope.role]
                 output = output_model.model_validate(result.output)
                 self._store_output(snapshot, envelope.role, output)
+                if envelope.role is Role.PLANNER:
+                    # tuple schema: persist the shared Background (plan update)
+                    save = getattr(self.bus, "save_background", None)
+                    if save is not None:
+                        try:
+                            await save(snapshot.task_id, self._background(snapshot))
+                        except Exception as exc:  # noqa: BLE001 - best effort
+                            log.warning("background persist failed: %s", exc)
                 question = snapshot.question_output(envelope.role)
                 if question:
                     event = Event("ask", reason=question, role=envelope.role)
@@ -1047,6 +1110,45 @@ class Worker:
         if envelope.node:
             await self.bus.emit_event(snapshot, "result.executed_on", envelope.node)
         await self._apply_local(snapshot, event)
+
+    async def _deposit_observation(self, snapshot: TaskSnapshot) -> None:
+        """Deposit a terminal observation into the experience graph.
+
+        Worker-side mirror of the orchestrator's hook (15.3 item 5): in the
+        self_pipeline the worker owns terminal transitions, so deposits and
+        the experience fold live here. Both are best effort — a broken side
+        channel never fails the task lifecycle itself.
+        """
+        from memnc.observations import observation_from_snapshot
+
+        if not hasattr(self.bus, "deposit_observation"):
+            return
+        try:
+            observation = observation_from_snapshot(snapshot)
+            if observation is None:
+                return
+            await self.bus.deposit_observation(observation)
+        except Exception as exc:  # noqa: BLE001 - side channel only
+            log.warning(
+                "observation deposit failed",
+                extra={"task_id": snapshot.task_id, "error": str(exc)},
+            )
+            return
+        if self.settings.experience_from_observations:
+            try:
+                self._record_experience(observation)
+            except Exception as exc:  # noqa: BLE001 - side channel only
+                log.warning(
+                    "experience record failed",
+                    extra={"task_id": snapshot.task_id, "error": str(exc)},
+                )
+
+    def _record_experience(self, observation: TaskObservation) -> None:
+        from .experience_store import ExperienceStore, record_observation
+
+        store = ExperienceStore(self.settings.experience_store_path).load()
+        if record_observation(store, observation):
+            store.save()
 
     async def _verify_gate(self, snapshot: TaskSnapshot) -> None:
         """M14 deterministic verification gate.
@@ -1135,6 +1237,21 @@ class Worker:
                     fix="fix the reported runtime/compile errors",
                 )
             ]
+
+    def _background(self, snapshot: TaskSnapshot) -> Background:
+        return Background(task=snapshot.task, context=snapshot.context, plan=snapshot.plan)
+
+    @staticmethod
+    def _message_tuple(envelope: Envelope) -> MessageTuple | None:
+        """Message tuple attached by the orchestrator (tuple_prompts on)."""
+        raw = (envelope.payload or {}).get("message_tuple")
+        if raw is None:
+            return None
+        try:
+            return MessageTuple.model_validate(raw)
+        except ValidationError:
+            log.warning("invalid message_tuple in payload; falling back to prose")
+            return None
 
     def _store_output(self, snapshot: TaskSnapshot, role: Role, output) -> None:
         if role is Role.PLANNER:
@@ -1276,6 +1393,12 @@ class Worker:
 
         await self.bus.put_snapshot(snapshot)
         await self.bus.emit_event(snapshot, f"state.{result.state.value.lower()}", event.reason)
+        if result.state in TERMINAL_STATES:
+            # 14.13 step 1 / 15.3 item 5: worker-driven pipeline owns the
+            # terminal transition, so the observation deposit (and the
+            # experience fold) happen here — mirrors the orchestrator's
+            # result path. Duck-typed + best effort, never fails the task.
+            await self._deposit_observation(snapshot)
         log.info(
             "self pipeline transition",
             extra={

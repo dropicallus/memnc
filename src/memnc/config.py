@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Weak->strong routing: node that receives strong-retry tasks after a
     # weak node exhausts its attempt budget ("" = disabled).
     strong_node: str = ""
+    # P4 slice 3: wake-on-backlog. When the backlog driver finds planned
+    # work and wol_mac is set, it sends a WOL magic packet (throttled by
+    # wol_min_interval_s) to wake the cold-reserve host ("" = disabled).
+    wol_mac: str = ""
+    wol_min_interval_s: float = 300.0
 
     # T6: node capabilities advertised into the roster KV (roster.<node>).
     # node_vram_gb = VRAM the mesh may plan around (0 = unknown/none);
@@ -46,6 +51,7 @@ class Settings(BaseSettings):
     # LM Studio, cloud). agent_allowed_verbs is the fail-closed allowlist.
     agent_llm_base_url: str = "http://127.0.0.1:4000/v1"
     agent_llm_model: str = "local"
+
     @property
     def nats_servers(self) -> list[str]:
         """Split NATS_URL into a server pool (comma-separated seed list)."""
@@ -58,6 +64,10 @@ class Settings(BaseSettings):
     claim_synergy_gate: bool = True
     claim_synergy_min_samples: int = 3
     claim_synergy_min_ratio: float = 0.3
+    # P4 slice 2 (node update logic): when enabled, a worker refuses any
+    # dispatch command whose mesh_version differs from its own code
+    # fingerprint — stale nodes stop claiming until they upgrade.
+    enforce_node_version: bool = False
     agent_allowed_verbs: str = (
         "task.list,task.detail,node.list,node.detail,"
         "cap.list,grant.list,trust.list,ledger.read,task.submit"
@@ -134,6 +144,16 @@ class Settings(BaseSettings):
     # M14: claimed tasks run their pipeline worker-driven — the finishing
     # worker advances the snapshot itself; the orchestrator is a spectator.
     self_pipeline: bool = True
+    # Structured message tuples (docs/design-message-tuple.md): when on, the
+    # orchestrator attaches a MessageTuple to every dispatch payload and the
+    # worker renders the prompt as MESSAGE/BACKGROUND/INTERMEDIATE OUTPUT
+    # sections instead of re-derived prose. Off = byte-identical arm C.
+    tuple_prompts: bool = False
+    # 15.3 item 5: experience store producers. Path of the file-backed
+    # ExperienceStore; observation deposits append success/failure bullets
+    # only when the flag is on (opt-in, like tuple_prompts).
+    experience_store_path: str = "data/experience-store.json"
+    experience_from_observations: bool = False
 
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"

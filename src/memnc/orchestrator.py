@@ -15,7 +15,7 @@ from .bus import Bus
 from .config import Settings, get_settings
 from .fsm import Event, transition
 from .fsutil import apply_artifacts
-from .observations import observation_from_snapshot
+from .observations import TaskObservation, observation_from_snapshot
 from .schema import (
     SUBJECT_CMD,
     SUBJECT_CONTROL,
@@ -23,12 +23,15 @@ from .schema import (
     SUBJECT_LEDGER,
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
+    Background,
     CoderOutput,
     ControlCommand,
     CriticOutput,
     Envelope,
     GrantLevel,
+    IntermediateOutput,
     Kind,
+    MessageTuple,
     PlannerOutput,
     ResultPayload,
     Role,
@@ -40,6 +43,7 @@ from .schema import (
     plan_model_request,
 )
 from .scoring import router_candidates, score_candidates
+from .version import code_version
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +158,7 @@ class Orchestrator:
             claimable=submission.claimable,
             needs=submission.needs,
             prefer_node=submission.prefer_node,
+            harness=submission.harness,
             gate=submission.gate,
             # M14: worker-driven pipeline for claimable tasks
             next_role=("planner" if submission.claimable and self.settings.self_pipeline else ""),
@@ -162,6 +167,7 @@ class Orchestrator:
             state=TaskState.RECEIVED,
         )
         await self.bus.put_snapshot(snapshot)
+        await self._save_background(snapshot)
         await self.bus.emit_event(snapshot, "task.received", f"[{source}] {submission.task[:180]}")
         log.info(
             "task submitted",
@@ -219,6 +225,10 @@ class Orchestrator:
                     raise ValueError(
                         f"retry needs a FAILED/CANCELLED task, {snapshot.task_id} is {snapshot.state.value}"
                     )
+                # Retry-with-intent: a non-empty --model override reroutes every
+                # re-dispatch of this snapshot; a plain retry keeps the old value.
+                if cmd.model_override.strip():
+                    snapshot.model_override = cmd.model_override.strip()
                 snapshot.state = TaskState.RECEIVED
                 snapshot.record("human.retry", f"by={cmd.agent_id}")
                 await self.bus.put_snapshot(snapshot)
@@ -568,6 +578,56 @@ class Orchestrator:
         elif role is Role.CRITIC:
             snapshot.critique = CriticOutput.model_validate(output)
 
+    # -- structured message tuples (docs/design-message-tuple.md) ----------
+    def _background(self, snapshot: TaskSnapshot) -> Background:
+        return Background(
+            task=snapshot.task,
+            context=snapshot.context,
+            plan=snapshot.plan,
+        )
+
+    async def _save_background(self, snapshot: TaskSnapshot) -> None:
+        """Persist the shared Background next to the snapshot. Best-effort and
+        duck-typed like the observation hook: a KV hiccup or a fake bus without
+        the method must never break the pipeline (tuples are an add-on)."""
+        save = getattr(self.bus, "save_background", None)
+        if save is None:
+            return
+        try:
+            await save(snapshot.task_id, self._background(snapshot))
+        except Exception as exc:  # observers keep broad excepts
+            log.warning(
+                "background persist failed",
+                extra={"task_id": snapshot.task_id, "error": str(exc)},
+            )
+
+    def _message_tuple(self, snapshot: TaskSnapshot, role: Role) -> MessageTuple:
+        """Assemble the dispatch tuple: short imperative message, shared
+        background, and the previous hop's intermediate output."""
+        io: IntermediateOutput | None = None
+        if role is Role.CRITIC and snapshot.code is not None:
+            io = IntermediateOutput(
+                role=Role.CODER,
+                summary=snapshot.code.summary,
+                files=list(snapshot.code.files),
+            )
+        elif role is Role.CODER and snapshot.critique is not None:
+            io = IntermediateOutput(
+                role=Role.CRITIC,
+                summary=snapshot.critique.summary,
+                issues=list(snapshot.critique.issues),
+            )
+        messages = {
+            Role.PLANNER: "Produce a plan for the task.",
+            Role.CODER: "Implement the task.",
+            Role.CRITIC: "Review the implementation.",
+        }
+        return MessageTuple(
+            message=messages[role],
+            background=self._background(snapshot),
+            intermediate_output=io,
+        )
+
     # -- transitions -------------------------------------------------------
     async def _apply(self, snapshot: TaskSnapshot, event: Event) -> None:
         result = transition(
@@ -694,6 +754,29 @@ class Orchestrator:
                 "observation deposit failed",
                 extra={"task_id": snapshot.task_id, "error": str(exc)},
             )
+            return
+        if self.settings.experience_from_observations:
+            try:
+                self._record_experience(observation)
+            except Exception as exc:  # noqa: BLE001 - side channel only
+                log.warning(
+                    "experience record failed",
+                    extra={"task_id": snapshot.task_id, "error": str(exc)},
+                )
+
+    def _record_experience(self, observation: TaskObservation) -> None:
+        """15.3 item 5: fold a terminal observation into the experience store.
+
+        File-backed, never raises into the pipeline (caller catches). The
+        store is a side channel: a write failure costs one bullet, nothing
+        else.
+        """
+        from .experience_store import ExperienceStore, record_observation
+
+        store = ExperienceStore(self.settings.experience_store_path).load()
+        added = record_observation(store, observation)
+        if added:
+            store.save()
 
     async def _dispatch(self, snapshot: TaskSnapshot, role: Role) -> None:
         timeout_s = self.settings.timeout_for(role)
@@ -717,8 +800,14 @@ class Orchestrator:
                 "workspace_root": str(self.settings.workspace_root),
                 "role": role.value,
                 "prefer_node": snapshot.prefer_node,
+                "harness": snapshot.harness,
+                "model_override": snapshot.model_override,
+                # P4 slice 2: mesh code fingerprint — stale workers refuse.
+                "mesh_version": code_version(),
             },
         )
+        if self.settings.tuple_prompts:
+            command.payload["message_tuple"] = self._message_tuple(snapshot, role).model_dump()
         snapshot.last_action = {
             "command_id": command.id,
             "role": role.value,

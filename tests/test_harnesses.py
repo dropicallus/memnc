@@ -411,3 +411,96 @@ def test_inproc_harness_registered():
     harness = ToolLoopHarness(model="fake", backend=_FakeBackend([]))
     caps = harness.capabilities()
     assert caps.external_process is False
+
+
+# --- 14.14 per-task harness selection: envelope payload overrides the node ---
+
+
+def test_worker_payload_harness_overrides_node_default(tmp_path):
+    seen_names = []
+
+    class RecordingHarness:
+        name = "fake-per-task"
+
+        def __init__(self, **kwargs):
+            seen_names.append(kwargs.get("model"))
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            return HarnessResult(ok=True, summary="done", tool_events=0)
+
+    register(RecordingHarness)
+    try:
+        # Node default is "inproc", but the task payload names "fake-per-task".
+        worker = _coder_worker(tmp_path, "inproc")
+        result = asyncio.run(
+            worker._run(_coder_envelope({"task": "x", "harness": "fake-per-task"}), None)
+        )
+    finally:
+        from memnc.harnesses import _REGISTRY
+
+        _REGISTRY.pop("fake-per-task", None)
+    assert result.ok is True
+    assert seen_names  # the payload-named harness ran, not the node default
+
+
+def test_worker_payload_inproc_forces_builtin_loop(tmp_path, monkeypatch):
+    import memnc.worker as worker_mod
+
+    class MustNotRunHarness:
+        name = "fake-bypassed"
+
+        def __init__(self, **kwargs):
+            pass
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            raise AssertionError("payload harness=inproc must use the builtin loop")
+
+    register(MustNotRunHarness)
+    try:
+        async def boom(*args, **kwargs):
+            raise AssertionError("builtin loop reached")
+
+        monkeypatch.setattr(worker_mod, "run_agent", boom)
+        # Node default is an external harness; payload says inproc.
+        worker = _coder_worker(tmp_path, "fake-bypassed")
+        result = asyncio.run(
+            worker._run(_coder_envelope({"task": "x", "harness": "inproc"}), None)
+        )
+    finally:
+        from memnc.harnesses import _REGISTRY
+
+        _REGISTRY.pop("fake-bypassed", None)
+    assert result.ok is False
+    # The builtin loop ran (its failure), NOT the registered harness.
+    assert "builtin loop reached" in result.error
+
+
+def test_worker_empty_payload_harness_falls_back_to_node_default(tmp_path):
+    class DefaultHarness:
+        name = "fake-default"
+
+        def __init__(self, **kwargs):
+            pass
+
+        def capabilities(self):
+            return {}
+
+        async def run(self, prompt, workspace, timeout_s=900):
+            return HarnessResult(ok=False, error="default ran", tool_events=0)
+
+    register(DefaultHarness)
+    try:
+        worker = _coder_worker(tmp_path, "fake-default")
+        result = asyncio.run(worker._run(_coder_envelope({"task": "x"}), None))
+    finally:
+        from memnc.harnesses import _REGISTRY
+
+        _REGISTRY.pop("fake-default", None)
+    assert result.ok is False
+    assert result.error == "default ran"

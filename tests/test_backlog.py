@@ -316,3 +316,29 @@ def test_cascade_ids_still_claimable_after_done_dep():
     assert {t.status for t in asyncio.run(store.list())} == {"failed"}
     assert len({t.id for t in asyncio.run(store.list())}) == 3
     assert b.id and c.id  # keep names referenced
+
+
+def test_add_stores_harness_and_roundtrips():
+    store, _ = _store()
+    task = asyncio.run(store.add("harnessed", harness="pi"))
+    tasks = {t.id: t for t in asyncio.run(store.list())}
+    assert tasks[task.id].harness == "pi"
+    plain = asyncio.run(store.add("plain"))
+    assert asyncio.run(store.get(plain.id)).harness == ""
+
+
+def test_make_strong_retry_carries_harness():
+    from memnc.backlog import make_strong_retry
+
+    src = _failed_task()
+    src.harness = "pi"
+    retry = make_strong_retry(src, "node-a")
+    assert retry.harness == "pi"
+
+
+def test_claim_returns_task_with_harness():
+    store, _ = _store()
+    task = asyncio.run(store.add("harnessed", harness="pi"))
+    claimed = asyncio.run(store.claim(task.id, "drv"))
+    assert claimed is not None
+    assert claimed.harness == "pi"

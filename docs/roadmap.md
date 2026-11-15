@@ -2,6 +2,83 @@
 
 ## Built
 
+- **2026-11-15 — Bench arm D, adversarial critic (15.3 item 3, D1)**: the
+  critic must attempt a concrete refutation before any verdict; unevidenced
+  approvals are rejected as critiques, loop capped at 2 revisions. Evidence
+  gate unit-tested; bench run pending.
+
+- **2026-11-15 — Structured message tuple (15.3 item 2)**: TalkHop-style
+  communication tuple (message / background / intermediate_output) built
+  end-to-end behind `Settings.tuple_prompts` (default off): schema models,
+  persistent background as a workflow_state companion key, tuple-rendered
+  prompts with prose fallback; no extra model calls.
+
+- **2026-11-14 — Similarity + ranked attention (§14.13 Step 4)**: Jaccard
+  similarity over task text ranks deposited observations against a free-text
+  query; `ranked_attention` scores each match by similarity x half-life decay
+  (default 14 days) x outcome reward (done 1.0, failed 0.25, cancelled drops)
+  x corroboration (sufficiently-similar sibling observations boost the score,
+  capped at 2x). Deterministic and read-only — no RNG, no wall-clock reads
+  (`now` injectable), no ledger mutation. Surface: `meshctl similar "<query>"`
+  or `--task-id <id>` (uses that observation's task as the query, excludes it
+  from results), plus `--limit`/`--half-life`. Embedding upgrade stays open.
+  Tests: `tests/test_experience.py` (18 cases).
+
+- **2026-11-14 — Task output delivered to chat (P1 item 5)**: DONE events
+  broadcast a completion card instead of a bare state line — `format_done_card`
+  shows task title, the coder summary (400-char excerpt) and produced file
+  paths, so the result itself lands in chat with the final event (no second
+  tool hop to /trace). Tests: 3 cases in `tests/test_retry_intent.py`.
+
+- **2026-11-14 — Command discovery (P1 item 7)**: the Telegram command list
+  lives in one grouped table (`COMMAND_GROUPS`: view / act / decide) in
+  `telegram.py`; unknown commands get the grouped list via `format_help()`
+  (replacing the dense one-line usage string), and `BotAPI.set_my_commands`
+  registers the flattened command list with BotFather at startup so Telegram
+  autocompletes. Registration is best-effort (failure logged, never fatal).
+  Tests: 3 cases in `tests/test_retry_intent.py`.
+
+- **2026-11-14 — Retry with intent (P1 item 6)**: `/retry <id> --model
+  <name>` reruns a FAILED/CANCELLED task on a chosen model. `ControlCommand`
+  gains `model_override`; the retry branch in the orchestrator stamps it on
+  the snapshot (`TaskSnapshot.model_override`) and the re-dispatch payload
+  carries it, so the worker's `_run_impl` uses it instead of the role
+  default for every re-dispatch of that snapshot (plain retries keep the
+  previously recorded override). Telegram parses the flag, the API write
+  verb `task.retry` forwards it, and buttons still work unchanged. Tests:
+  `tests/test_retry_intent.py` (7 cases: orchestrator stamping, payload
+  forwarding, worker model choice, Telegram parsing).
+
+- **2026-11-14 — Node revocation tombstones (§21.3)**: `meshctl
+  revoke-node <id> --reason --by` writes a tombstone into the new KV bucket
+  `mesh_revocations` (durable, included in cold-standby backup), withdraws
+  every capability record of the node and drops its roster entry; `meshctl
+  reinstate <id>` removes it. Enforcement while revoked: heartbeats are
+  refused (roster gate), capability publishes raise `PermissionError`
+  (capability gate), and every `try_claim` from that node is denied
+  fail-closed before any CAS write — in-flight tasks finish untouched.
+  `meshctl revocations` lists tombstones. Tests: `tests/test_revocation.py`
+  (9 cases). Nothing in the mesh auto-revokes; revocation is a human cut.
+
+- **2026-11-14 — Telegram inline keyboards + short task-ID prefixes
+  (14.11 P0 slice 1)**: failure cards carry `[Retry][Cancel]` inline buttons;
+  callback_data (`tk:/mr:/nd:` triplets) parses through a fixed verb table and
+  every press rides the existing grant-checked `_control`/`_decide` API path
+  (answerCallbackQuery + edit-in-place stamp, unauthorized chats only get the
+  answer). `resolve_task_id()` accepts unambiguous ≥6-char prefixes for
+  `state`/`trace`/`cancel`/`retry`/`gate`, with ambiguity and refusal
+  messages. Tests: `tests/test_telegram_buttons.py` (25 cases).
+
+- **2026-11-14 — Node code fingerprints (P4 slice 2)**: every worker
+  advertises a deterministic code fingerprint (`memnc.version.code_version`,
+  hash over installed package sources, `<__version__>+<hash12>`) in
+  `NodeInfo.version`; `merge()` carries the freshest non-`dev` value. The
+  orchestrator stamps `mesh_version` into every dispatch command; with
+  `Settings.enforce_node_version` (opt-in, default off) a worker running
+  different code naks the command so it stays available for compliant
+  nodes. `meshctl doctor` lists the roster with per-node STALE marks and
+  fails when any node runs other code. Unknown/`dev` versions fail open.
+
 - **2026-11-13 — §14.13 Step 5, experience-driven claim gate** (commits
   a8cd309, 9d118b6, 7636e00): workers aggregate their own per-server track
   record from deposited observations and withdraw from claiming when the
@@ -339,7 +416,7 @@ revisions, sample size per unordered model pair), exposed as
 `meshctl synergy [--limit N]` (verified live against the mesh KV).
 Console dashboard + optional Telegram digest still open. No routing
 decisions — measurement first (
-§14.13 Steps 1–4; remaining: Step 4 similarity/ranked attention (Step 5 claim gate DONE, commits a8cd309/9d118b6) |
+§14.13 Steps 1–4 all DONE (Step 4 similarity/ranked attention: `experience.py`, commit below); console dashboard + Telegram digest still open |
 | B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists as a standalone vendored copy** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) |
 | B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
 | B4 | Fisher-Merge pipeline | mergekit-based merge of role adapters with a subspace-divergence check (principal angles) before merging; naive averaging is known to degrade (MoRSE result). | §19 P0 + synthesis.md §5 |
@@ -521,22 +598,19 @@ today.
 
 ### P0 — friction we feel every day
 
-1. **Inline keyboards for gates and control actions** (biggest single win).
-   Instead of typing `/approve <request-id>` / `/gate approve <task-id>`,
-   the bot sends the pending request as a message with buttons:
-   `[✅ Approve] [❌ Reject]` for model requests, `[Cancel] [Retry]` under
-   failed-task events, `[Pause] [Resume]` under roster anomalies. On tap:
-   `answerCallbackQuery` + edit the original message in place to show the
-   decision (buttons removed, decision stamped) — no extra chat clutter.
-   Implementation: python-telegram-bot `CallbackQueryHandler`; store the
-   `ControlCommand` as `callback_data` (compact `m:<req-id>:approve`,
-   `t:<task-id>:retry`); the existing grant-checked `_control` path is
-   reused unchanged, only the transport becomes a button.
+1. **Inline keyboards for gates and control actions** — DONE (slice 1,
+   shipped). `CallbackQueryHandler`-equivalent polling: failure cards carry
+   `[Retry][Cancel]` (`tk:<id>:retry|cancel`), model-request buttons
+   (`mr:<req-id>:approve|reject`) and node buttons (`nd:<node>:pause|resume`)
+   parse through a fixed verb table; every press still rides the grant-checked
+   `_control`/`_decide` API path (no new authority path), unauthorized chats
+   only get the callback answered. Model-request/node cards are handled but
+   not yet auto-announced — pending-request push is a later slice.
    Fixes: copying 20-hex IDs on mobile, typo risk, slow approval loop.
-2. **Short task IDs everywhere.** Accept unambiguous prefixes (≥6 chars)
-   for every task-id argument (`state`, `trace`, `cancel`, `retry`,
-   `gate`); `/tasks` and `/trace` already print only a prefix — align
-   them. Fixes: ID copy/paste round trips.
+2. **Short task IDs everywhere** — DONE (slice 1). `resolve_task_id()`
+   accepts unambiguous prefixes (≥6 chars, exact full ids always win) for
+   `state`, `trace`, `cancel`, `retry`, `gate`; ambiguity lists the candidate
+   prefixes, short/unknown prefixes say why. Fixes: ID copy/paste round trips.
 3. **`/status` one-shot digest.** One command answering "is everything
    fine?": tasks by state (count + the interesting ones), nodes with
    heartbeat age and current claim, pending model requests, models near
@@ -554,17 +628,13 @@ today.
 
 ### P1 — smoother daily loop
 
-5. **Task output delivered to chat.** On completion, push the result
-   artifact (or its path/summary) with the final event, not just ledger
-   state. Fix: no second tool hop to read what the mesh produced.
-6. **Retry with intent.** `/retry <id> --model qwen2.5-coder:7b` (or a
-   button variant) overrides the model for the rerun; `/retry` alone
-   keeps the recorded route. Fixes: rerunning a task into the same
-   failing configuration.
-7. **Command discovery.** Register the command list with BotFather
-   (setMyCommands) so Telegram autocompletes; `/help` prints the same
-   list grouped (view / act / decide). Fix: the dense one-line usage
-   string is the only discovery surface today.
+5. **~~Task output delivered to chat.~~ DONE 2026-11-14** — see Built entry;
+   DONE events now broadcast a completion card carrying summary + files.
+6. **~~Retry with intent.~~ DONE 2026-11-14** — `/retry <id> --model <name>`
+   overrides the model for the rerun; `/retry` alone keeps the recorded
+   route. See the Built entry below.
+7. **~~Command discovery.~~ DONE 2026-11-14** — see Built entry; grouped
+   `/help` and BotFather `setMyCommands` registration at startup.
 8. **Quieter event stream.** Group and throttle routine state transitions
    (e.g. claim→advance collapsed), keep the loud channel for submit /
    failure / gate / completion. Rationale: notification rules belong to
@@ -692,11 +762,14 @@ Items 9–10 wait for the robustness classifier /
 §14.4 guardrail).
 
 **Step 4 — Similarity + ranked attention (first real graph step).**
-Jaccard similarity over task text/type as the first basis (embedding
-upgrade stays open, 
-§14.12 open point (a)). Port the deterministic
-ranked attention from `context_attention.py` (half-life decay + outcome
-reward + corroboration) onto our observations. Still read-only.
+- **DONE (2026-11-14):** Jaccard similarity over task text (embedding
+  upgrade stays open, §14.12 open point (a)). Deterministic ranked
+  attention ported onto the observation ledger in `experience.py`:
+  score = similarity x half-life decay (default 14 days) x outcome reward
+  (done 1.0, failed 0.25, cancelled drops) x corroboration (similar
+  sibling observations boost, capped 2x). Read-only, no RNG, injectable
+  clock. Surface: `meshctl similar "<query>"` / `--task-id <id>`.
+  Tests: `tests/test_experience.py`.
 
 **Step 5 — Routing feedback loop (behavior change, human-gated).**
 Claim decision consults ranked traces alongside the existing configured
@@ -788,11 +861,12 @@ Topology support is DONE (see Built). Open infra slices:
    failover story until the mesh goes productive; a data-less witness
    (tiny VPS, ~30 MB RAM) is the upgrade path to real automatic failover
    (Mesh topology, replicas=3).
-2. **Node update logic**: version check at heartbeat, refuse/upgrade
-   stale nodes — motivated by today's manual rsync rollouts.
-3. **Wake-on-backlog (WoL)**: mesh detects backlog, wakes the cold
-   reserve host. Posture: cold reserve capacity, no replication overlap
-   with slice 1.
+2. **Node update logic**: DONE — deterministic code fingerprints
+   (`memnc.version`), orchestrator stamps `mesh_version` into dispatch,
+   workers refuse mismatched code when `enforce_node_version` is on
+   (opt-in until the fleet rolls it), `meshctl doctor` reports stale
+   roster nodes.
+3. **Wake-on-backlog (WoL)**: DONE — see section 14.15.8.
 
 ## 14.14 Harness abstraction layer (pi first, BUILT 2026-11-14)
 
@@ -848,7 +922,8 @@ the harness (deterministic via monkeypatch, immune to test pollution), default
 stays inproc.
 
 
-Status: core built + proven end-to-end; worker wiring is the next slice.
+Status: core built + proven end-to-end; worker wiring and per-task selection
+are built (see above). Remaining: DiscussHarness.
 
 The weak->strong proof (7b dirty pass -> produktiv fixer, 11/11 green in
 `~/memnc-harness-wt`) showed the *product* of a coding agent is workspace
@@ -876,6 +951,27 @@ model works on a workspace*).
 **Config:** `harness_coder: str = "inproc"` in Settings (opt-in; "inproc"
 keeps the worker's own tool loop as default).
 
+### Per-task harness selection (slice 3, DONE 2026-11-14)
+
+The harness is now selectable per task, not only per node, so one mesh can
+mix cheap dirty drafts and strong fixes:
+
+- `TaskSubmission.harness` ("" = node default) -> `TaskSnapshot.harness`.
+  The orchestrator's claim payload carries it (`"harness": snapshot.harness`),
+  as does the worker-driven self-pipeline payload.
+- `Worker._run_impl` resolves the coder harness as
+  `envelope.payload.get("harness") or settings.harness_coder`; `""`/missing
+  falls back to the node default, and a payload `harness == "inproc"` forces
+  the built-in loop even on a node configured for an external harness.
+- `meshctl submit --harness <name>` sets it on a direct submission;
+  `meshctl backlog-add --harness` and `meshctl backlog-plan --harness`
+  stamp every generated backlog entry, and the backlog driver forwards
+  `claimed.harness` into its `TaskSubmission` (strong retries preserve it
+  via `make_strong_retry`).
+- Tests: payload override wins over the node default, payload `inproc`
+  bypasses the node's external harness, empty payload falls back, backlog
+  roundtrip + claim + strong-retry carry the field.
+
 **Tests:** `tests/test_harnesses.py` — event parsing (tools/summary/settled,
 noise tolerance, error turns), registry selection, and subprocess behavior
 (ok path, nonzero exit, timeout kills the whole tree <10s, missing binary)
@@ -888,7 +984,8 @@ using throwaway fake `pi` scripts.
    (diff -> evidence; Critic stays harness-agnostic).
 2. `ToolLoopHarness`: wrap the worker's in-proc loop in the same protocol so
    routing sees one interface.
-3. Per-task harness selection (instead of per-node config) — the step toward
+3. ~~Per-task harness selection (instead of per-node config)~~ DONE (see
+   "Per-task harness selection" above) — the step toward
    mesh self-organization: cheap models draft dirty, strong models fix.
 4. `DiscussHarness` (multi-model debate) on the same contract.
 
@@ -953,7 +1050,6 @@ suite 372 passed + 2 skipped. Commit 22ef1a2.
   suffices), HTTP mesh-to-mesh, federation v1.
 
 ### 14.15.1 Slice: plan-decomposition helper `backlog-plan` (BUILT 2026-11-15 night, commit 5378963)
-
 `decompose_plan(text)` in `backlog.py` turns a written plan document into task prompts:
 numbered (`1.`) or bullet (`- ` / `* `) lines win when >=2 exist, else blank-line-separated
 paragraphs, else the whole text as one block.
@@ -1042,3 +1138,416 @@ invocation with a repo-shipped service:
   PYTHONPATH strip, Restart policy, no root).
 
 Deployment note: node-a swapped from the nohup driver to the user unit.
+
+### 14.15.8 Slice: wake-on-backlog / WOL (BUILT 2026-11-14 night)
+
+Slice 3 of the P4 list. The backlog driver wakes the cold-reserve host
+when planned work is waiting but the mesh is otherwise idle:
+
+- `src/memnc/wol.py`: `parse_mac` / `magic_packet` (6x0xFF + 16x MAC),
+  `send_wol` (broadcast UDP datagram, SO_BROADCAST), and `WolWaker` —
+  a throttled wake decision (`maybe_wake()` with a configurable clock
+  and sender so tests inject fakes).
+- Settings: `wol_mac` (env `WOL_MAC`, "" = disabled) and
+  `wol_min_interval_s` (default 300). The idle loop cannot flood a
+  sleeping host: at most one packet per interval.
+- `meshctl backlog-run` calls `_maybe_wake_idle()` on every idle pass —
+  a packet is sent only when planned backlog entries exist AND the waker
+  is enabled. `meshctl wol [--mac M]` is the manual one-shot.
+- Tests: `tests/test_wol.py` (MAC parsing variants, packet structure,
+  broadcast send via a fake socket, throttle semantics, driver-hook
+  gating on planned entries, CLI subparser wiring).
+
+Cold-reserve posture: capacity wakes on demand, no replication overlap
+with the cold-standby backup (slice 1).
+
+### 14.15.6 prefer_node binding on the claim path (2026-11-14)
+
+The strong-retry live proof exposed a gap: `prefer_node` was only enforced on
+the command path (worker `_handle`), but claimable tasks run through the M14
+worker-driven pipeline (`_claim_loop`), which ignored it entirely — node-c's
+planner won the claim race for `[strong-retry]` tasks despite
+`prefer_node=node-a`. Additionally the synergy gate could withdraw the
+preferred node itself, deadlocking explicitly routed work.
+
+Fix (`Worker._claim_permitted`): a snapshot with `prefer_node` set may only be
+claimed by the preferred host (prefix match against the role-suffixed
+node_name), and an explicit preference overrides the synergy-gate withdraw.
+Tests in `tests/test_prefer_claim.py`; suite 408 passed, 2 skipped.
+
+### 14.15.7 Robust role-output parsing (2026-11-14)
+
+Live proof exposed a second parsing gap: a coder model emits its JSON tool
+call (name/arguments) as *plain text* before the result object, and
+`extract_json` returned the first object — the tool-call echo, which pydantic
+validated into an *empty* CoderOutput (extra keys ignored). Every debate round
+logged "files: no files" even though the model had written the file JSON.
+
+Fix (agent.py):
+- `extract_json_candidates` collects ALL JSON values in document order
+  (fenced blocks first, raw scan skips past decoded values).
+- `parse_role_output` validates every candidate, skips tool-call echoes
+  (name+arguments), and picks the richest valid payload (files/commands/
+  issues/plan/summary scored); ties go to document order. No candidate /
+  nothing valid -> precise ValueError or first ValidationError.
+
+Tests: tests/test_role_parse.py (6). Suite 414 passed, 2 skipped.
+A debug INFO log (`raw role output`) in the worker keeps tool_steps and the
+first 400 chars of model content visible for future parsing regressions.
+
+### 14.15.8 Backlog watcher terminal events (2026-11-14)
+
+The live proof then showed the orchestrator retrying a task to DONE while the
+backlog driver had already marked it failed: `_backlog_watch` counted
+`state.failed` (emitted on every FSM transition, once per debate attempt) as
+terminal. Only `task.*` events are final now; 3 tests
+(tests/test_backlog_watch.py). Suite 417 passed, 2 skipped.
+
+### 14.15.9 Slice: swarm-vs-single benchmark (PLANNED 2026-11-14)
+
+Goal: measure whether the mesh actually beats a single model. Literature
+context: debate/multi-agent gains are unreliable (Du et al. 2023; "If MAD is
+the Answer...?" 2025; "Talk Isn't Always Cheap" 2025 — sycophantic flip of
+correct answers; "More Agents Is All You Need" — gains correlate with task
+difficulty). Heterogeneity is the factor that wins consistently. Current
+system evidence: 40 live tasks, only 2 revisions — the critic approves
+almost everything on proof-of-concept tasks (verify-gate override,
+worker.py ~1114).
+
+Design — three arms on the same task set:
+  A) single strong: qwen2.5-coder:32b, one chance, no critic.
+  B) single + self-reflection: 32b with 3 self-correction rounds
+     (the necessary baseline a critic loop must beat).
+  C) mesh: planner qwen2.5:7b -> coder 32b -> critic-loop (current debate).
+
+Task set: 20-30 tasks with automatic verification (deterministic checks,
+no LLM judge), difficulty tiers easy/medium/hard.
+
+Runs: >= 5 seeded repetitions per task per arm. Metrics: success rate
+(primary), revision rounds to success, tokens / GPU-seconds, wallclock.
+Fair compute comparison: MAD vs. voting at equal token budget.
+
+Implementation: a `bench` runner driving the three arms through the
+worker/inproc path, writing `bench-report.md` with success rates and
+confidence intervals. Nightly runs over the backlog driver (no extra GPU
+cost). Backlog items: bench task set, bench runner + report, first
+report run.
+
+Status (2026-11-14): stage 1 done — `memnc.bench` package:
+  - `tasks.py`: 24 tasks (8 easy / 8 medium / 8 hard), pure stdlib,
+    deterministic, no network. Prompt names the produced file(s).
+  - `checkers.py`: one deterministic checker per task (plain asserts,
+    no LLM judge). Probes target the prompt's hard cases (LRU eviction
+    order, lexicographic tie-break in Dijkstra, token-bucket refill cap
+    and non-monotonic timestamps, csv quoting, mutation-freedom, etc.).
+  - `solutions.py`: reference solutions; every checker is proven to
+    accept them and reject a stub (tests/test_bench.py, 10 tests).
+  Checker protocol: `check_<task_id>(workdir) -> list[str]`; empty list
+  = pass. `verify_task()` is the single entry point for the runner.
+
+Status (2026-11-14): stage 2 done — `memnc.bench.runner`:
+  - Three arms over one inproc engine (`BenchEngine`) driving the same
+    memnc backends with the SAME role prompts (production mesh has no
+    solo mode, so the runner owns its engine): A single-shot coder,
+    B coder + up to 3 self-critique rounds, C planner->coder->critic
+    loop (max 3 revisions), mirroring the production FSM.
+  - Checker isolation: deterministic checkers are NEVER shown to the
+    models and never terminate a loop early; they score the final
+    workspace once (checker leakage would turn arm C into "arm A plus
+    an oracle").
+  - Seeded reps via a fixed temperature ladder (deterministic, no RNG;
+    identical prompts, only temperature varies).
+  - `bench-report.md` with success rates, Wilson score intervals,
+    tokens and wallclock per arm. Tests: tests/test_bench_runner.py
+    (9 tests, FakeBackend scripted). First live reports (rep 0,
+    qwen2.5-coder:32b via local ollama, docs/bench/): easy 24/24 and
+    medium 24/24 pass in ALL arms (ceiling effect - only the hard tier
+    discriminates). Hard: A 6/8, B 8/8, C 6/8 - SELF-REFLECTION beat
+    the mesh, which matched single-shot at ~7x the token cost. First
+    repo-own evidence for the single-agent>multi-structure finding;
+    full seeded run (reps>=5) + raised inference timeout next.
+
+### 14.15.10 Slice: pheromone routing (PROPOSED 2026-11-14, gated on bench evidence)
+
+Frank's framing: "Ich komme ja aus den Routing Algorithmen" — routing as the
+mental model for mesh coordination. Synthesis of AMRO-S (arXiv 2603.12933),
+Meta-Harness (2603.28052) and SkillDuet (2611.12109v2) into mesh vocabulary:
+
+1. Adjacency matrix -> roster graph: nodes = agents (node-a/b/c + roles),
+   edge weights = cost / latency / success rate per (edge, task_type).
+2. Label-Setting = today's FSM: Dijkstra-fixiert, deterministic. This is
+   WHY models don't "discuss": exactly one path is chosen, no alternatives
+   are ever explored.
+3. Label-Correcting = multiple pitches: k parallel coder drafts on the same
+   task; convergence via verify + voting, NOT via open debate (sycophancy:
+   correct answers flip under pressure — "Talk Isn't Always Cheap", 2025).
+4. Ant colony = KV pheromones: tau in a `routing` KV bucket per
+   (task_type, edge); deposit only on quality-gated success (task.done with
+   deterministic verify pass), evaporation via a decay job, selection
+   p proportional to tau^alpha * eta^beta, epsilon-exploration so unused
+   edges stay reachable.
+5. SkillDuet-Strength = the deposit rule: paired A/B comparison (log-prob
+   shift with/without a note); no shift = internalized = drop the note.
+   (Frank validated this as valid, together with point 6.)
+6. Konsens-Protokoll direkt: agents agree directly — peer-to-peer voting
+   over pitches in KV — no central FSM that decides alone.
+
+Gate (Frank, 2026-11-14): "Lass uns aber erst den Benchmark und die
+Evidenz aufsetzen" — do NOT implement routing before bench-report.md
+numbers exist. Initialize alpha/beta/tau0 from measured benchmark data,
+not guesses. Evidence and model profiles land in docs/experience.md
+(shared, committed experience store).
+
+### 14.15.11 Slice: swarm-to-human legibility (PROPOSED 2026-11-14, discussion first)
+
+Frank's insight (2026-11-14): memnc analyzes model-to-model interaction, but the
+real product interface is **swarm-to-human** — a human directing, observing and
+collaborating with the mesh. Kreative Mensch-Agenten-Kollaboration ist kaum im
+Mainstream angekommen; das Feld heisst in der Forschung Human-Swarm Interaction
+(HSI, aus Robotik/UAV) + Human-Agent Teaming (HAT). Edge-Thema, mega spannend.
+
+Research grounding (2026-11-14 chat, sources verified):
+1. Human-Swarm Interaction (arXiv 2504.02250): humans steer swarms via collective
+   variables (situational awareness, task allocation, collective perception), not
+   per-agent dialog. 10 design principles from goal-directed task analysis.
+2. "From Conversation to Orchestration" (ACM 2025): interaction paradigm shifts
+   from dialog to orchestration — open HCI problems: making orchestration and
+   conflict resolution visible, accountability (WHO of the 5 said this),
+   control over a nondeterministic collective.
+3. "Multi-Agents are Social Groups" (arXiv 2411.04578, n=94): a swarm exerts REAL
+   social group pressure on the human — 3 disagreeing agents shift opinion more
+   than 1. BUT 5 agents != more influence than 3; larger groups tip into
+   polarization and rejection. Human analog of the N_c critical-group-size result.
+4. CASA vs machine-heuristic (Human Communication Research 2025): humans treat
+   machines as-if social (mindless social scripts) but the swarm has no social
+   accountability — you get human-side sycophancy excuses ("5 agreed") without
+   real consolidation behind it.
+5. Gricean maxims for human-LLM (arXiv 2503.00858): common ground breaks; maxims
+   must be reinterpreted (quantity = manage cognitive load; quality = evidential
+   trust-building; relevance = context management).
+
+Design consequence for memnc: humans need not more dialogue but LEGIBILITY.
+- (a) Present the collective as ONE entity: roster + pheromone heat as the
+  swarm's "mood"/state, aggregated views (bench-report style), not per-agent logs.
+- (b) Provenance everywhere: which model produced which contribution, at what
+  confidence — docs/experience.md is the human-readable "who is good at what" layer.
+- (c) Surface conflicts, don't hide them: dissenting pitches shown as pitches,
+  verify-gate outcomes as first-class UI objects.
+- (d) Discount group pressure: "3 agents agree" is a WEAKER signal than one
+  passed deterministic check. Verify-gate > Konsens remains the ground rule —
+  the swarm-to-human asymmetry (CASA without accountability) is exactly why.
+- (e) Shared mental model (HAT): the human's model of "who can what" must be
+  kept calibrated (trust calibration) — experience.md + routing KV as its basis.
+
+Status: DISCUSSION POINT (Frank: "Ja mach rein ... mega spannend"). No UI work
+yet — writes-before-code rule. Candidate content for the UI P0 slice and the
+meshctl surface; independent of bench, can start after stage-2 runner.
+
+# 15. Research evidence integration (2026-11-15) — intake CLOSED
+
+Twelve sources processed 2026-11-14/15 (Frank: "dann ist Schluss" — no further
+research material gets added). Each has a full entry in docs/experience.md plus a
+fact-store record. Evidence classes: PEER-REVIEWED — ReAct (ICLR 2023), GEPA
+(ICLR 2026), ACE (ICLR 2026), MEM1 (ICLR 2026), Flow-DPO (NeurIPS 2024),
+non-cooperative poetry (Journal of Language Modelling 2026-02), TalkHier (IEEE
+TAI), MAAI fundamentals (Electronic Markets 2026, conceptual). ARXIV PREPRINT —
+FireAct, SyncMind. PRAXIS — Codacus video, Anthropic Ultracode.
+
+## 15.1 What our own benchmark established
+
+Easy and medium tiers are ceilings (24/24 every arm). The hard tier is the
+discriminating one: single-shot A 6/8 (75%, ~610 tokens/task), self-reflect
+B 8/8 (100%, ~2144), mesh C 6/8 (75%, ~4369). Mesh bought zero success at 7x
+cost; self-reflection was the winner. Consequence: any mesh mechanism must
+justify itself against arm B, not against arm A. This is the first repo-own
+evidence for the Einzel-LoRA > Multi thesis.
+
+## 15.2 The principles, each mapped to its plan item
+
+1. Codacus (praxis): planner = biggest model; specialists need search/harness;
+   never brief-loss (task prompt must reach every role — verified in runner).
+   -> input to 14.15.10 routing; runner fix already committed.
+2. Anthropic Ultracode (praxis): adversarial refutation loop instead of
+   agreeable review; plan artifact persisted in KV; parallel agent spawn.
+   -> arm B built on the refutation loop; plan-in-KV + parallel spawn are
+   arm C2/D design elements.
+3. ReAct (ICLR 2023): reason-act-observe; internal unsure -> external fallback
+   as a routing signal. -> 14.15.10 routing signal candidate.
+4. FireAct (preprint): task-tuned trajectories beat prompted strategies.
+   -> rationale for generating task-specific training data (see 9).
+5. GEPA (ICLR 2026): reflective prompt evolution from ~10% of rollouts can
+   beat RL; prompts are evolvable artifacts, not constants. -> slice:
+   bench-driven prompt evolution of roles.py SYSTEM_PROMPTS (planner/coder/
+   critic); the cheap middle rung between prompting and LoRA.
+6. ACE (ICLR 2026): context as append-only itemized bullets with deterministic
+   merge; two failure modes to guard: brevity bias (over-compression) and
+   context collapse (duplicates). -> slice: automated Erfahrungsspeicher
+   (experience.md is the manual first instance).
+7. MEM1 (ICLR 2026): RL-trained state compression keeps memory constant over
+   long interactions; answers chatstrophic forgetting without weight changes.
+   -> KV-compaction slice; competitor reference for P2b parametric memory.
+8. SyncMind (preprint): agents do NOT self-regulate resources — external
+   discipline required; sync/concurrent execution is a distinct evaluation
+   tier. -> routing must enforce resource discipline from outside; future
+   sync bench tier with concurrent commit semantics.
+9. Flow-DPO (NeurIPS 2024): DPO on multi-agent flows improves the verifier,
+   not the chain policy; pairs come from the flow's own runs. -> bench +
+   deterministic checkers ARE the DPO pair generator; learned-verifier slice.
+10. Non-cooperative poetry (J. Lang. Modelling 2026): weight-trained agents
+    stay durably specialized and diverge; prompted agents homogenize after
+    iteration 1; heterogeneous ensembles win; explicit deviate/disagree steps
+    add diversity+novelty. -> strongest external evidence for Einzel-LoRA and
+    P2b growing-LoRA; arm C2/D gets an adversarial critic; heterogeneous
+    nodes per mesh are a feature, not a bug.
+11. TalkHier (IEEE TAI): structured communication tuples (Message, Background,
+    Intermediate Output) beat free text (Background removal = -8.9pp, biggest
+    single protocol factor); hierarchical refinement with k single-criterion
+    evaluators + eval supervisor = -11.1pp ablation, but k-evaluator cost is
+    the 7x-multiplier class that sank arm C. -> NATS message schema becomes a
+    structured tuple with persistent background in workflow_state; critic
+    split is an arm C2/D candidate with the cost caveat attached.
+12. MAAI fundamentals (Electronic Markets 2026, conceptual): five-layer
+    framework; C2 states the data-centric doctrine explicitly (weights fixed,
+    adaptation only via data/context) — the peer-reviewed formulation of the
+    paradigm P2b argues against; bench = falsification test. C3/C4 map 1:1 to
+    roster/planner + backlog/FSM; their demanded "validation methods for
+    dynamically composed opaque agents" = our deterministic verify-gate;
+    their process-mining agenda = trace/roster observability.
+
+## 15.3 Plan consequences in priority order
+
+1. Finish the full seeded run (120) and publish pooled Wilson CIs in
+   bench-report.md; then initialize 14.15.10 routing parameters from measured
+   data (alpha/beta/tau0, planner-capacity bonus, unsure->external signal). STATUS: DONE 2026-11-15 —
+   docs/bench/report-full-2026-11-15.md (A 33/40 [68.0,91.3] @609 tok, B
+   38/40 [83.5,98.6] @1910, C 35/40 [73.9,94.5] @4295; B never worse than C,
+   no task where C > B) and 14.15.10 routing initialization appended to the
+   roadmap (tau0=1.0, alpha=1, beta=2, rescue-matrix-seeded deposits,
+   A->B->C escalation floor, planner-capacity penalty, unsure->external
+   deposits).
+2. NATS message tuple schema (message/background/intermediate_output,
+   persistent background in workflow_state) — design-first, small slice,
+   TalkHier-derived. STATUS: design written 2026-11-15 —
+   docs/design-message-tuple.md (schema models, workflow_state companion
+   key, opt-in flag, zero extra model calls; build order 4 steps).
+   BUILD PROGRESS: step 1 done — schema models `Background` /
+   `IntermediateOutput` / `MessageTuple` in schema.py + tests
+   (tests/test_tuple_schema.py). BUILD COMPLETE (2026-11-15, commit c547815):
+   all four steps shipped — orchestrator background persistence
+   (bus.save_background/load_background + KV write-backs), worker/orchestrator
+   tuple path behind Settings.tuple_prompts (opt-in), tests
+   (tests/test_tuple_schema.py, e2e tuple.py verified end-to-end).
+3. Arm C2/D design document BEFORE code: adversarial critic (Ultracode +
+   poetry deviate step), k single-criterion evaluator split + eval supervisor
+   (TalkHier, cost caveat), plan-in-KV (Ultracode), specialists with search
+   (Codacus). Success criterion: beat arm B on hard tier at materially lower
+   cost than arm C. STATUS: design written 2026-11-15 —
+   docs/design-arm-c2d.md (D1 adversarial single round first, D2 evaluator
+   split only if D1 < B, D3 structured tuples + plan-in-KV ships with D1).
+   BUILT (2026-11-15): arm D (adversarial-mesh, D1) implemented in
+   src/memnc/bench/runner.py — planner -> coder -> adversarial critic with an
+   evidence gate (approval without counterexample/tried-list is rejected as a
+   critique), max 2 revisions, checkers unchanged as final authority.
+   Bench run + report pending (needs the 120-rep full run).
+4. GEPA slice: bench-driven prompt evolution over roles.py SYSTEM_PROMPTS.
+   STATUS: BUILT (2026-11-15) — src/memnc/bench/gepa.py: failure-driven
+   reflective mutation from bench JSONL, Pareto candidate selection (keep
+   best-on-at-least-one-task, prune dominated; ties survive), evaluation
+   wraps the bench arm with a per-role prompt override (SYSTEM_PROMPTS
+   swapped and restored, engine errors included). Zero weight changes; costs
+   rollouts only. Evolution runs are opt-in (bench models, no downloads).
+   The reflective crossover from the design note is BUILT (2026-11-15):
+   propose_crossover merges the two most complementary frontier candidates
+   (pick_crossover_pair: strongest candidate + the one winning on most tasks
+   the strongest fails; degenerate single-candidate pools fall back to
+   mutation), the evolve loop alternates mutation (thin pool) and crossover
+   (split frontier); unparseable merge proposals keep parent A. Tests:
+   tests/test_gepa.py (failure harvest, tolerant proposal parsing, Pareto
+   front, prompt swap/restore incl. error path, crossover pair selection +
+   evolve-operator alternation).
+   A live evolution run awaits the 120-rep full bench run (item 1).
+5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
+   deterministic merge, brevity-bias + context-collapse guards.
+   STATUS: BUILT (2026-11-15) — src/memnc/experience_store.py (design in
+   docs/design-ace-experience.md): file-backed append-only itemized
+   bullets grouped by topic; deterministic merge with the context-collapse
+   guard (Jaccard >= 0.8 near-duplicates folded, longer text wins) and a
+   monotone merge (never shrinks); explicit guarded compress() step
+   (brevity-bias guard: keeps >= 70% of bullets per compression). First
+   producer: record_bench_run() turns a bench JSONL into per-arm bullets.
+   No LLM calls in the store. Tests: tests/test_experience_store.py (12).
+   BUILD COMPLETE (2026-11-15): producer wiring shipped —
+   orchestrator._deposit_observation folds every terminal observation into
+   the store via record_observation() (success/failure topics, deterministic
+   bullet text, near-duplicates fold through merge(); best-effort, never
+   raises into the pipeline) behind Settings.experience_from_observations
+   (opt-in, default off) + Settings.experience_store_path;
+   `meshctl exp [--topic T] [--limit N]` read verb prints bullets
+   newest-first (format_bullets shared). Tests: tests/test_experience_wiring.py.
+   Worker-side deposit added (commit 59ff7e6): in the self_pipeline the worker owns
+   terminal transitions, so worker._apply_local deposits + folds for every terminal
+   state (tests/test_worker_deposit.py; compose env EXPERIENCE_FROM_OBSERVATIONS,
+   default 0). Live verify still pending: smoke tasks fail before any routed step
+   (small planner models: invalid/empty planner output, timeouts, 500s) — such tasks
+   are correctly unobserved by design (no route = nothing to learn) — and routed
+   steps land on remote workers running the pre-deposit image. Next: sync the remote
+   node image (or route a task to this node's planner/coder) and confirm a routed
+   terminal task shows up via `meshctl obslast` + `meshctl exp`; for durable
+   worker-side experience set EXPERIENCE_FROM_OBSERVATIONS=1 in .env.
+6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
+   verifier as the deliverable.
+   STATUS: generator BUILT (2026-11-15) — src/memnc/bench/dpo.py: one
+   (chosen, rejected) pair per task with both a checker-passing and a
+   checker-failing run; chosen = cheapest successful solution (fewest
+   tokens, tie: lowest run_id), rejected = costliest failing one.
+   Deterministic, no human labels. BenchEngine gained opt-in
+   record_solutions (RunResult.solutions; ordinary rows stay lean).
+   Tests: tests/test_bench_dpo.py (6). The learned verifier itself
+   (training on these pairs) is the next step of this slice, NOT built
+   here.
+7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
+   STATUS: BUILT (2026-11-15) - src/memnc/bench/tasks.py + checkers.py +
+   solutions.py + runner.py. Four opt-in sync tasks (load via
+   load_tasks("sync"); the default 24-task baseline is unchanged so
+   historical runs stay comparable). Each sync task carries an
+   `amendment`: an environment update delivered AFTER the first coder pass
+   via BenchEngine._apply_amendment (SyncMind out-of-sync simulation) -
+   one extra coder turn whose prompt contains "ENVIRONMENT UPDATE" plus
+   the amendment text. All four arms (A/B/C/D) hook the amendment after
+   their first coder pass. Checkers verify the AMENDED spec only, so a
+   solution that ignores the update fails; the pre-amendment spec is
+   verified to fail its checker in tests. Amendment turns count toward
+   llm_calls/tokens. Tests: tests/test_bench_sync.py (6).
+8. P2b parametric memory stays the thesis experiment: single-LoRA >> multi,
+   growing-LoRA (MoRAM/CoDyRA) + Fisher-Merge as the bet, now argued against
+   a named, peer-reviewed counter-position (12/C2) instead of a strawman.
+
+### 14.15.10 routing initialization (from measured data, 2026-11-15)
+
+Gate satisfied: full seeded hard-tier run complete, docs/bench/
+report-full-2026-11-15.md (A 33/40 [68.0,91.3] @609 tok; B 38/40
+[83.5,98.6] @1910; C 35/40 [73.9,94.5] @4295). Initial pheromone parameters
+derived from that table, not guessed:
+
+- tau0 = 1.0 uniform (no prior edge favored before evidence).
+- Prior reinforcement seeded per edge from the run: r = success_rate /
+  ln(1 + tokens_per_task). A 0.126, B 0.124, C 0.052 — A and B nearly tie
+  per cost unit; the discriminator is per-task, not per-arm, so deposits are
+  tracked per (task_type, edge) with the rescue matrix as the seed:
+  rate_limiter-type tasks -> self-reflect edges get B's 4/5, planner-heavy
+  mesh edges get C's 1/5 (deposit gate must NOT credit C for planner
+  restarts that hurt).
+- alpha = 1.0, beta = 2.0 (heuristic weight eta = 1/cost dominates tau until
+  enough deposits accumulate — matches the 7x wall-time spread mattering more
+  than one-off successes).
+- Escalation chain hard-coded as the epsilon-exploration floor: route to A
+  first on cheap tiers (easy/medium saturated 24/24 for every arm), escalate
+  A->B on verify fail, B->C only on repeated B failure (the data shows C
+  never beats B on this tier, so C is the fallback, not the default).
+- planner-capacity signal: node-a planner (qwen2.5:7b) vs node-c planner
+  (qwen2.5-coder:7b) both below the coder tier; C's planner restarts cost
+  success on rate_limiter — planner edges carry a capacity penalty until a
+  strong planner model is registered.
+- unsure->external fallback (ReAct signal): an agent emitting the unsure
+  marker deposits tau on the escalate edge, not on its own role edge, so
+  repeated unsure behaviour converges routing toward B.
