@@ -88,7 +88,23 @@ class Orchestrator:
         await self._api.start()
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
-        await asyncio.gather(self._result_loop(), self._timeout_loop())
+        await asyncio.gather(
+            self._result_loop(), self._timeout_loop(), self._pheromone_loop()
+        )
+
+    async def _pheromone_loop(self) -> None:
+        """14.15.10: periodic pheromone evaporation (no-op when disabled)."""
+        interval = self.settings.pheromone_decay_interval_s
+        if interval <= 0:
+            return
+        while not self._stop.is_set():
+            await asyncio.sleep(interval)
+            try:
+                updated = await self.bus.decay_pheromones(self.settings.pheromone_rho)
+                if updated:
+                    log.info("pheromone decay applied", extra={"cells": updated})
+            except Exception:  # noqa: BLE001 - decay must not kill the loop
+                log.exception("pheromone decay failed")
 
     async def stop(self) -> None:
         self._stop.set()

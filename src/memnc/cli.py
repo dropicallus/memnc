@@ -255,7 +255,13 @@ async def cmd_pheromone(args: argparse.Namespace, settings: Settings) -> int:
     await bus.connect()
     try:
         entries = await bus.pheromone_entries()
-        print(format_pheromones(entries, args.task_type))
+        if getattr(args, "pick", None):
+            from memnc.pheromone import choose_edge
+
+            edge = choose_edge(entries, args.task_type)
+            print(f"pick {args.task_type} -> {edge}")
+        else:
+            print(format_pheromones(entries, args.task_type))
         return 0
     finally:
         await bus.close()
@@ -1003,6 +1009,12 @@ def build_parser() -> argparse.ArgumentParser:
         "pheromone", help="14.15.10: pheromone routing field (ACO scores)"
     )
     pheromone.add_argument("--task-type", default=None, help="filter by task type slug")
+    pheromone.add_argument(
+        "--pick",
+        metavar="TASK_TYPE",
+        default=None,
+        help="choose the best edge for TASK_TYPE from the live field",
+    )
     pheromone.set_defaults(func=cmd_pheromone)
 
     synergy = subparsers.add_parser(

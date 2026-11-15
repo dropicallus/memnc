@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     # only when the flag is on (opt-in, like tuple_prompts).
     experience_store_path: str = "data/experience-store.json"
     experience_from_observations: bool = False
+    # 14.15.10: pheromone evaporation. The orchestrator applies decay every
+    # pheromone_decay_interval_s seconds (0 disables the job); rho is the
+    # fraction of accumulated pheromone that evaporates per interval.
+    pheromone_decay_interval_s: int = 3600
+    pheromone_rho: float = 0.1
 
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"

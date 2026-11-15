@@ -224,3 +224,75 @@ def test_task_type_slug():
     assert task_type_from_prompt("Fix the bug: colon handling") == "fix-the-bug-colon-handling"
     assert len(task_type_from_prompt("x" * 200)) == 40
     assert task_type_from_prompt("") == "live"
+
+
+def test_evaporate_fades_counters():
+    entry = PheromoneEntry(successes=10, unsure=4, failures=2, tokens=1000, cost_tokens=500)
+    assert entry.evaporate(0.1)
+    assert (entry.successes, entry.unsure, entry.failures, entry.tokens) == (9.0, 3.6, 1.8, 900.0)
+    # static cost prior is a measurement, not accumulated belief: not decayed
+    assert entry.cost_tokens == 500
+    # tau decays with the deposit counters
+    assert entry.tau() == 1.0 + 9.0 + 3.6
+
+
+def test_evaporate_noop_on_fresh_cell():
+    fresh = PheromoneEntry()
+    assert not fresh.evaporate(0.1)
+
+
+def test_store_decay_rewrites_only_changed_cells():
+    async def run():
+        js = FakeJS()
+        store = PheromoneStore(js)
+        await store.ensure()
+        await store.deposit("task_x", "B", "success", 1500)
+        # empty cell already in the bucket: evaporate must skip it (no put)
+        empty_key = edge_key("task_y", "A")
+        await store.kv.put(empty_key, PheromoneEntry().model_dump_json().encode())
+        updated = await store.decay(0.5)
+        assert updated == 1
+        entry = await store.get("task_x", "B")
+        assert entry.successes == 0.5
+        assert entry.tokens == 750.0
+        # second pass at full decay: 0.5 -> 0.25, still material
+        assert await store.decay(0.5) == 1
+
+    asyncio.run(run())
+
+
+def test_pheromone_loop_disabled_when_interval_zero():
+    async def run():
+        from memnc.config import Settings
+        from memnc.orchestrator import Orchestrator
+
+        orch = Orchestrator(Settings(pheromone_decay_interval_s=0))
+        await asyncio.wait_for(asyncio.shield(orch._pheromone_loop()), 0.5)
+
+    asyncio.run(run())
+
+
+def test_pheromone_loop_calls_decay():
+    async def run():
+        from memnc.config import Settings
+        from memnc.orchestrator import Orchestrator
+
+        class Bus:
+            def __init__(self):
+                self.rhos = []
+
+            async def decay_pheromones(self, rho):
+                self.rhos.append(rho)
+                return 3
+
+        orch = Orchestrator(
+            Settings(pheromone_decay_interval_s=1, pheromone_rho=0.25),
+            bus=Bus(),
+        )
+        # pass 1 after the first interval; the second sleep completes before
+        # the stop flag is re-checked, so pass 2 also runs before exit
+        asyncio.get_running_loop().call_later(1.2, orch._stop.set)
+        await asyncio.wait_for(orch._pheromone_loop(), 3.0)
+        assert orch.bus.rhos == [0.25, 0.25]
+
+    asyncio.run(run())

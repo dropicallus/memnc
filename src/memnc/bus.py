@@ -602,6 +602,14 @@ class Bus:
             return {}
         return await self._pheromones.entries()
 
+    async def decay_pheromones(self, rho: float) -> int:
+        """Evaporate the pheromone field; returns cells rewritten (0 if off)."""
+        if self._pheromones is None:
+            await self.ensure_pheromones()
+        if self._pheromones is None:
+            return 0
+        return await self._pheromones.decay(rho)
+
 
 # -- 14.13 step 1: observation deposits (experience graph) --------------
 

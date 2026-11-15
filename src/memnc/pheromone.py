@@ -39,6 +39,10 @@ TAU0 = 1.0
 ALPHA = 1.0
 BETA = 2.0
 
+# Fraction of accumulated pheromone that evaporates per decay interval
+# (orchestrator `_pheromone_loop`, every settings.pheromone_decay_interval_s).
+RHO = 0.1
+
 # Live tasks run the fixed planner->coder->critic pipeline; deposits for
 # real mesh traffic land on this single edge until more strategies exist.
 LIVE_EDGE = "mesh"
@@ -86,12 +90,16 @@ def edge_key(task_type: str, edge: str) -> str:
 
 
 class PheromoneEntry(BaseModel):
-    """Deposit accumulator for one (task_type, edge)."""
+    """Deposit accumulator for one (task_type, edge).
 
-    successes: int = 0
-    failures: int = 0
-    unsure: int = 0
-    tokens: int = 0
+    Counters are floats: evaporation scales them down by (1 - rho) per
+    decay interval, so fractional values are the normal steady state.
+    """
+
+    successes: float = 0.0
+    failures: float = 0.0
+    unsure: float = 0.0
+    tokens: float = 0
     # static cost prior measured for this edge (mean tokens per run); 0
     # means "no measurement yet" and eta falls back to the deposit sum.
     cost_tokens: int = 0
@@ -117,6 +125,23 @@ class PheromoneEntry(BaseModel):
         else:
             self.failures += 1
         self.tokens += max(tokens, 0)
+
+    def evaporate(self, rho: float) -> bool:
+        """Evaporate accumulated pheromone toward tau0 by factor (1 - rho).
+
+        ACO evaporation: stale evidence fades so the field tracks recent
+        behaviour. cost_tokens (the measured static prior) is NOT decayed —
+        it is a measurement of the edge, not accumulated belief. Returns
+        True when any counter changed materially.
+        """
+        factor = 1.0 - rho
+        before = (self.successes, self.unsure, self.failures, self.tokens)
+        self.successes = round(self.successes * factor, 6)
+        self.unsure = round(self.unsure * factor, 6)
+        self.failures = round(self.failures * factor, 6)
+        self.tokens = round(self.tokens * factor, 6)
+        changed = before != (self.successes, self.unsure, self.failures, self.tokens)
+        return changed
 
 
 def seed_entries() -> dict[str, PheromoneEntry]:
@@ -210,6 +235,22 @@ class PheromoneStore:
         entry = await self.get(task_type, edge)
         entry.deposit(outcome, tokens)
         await self.kv.put(edge_key(task_type, edge), entry.model_dump_json().encode())
+
+    async def decay(self, rho: float = RHO) -> int:
+        """Evaporate every cell; returns the number of cells rewritten."""
+        assert self.kv is not None
+        updated = 0
+        for key in list(await self.kv.keys() or []):
+            try:
+                raw = await self.kv.get(key)
+                entry = PheromoneEntry.model_validate(json.loads(raw.value))
+            except Exception:  # noqa: BLE001 - skip unreadable cells
+                continue
+            if not entry.evaporate(rho):
+                continue
+            await self.kv.put(key, entry.model_dump_json().encode())
+            updated += 1
+        return updated
 
     async def seed(self) -> int:
         """Load the measured seed run once (skip cells already present)."""
