@@ -1499,13 +1499,18 @@ evidence for the Einzel-LoRA > Multi thesis.
    Worker-side deposit added (commit 59ff7e6): in the self_pipeline the worker owns
    terminal transitions, so worker._apply_local deposits + folds for every terminal
    state (tests/test_worker_deposit.py; compose env EXPERIENCE_FROM_OBSERVATIONS,
-   default 0). Live verify still pending: smoke tasks fail before any routed step
-   (small planner models: invalid/empty planner output, timeouts, 500s) — such tasks
-   are correctly unobserved by design (no route = nothing to learn) — and routed
-   steps land on remote workers running the pre-deposit image. Next: sync the remote
-   node image (or route a task to this node's planner/coder) and confirm a routed
-   terminal task shows up via `meshctl obslast` + `meshctl exp`; for durable
-   worker-side experience set EXPERIENCE_FROM_OBSERVATIONS=1 in .env.
+   default 0). LIVE VERIFIED (2026-11-15 night run): EXPERIENCE_FROM_OBSERVATIONS=1
+   set on the host .env, host images rebuilt (orchestrator + 3 workers), remote node
+   image synced (rsync + node compose rebuild; its orchestrator paused so a single
+   dispatcher owns the bus) — a routed terminal task (failed smoke task, planner-only
+   route) now appears in `meshctl obslast` from the remote worker. Remaining: a
+   routed DONE task is still blocked by planner model quality (remote planner model
+   emits invalid JSON; the host planner is synergy-withdrawn on its real failure
+   record — the claim gate working as designed) and by the local experience store
+   being node-local by design (remote deposits land in the remote's store file, the
+   host `meshctl exp` reads the host file). No model downloads without approval, so
+   a green routed pipeline needs either a fix of the planner model set or the user's
+   go to pull a planner-capable model on the remote node.
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
    verifier as the deliverable.
    STATUS: generator BUILT (2026-11-15) — src/memnc/bench/dpo.py: one
