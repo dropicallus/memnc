@@ -9,6 +9,10 @@ Arms (per benchmark design, committed in roadmap 14.15.9):
   D) adversarial  — planner -> coder -> adversarial critic (max 2 revisions);
                     the critic may only approve after a concrete counterexample
                     attempt (design: docs/design-arm-c2d.md, D1).
+  P) pheromone-routed — per attempt route_strategy() picks the edge over the
+                    seeded pheromone field, runs that edge's arm path, and
+                    folds the per-attempt checker verdict back into the field;
+                    escalation follows the A -> B -> C floor (14.15.10).
 
 The deterministic bench checkers are NEVER shown to the models and never
 terminate a loop early: the benchmark measures what the pipeline achieves on
@@ -34,6 +38,13 @@ from typing import Any
 
 from memnc.bench import BenchTask, load_tasks, verify_task
 from memnc.config import Settings
+from memnc.pheromone import (
+    ESCALATION_CHAIN,
+    PheromoneEntry,
+    edge_key,
+    route_strategy,
+    seed_entries,
+)
 from memnc.roles import PROMPT_VERSION, Role, build_user_prompt
 
 log = logging.getLogger(__name__)
@@ -43,8 +54,18 @@ REFLECTION_ROUNDS = 3
 # Seeded temperature ladder: one entry per rep, identical across arms.
 REP_TEMPERATURES = (0.0, 0.2, 0.4, 0.6, 0.8)
 
-ARMS = ("A", "B", "C", "D")
-ARM_NAMES = {"A": "single-shot", "B": "self-reflect", "C": "mesh", "D": "adversarial-mesh"}
+ARMS = ("A", "B", "C", "D", "P")
+ARM_NAMES = {
+    "A": "single-shot",
+    "B": "self-reflect",
+    "C": "mesh",
+    "D": "adversarial-mesh",
+    "P": "pheromone-routed",
+}
+
+# Arm P: max routed attempts per (task, rep); each attempt routes over the
+# pheromone field, runs the chosen edge's arm path, and deposits the verdict.
+PH_ARM_ATTEMPTS = 3
 
 # Arm D1 (adversarial critic): max 2 rounds to bound cost.
 ADVERSARIAL_REVISIONS = 2
@@ -165,6 +186,8 @@ class RunResult:
     tokens_out: int = 0
     prompt_version: str = PROMPT_VERSION
     error: str = ""
+    # Arm P only: the edge chosen for each routed attempt, in order.
+    routed_edges: list[str] = field(default_factory=list)
     # Final coder files, recorded ONLY when the engine was built with
     # record_solutions=True (keeps ordinary JSONL rows lean). Needed as
     # chosen/rejected payloads for the DPO pair generator (memnc.bench.dpo).
@@ -183,6 +206,8 @@ class BenchEngine:
     ):
         self.settings = settings or Settings()
         self.record_solutions = record_solutions
+        # Pheromone field for arm P, seeded lazily from the measured full run.
+        self._phero_field: dict[str, PheromoneEntry] | None = None
         from memnc.backends import make_backend
 
         self.backend = make_backend(self.settings)
@@ -252,51 +277,10 @@ class BenchEngine:
         started = time.monotonic()
         files: dict[str, str] = {}
         try:
-            if arm == "A":
-                files, t_in, t_out = await self._coder_pass(task, temperature)
-                result.llm_calls = 1
-                result.tokens_in += t_in
-                result.tokens_out += t_out
-                files = await self._apply_amendment(task, files, temperature, result)
-                result.output_files = len(files)
-                self._materialize(workdir, files)
-            elif arm == "B":
-                files, t_in, t_out = await self._coder_pass(task, temperature)
-                result.llm_calls += 1
-                result.tokens_in += t_in
-                result.tokens_out += t_out
-                files = await self._apply_amendment(task, files, temperature, result)
-                result.output_files = len(files)
-                self._materialize(workdir, files)
-                for _round_no in range(1, REFLECTION_ROUNDS + 1):
-                    verdict, t_in, t_out = await self._self_critique(
-                        task, files, temperature
-                    )
-                    result.llm_calls += 1
-                    result.tokens_in += t_in
-                    result.tokens_out += t_out
-                    if verdict.get("approved"):
-                        break
-                    files, t_in, t_out = await self._coder_pass(
-                        task,
-                        temperature,
-                        extra_payload={
-                            "context": "SELF-CRITIQUE to address: "
-                            + json.dumps(verdict.get("issues", []))
-                        },
-                    )
-                    result.llm_calls += 1
-                    result.tokens_in += t_in
-                    result.tokens_out += t_out
-                    result.revisions += 1
-                    result.output_files = len(files)
-                    self._materialize(workdir, files)
-            elif arm == "C":
-                files = await self._run_mesh_arm(task, temperature, result)
-                self._materialize(workdir, files)
-            else:  # arm == "D"
-                files = await self._run_adversarial_arm(task, temperature, result)
-                self._materialize(workdir, files)
+            if arm == "P":
+                files = await self._run_pheromone_arm(task, temperature, result, workdir)
+            else:
+                files = await self._produce_files(task, arm, temperature, result, workdir)
         except Exception as exc:  # noqa: BLE001 - a failed arm run is a datapoint
             log.warning("bench run %s failed: %s", run_id, exc)
             result.error = f"{type(exc).__name__}: {exc}"
@@ -307,6 +291,105 @@ class BenchEngine:
         result.issues = issues
         result.success = not issues and not result.error
         return result
+
+    async def _produce_files(
+        self,
+        task: BenchTask,
+        arm: str,
+        temperature: float,
+        result: RunResult,
+        workdir: Path,
+    ) -> dict[str, str]:
+        """Produce the final files for one fixed arm (A/B/C/D)."""
+        assert arm in ("A", "B", "C", "D"), f"unknown arm {arm!r}"
+        if arm == "A":
+            files, t_in, t_out = await self._coder_pass(task, temperature)
+            result.llm_calls = 1
+            result.tokens_in += t_in
+            result.tokens_out += t_out
+            files = await self._apply_amendment(task, files, temperature, result)
+            result.output_files = len(files)
+            self._materialize(workdir, files)
+        elif arm == "B":
+            files, t_in, t_out = await self._coder_pass(task, temperature)
+            result.llm_calls += 1
+            result.tokens_in += t_in
+            result.tokens_out += t_out
+            files = await self._apply_amendment(task, files, temperature, result)
+            result.output_files = len(files)
+            self._materialize(workdir, files)
+            for _round_no in range(1, REFLECTION_ROUNDS + 1):
+                verdict, t_in, t_out = await self._self_critique(
+                    task, files, temperature
+                )
+                result.llm_calls += 1
+                result.tokens_in += t_in
+                result.tokens_out += t_out
+                if verdict.get("approved"):
+                    break
+                files, t_in, t_out = await self._coder_pass(
+                    task,
+                    temperature,
+                    extra_payload={
+                        "context": "SELF-CRITIQUE to address: "
+                        + json.dumps(verdict.get("issues", []))
+                    },
+                )
+                result.llm_calls += 1
+                result.tokens_in += t_in
+                result.tokens_out += t_out
+                result.revisions += 1
+                result.output_files = len(files)
+                self._materialize(workdir, files)
+        elif arm == "C":
+            files = await self._run_mesh_arm(task, temperature, result)
+            self._materialize(workdir, files)
+        else:  # arm == "D"
+            files = await self._run_adversarial_arm(task, temperature, result)
+            self._materialize(workdir, files)
+        return files
+
+    async def _run_pheromone_arm(
+        self,
+        task: BenchTask,
+        temperature: float,
+        result: RunResult,
+        workdir: Path,
+    ) -> dict[str, str]:
+        """Arm P: pheromone-routed strategy selection over the rescue chain.
+
+        Each attempt asks route_strategy() over the seeded field (SEED_RUN,
+        the 2026-11-15 hard-tier full run), runs the chosen edge's arm path,
+        and folds the per-attempt verdict back into the field. The checker
+        verdicts gate ONLY arm escalation (the A -> B -> C rescue floor),
+        never the inner revision loops — same leakage boundary as the other
+        arms; the chosen arm's inner loops never see the checker.
+        """
+        if self._phero_field is None:
+            self._phero_field = seed_entries()
+        field = self._phero_field
+        failed: str | None = None
+        files: dict[str, str] = {}
+        for _attempt in range(PH_ARM_ATTEMPTS):
+            edge = route_strategy(field, task.id, failed_edge=failed)
+            result.routed_edges.append(edge)
+            t_in0, t_out0 = result.tokens_in, result.tokens_out
+            outcome = "failure"
+            try:
+                files = await self._produce_files(task, edge, temperature, result, workdir)
+                self._materialize(workdir, files)
+                outcome = "success" if not verify_task(task, workdir) else "failure"
+            except Exception as exc:  # noqa: BLE001 - a failed attempt is a datapoint
+                log.warning("bench arm-P attempt %s/%s failed: %s", task.id, edge, exc)
+            spent = (result.tokens_in - t_in0) + (result.tokens_out - t_out0)
+            field[edge_key(task.id, edge)].deposit(outcome, spent)
+            if outcome == "success":
+                return files
+            if edge in ESCALATION_CHAIN and edge != ESCALATION_CHAIN[-1]:
+                failed = edge
+                continue
+            break
+        return files
 
     async def _self_critique(
         self,
@@ -614,6 +697,15 @@ def write_report(results: list[RunResult], path: Path) -> str:
                 f"| {rounds:.2f} | {tok:.0f} |"
             )
     errors = [r for r in results if r.error]
+    prows = overall.get("P", [])
+    if prows:
+        counts: dict[str, int] = {}
+        for r in prows:
+            for e in r.routed_edges:
+                counts[e] = counts.get(e, 0) + 1
+        dist = ", ".join(f"{e}: {n}" for e, n in sorted(counts.items()))
+        attempts = sum(len(r.routed_edges) for r in prows) / len(prows)
+        lines += ["", f"## arm P routed attempts (mean {attempts:.2f}/run)", "", f"- {dist}"]
     if errors:
         lines += ["", f"## errors ({len(errors)})", ""]
         for row in errors[:20]:
@@ -667,7 +759,7 @@ async def run_suite(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arms", default="A,B,C", help="comma list of A,B,C")
+    parser.add_argument("--arms", default="A,B,C", help="comma list of A,B,C,D,P")
     parser.add_argument("--reps", type=int, default=5)
     parser.add_argument("--tiers", default="", help="comma list easy,medium,hard")
     parser.add_argument("--out", default="bench-results.jsonl")

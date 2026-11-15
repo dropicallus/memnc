@@ -1587,8 +1587,22 @@ rewrites only cells that materially changed. The orchestrator runs a
 `pheromone_rho` (default 0.1); Bus exposes `decay_pheromones(rho)` (0 when
 the bucket is absent, so fakes stay silent). CLI consumption surface:
 `meshctl pheromone --pick TASK_TYPE` runs `choose_edge` over the live field
-and prints the chosen edge. Still open: consuming `choose_edge()` in bench
-arm selection and the live pipeline, planner-capacity penalty deposits.
+and prints the chosen edge.
+
+Shipped (2026-11-15, selection consumption): `route_strategy(entries,
+task_type, failed_edge, weak_planner)` in `pheromone.py` combines pheromone
+choice with the escalation floor — candidates are the chain edges at or above
+`escalate(failed_edge)`, the highest tau^alpha * eta^beta wins, and
+planner-heavy edges (C/mesh) carry `PLANNER_CAPACITY_PENALTY` 0.5 while
+`weak_planner` is set. The penalty applies at selection time only; deposits
+always record what actually happened. Bench arm P (`--arms A,B,C,D,P`)
+consumes it end to end: each attempt routes over the seeded field, runs the
+chosen edge's arm path, and folds the per-attempt checker verdict back into
+the field — the checker gates ONLY arm escalation (the rescue floor), never
+the inner revision loops. `RunResult.routed_edges` records the attempt
+sequence and the report prints the routed-attempt distribution. Still open:
+live-pipeline consumption (worker-side self-reflect edge), unsure-marker
+deposit wiring, and an arm P full-run measurement.
 
 ## 15.4 OpenCode harness (design note, 2026-11-15, not yet implemented)
 
@@ -1715,3 +1729,158 @@ Fix, minimal and reversible (all of it maco-side, no repo change):
 
 Not done on purpose: no leaf-node config, no per-node nkeys yet (H4 stays a
 follow-up; both sides still run the dev token on the LAN).
+
+### 15.4.3 Durable tasks instead of one-shot (design note, 2026-11-15, before coding)
+
+Operator verdict after watching four TTS-task attempts die on a remote node: the
+one-shot task model is bad (repeated one-shotting underperforms).
+
+Evidence from 2026-11-15 (task ids `1a1dfb65`, `1a1dfc37`, `1a1dfc47`,
+`1a1dfcac`, all FAILED):
+
+1. A single transient error kills the whole task. The planner hit one
+   `500 Internal Server Error` (Ollama aborts `qwen2.5-coder:7b` with
+   "prediction aborted, token repeat limit reached" when forced into
+   `format: json` — the model loops). One 500, then two worker timeouts,
+   then `task.failed`. Nothing recovered.
+2. Retries restart from scratch. Each attempt re-runs the full
+   planner→coder→critic pipeline; no attempt sees what a previous attempt
+   already did. The last attempt died mid-setup and left an empty
+   `kugel-venv` shell — the next attempt cannot know it exists.
+3. Real intermediate state is invisible to the mesh. The node-c workspace
+   held a compiled `omnivoice-tts` binary, generated WAVs, cloned Vulkan
+   headers and downloaded GGUFs from earlier the same day. The task text
+   cannot reference them because the orchestrator has no notion of durable
+   workspace state between attempts.
+4. Error types are not distinguished. A model error (the 7b JSON loop) is
+   retried on the same broken route — the roster knew `[27b, 7b]` for
+   planner but the round kept choosing the model that cannot do the job.
+
+Design direction (not implemented yet):
+
+- **Checkpoint/restart:** each attempt persists a short attempt-journal
+  (plan JSON, files touched, last completed stage) into the task snapshot;
+  a retry resumes from the last completed stage instead of restarting.
+- **Workspace continuity:** the task workspace (already a mounted volume)
+  becomes the source of truth; a retry is told "the workspace exists, list
+  it before you plan" instead of re-deriving state.
+- **Error-aware retry:** classify the failure (timeout vs. HTTP 5xx vs.
+  invalid output). A model-level failure must switch to the next candidate
+  model for the role (roster already advertises a list), not re-pick the
+  same one. A hard error-loop after N model switches fails the task with
+  the diagnosis attached.
+- Non-goal for now: task migration across nodes mid-attempt. Workspace
+  volumes are node-local; resume happens on the claiming node.
+
+Open questions: how much journal belongs in the snapshot (KV size limits),
+whether checkpointing needs a code change in the worker claim path, and how
+error classification maps onto the existing trace entries.
+
+### 15.4.4 Model serving layer: Ollama-in-Docker → per-node llauncher (design note, 2026-11-15, before coding)
+
+Operator verdict: running Ollama as a Docker container is inflexible
+(needs a better serving layer). Considered
+llauncher, unsure because it "only serves one node".
+
+Evidence from 2026-11-15:
+
+1. node-a runs TWO parallel Ollama instances (docker container
+   `ollama_power` and a native `ollama serve`), plus `llauncher.service`
+   is already active. Two instances mean two disjoint model pools while
+   the roster only sees one.
+2. The roster advertises DISK models as servable (see 14.15 / FACT:
+   cross-node model race). The 27b sits on node-a's disk but was never
+   loaded; a node-c task got routed to node-a because of that ghost
+   entry. Serving truth and roster are decoupled.
+3. Ollama evicts idle models unpredictably; the first task after idle
+   pays the load latency, and keep_alive pinning is a per-model hack.
+4. No GPU pinning and no explicit model lifecycle control: which model
+   loads when, on which card, is an internal side effect, not a decision
+   the mesh can make or observe.
+
+Design direction (not implemented yet):
+
+- **Serving is per-host.** One serving layer per node, workers call
+  `localhost`. This is the correct granularity, not a limitation of
+  llauncher: the mesh coordinates above it (roster, heartbeats, tasks)
+  and never reaches across hosts for inference.
+- **llauncher (llama-swap) as the LLM serving layer per node.** Explicit
+  model swap on demand, per-model port routing, deterministic lifecycle.
+  On node-a it already runs and would manage the single surviving Ollama
+  as a backend (or replace it); the duplicate docker instance goes.
+- **Roster reads serving state, not disk.** The worker's capability
+  advertisement must list only models the local serving layer can serve
+  *right now* (loaded or loadable without racing). This kills the
+  disk-model ghost routing at the root.
+- **TTS/multimedia models are out of scope for llauncher** — kugelaudio
+  and Chatterbox are PyTorch processes, not llama.cpp servers. They get
+  their own per-node process supervision; the serving-layer abstraction
+  ("what can this node serve") should leave room for them.
+- Non-goal for now: central model registry or cross-node model
+  replication. Disk space is cheap; downloads stay node-local.
+
+Open questions: does Ollama stay as a backend under llauncher (simplest
+migration path) or get retired entirely; how the roster query
+"served vs. disk" is exposed (extend the capability message vs. poll the
+serving layer); and which node migrates first (node-a is the natural
+pilot — llauncher is already running there).
+
+Refinement — the chicken-and-egg of mesh-steered model lifecycle
+(2026-11-15, operator decision): the original idea was that the mesh itself starts
+and stops models per task ("Modell-Inferenz wird wieder per Modell
+gesteuert gestartet/gestoppt"). Circular if taken literally: the planner
+that decides "load model X" needs a model to decide with — the control
+plane would sit inside the thing it controls. Resolution: split intent
+from execution.
+
+- **Intent (mesh, LLM-level):** tasks and plans may *express demand* —
+  `needs_model` on the submission already does this, plans can add
+  hints ("next stage needs 32b on a free card"). No agent ever executes
+  a start/stop itself.
+- **Execution (node-local, deterministic):** the serving layer resolves
+  demand to load/unload at claim time by policy — load on first use,
+  LRU eviction, explicit pinning for hot models. Zero inference in the
+  loop, so it also works when every model is down (cold start).
+- **Observability closes the loop:** serving state (loaded models, free
+  VRAM) flows back into the roster, so the next routing decision sees
+  reality, not disk ghosts.
+
+This keeps the original vision — model lifecycle driven by task demand —
+without the circularity: the mesh says *what* is needed, local policy
+decides *when and how*, deterministically.
+
+Related work and what we take from it (2026-11-15): Canonical's
+Inference Manager (github.com/canonical/inference, GPLv3) validates the
+per-node architecture — discovery, install/remove lifecycle, health
+checks, and a single local proxy endpoint that routes to all providers
+behind it. It does NOT replace llauncher for us: its provider catalog is
+curated snaps (no arbitrary GGUFs), snap installation needs root, and
+TTS stays out of scope. The concepts are worth adopting into llauncher:
+
+1. **One proxy endpoint per node** — workers know a single port; all
+   routing happens behind it.
+2. **A multi-daemon registry with a capability matrix** (model × engine,
+   served-now vs. not) — this is the piece llauncher currently lacks:
+   a registry abstraction spanning daemon TYPES (llama-server instances,
+   Ollama, PyTorch TTS processes), not just multiple llama-servers.
+3. **Health/status query** — the registry snapshot is the serving truth
+   the mesh roster reads.
+4. **install/remove as lifecycle operations** — model load/unload becomes
+   an explicit registry operation instead of a side effect.
+
+The missing cross-node dimension is filled by the mesh: each node holds
+its local registry (that node's truth), and the mesh roster FEDERATES
+across node registries. "Served vs. disk" stays answerable per node and
+consistent mesh-wide, without a central registry.
+
+Why llauncher is the base despite the alternatives (2026-11-15):
+llauncher exposes its control plane over MCP, and that is the decisive
+difference. Canonical Inference Manager is CLI-first, LiteLLM is an
+HTTP proxy — both need a bespoke integration layer. llauncher's MCP
+tools (list backends, start/stop/swap model) are already agent-native:
+the mesh's intent-to-execution seam is the MCP tool surface itself.
+Design consequence: the registry truth ("what does this node serve
+right now") is exposed as an MCP resource that the mesh roster
+subscribes to, model lifecycle stays MCP tools, and federation means
+aggregating the per-node MCP registries — no central proxy, no custom
+HTTP API on top.
