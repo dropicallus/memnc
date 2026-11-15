@@ -506,3 +506,42 @@ mesh memory design that the Einzel-LoRA thesis also supports.
 (FINAL research-material intake item per Frank - series complete:
 ReAct -> FireAct -> GEPA -> ACE -> MEM1 -> SyncMind -> Flow-DPO ->
 non-cooperative poetry -> TalkHier.)
+
+## 2026-11-15 external evidence: Multi-agent AI fundamentals (Electronic Markets, Frank)
+
+"Multi-agent AI" (Simeon Allmendinger, Lukas Bonenberger, Kathrin Endres, Dominik
+Fetzer, Henner Gimpel, Niklas Kuehl; University of Bayreuth / Fraunhofer FIT /
+University of Hohenheim / TRUSTEQ; Electronic Markets (2026) 36:18,
+https://doi.org/10.1007/s12525-025-00862-z; PEER-REVIEWED journal, received
+2025-06-05, accepted 2025-11-28). FUNDAMENTALS/CONCEPTUAL paper: no experiments,
+no benchmark - it is a framework + research-agenda piece. Evidence class:
+peer-reviewed but conceptual, so it carries no performance numbers; its value is
+definitional and as a named counter-position.
+
+Content: MAAI (multi-agent artificial intelligence) conceptualized as a layered
+five-component architecture: C1 foundation model, C2 data-centric perception and
+action, C3 dynamic orchestration, C4 agent-integrated workflow, C5 interaction
+interface. Three interdependent research pathways: technical capabilities
+(agent modularity, orchestration logics, VALIDATION METHODS for reliability when
+workflows are dynamically composed from opaque FMs), organizational integration
+(hybrid human-AI work arrangements, process mining to make emergent agentic
+workflows transparent and optimizable), socio-technical (fairness, accountability,
+labor transformation). 11 numbered RQs across the three pathways.
+
+Two details that matter for memnc:
+1. C2 is explicit data-centric-AI doctrine: "the architecture and capacities of
+   the foundation model remain fixed, its effective adaptation is based on the
+   data it receives" - RAG, prompt templates, retrieval, never weights. This is
+   the mainstream paradigm Frank rejects (parametric memory through weights).
+   With this paper the counter-position to the Einzel-LoRA thesis now has a
+   peer-reviewed named formulation - the memnc benchmark (self-reflect/mesh vs
+   weight-specialized variants) is the falsification structure against it.
+2. The framework maps 1:1 onto the mesh: C3 (registry of role-specific agents,
+   moderator agent, ordered vs disordered cooperation, cooperative vs adversarial
+   interaction) = roster + planner + debate loop; C4 (workflows dynamically
+   generated in response to emergent information needs, van der Aalst design
+   patterns from sequential/parallel pre-defined to iterative loops
+   innovation/lifecycle-oriented) = backlog + state machine; C5 = meshctl/console.
+   Their demanded "validation methods for dynamically composed opaque agents" is
+   exactly memnc's deterministic checker + verify-gate; their process-mining
+   agenda for emergent workflows is exactly trace/roster observability.
