@@ -188,6 +188,7 @@ class Settings(BaseSettings):
     telegram_allow: str = ""
     telegram_poll_s: int = 25
     telegram_verbose: bool = False
+    telegram_roster_updates: bool = False
 
     def model_for(self, role: Role) -> str:
         return {

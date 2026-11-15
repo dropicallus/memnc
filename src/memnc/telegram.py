@@ -533,7 +533,11 @@ class TelegramObserver:
                 current = {n.node_id for n in nodes}
                 joined = sorted(current - self._seen_nodes)
                 left = sorted(self._seen_nodes - current)
-                if self._seen_nodes and (joined or left):
+                # Roster churn is mostly lease noise (agents re-register on
+                # the next heartbeat); only surface it when explicitly asked.
+                if getattr(self.settings, "telegram_roster_updates", False) and (
+                    self._seen_nodes and (joined or left)
+                ):
                     parts = []
                     if joined:
                         parts.append("joined: " + ", ".join(joined))

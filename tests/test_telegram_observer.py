@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from memnc.telegram import TelegramObserver, allowed_chats, format_event, format_task
 
 
@@ -256,3 +260,69 @@ async def test_on_event_failed_broadcasts_card_with_retry_hint():
     from memnc.telegram import task_buttons
 
     assert markup == task_buttons("1a1ad82fd5e07764bfe0756")
+
+
+
+
+# -- roster updates gated behind telegram_roster_updates --------
+
+
+class _RosterNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+
+
+class _RosterBus:
+    """list_nodes returns the first payload, then stops the poll loop."""
+
+    def __init__(self, node_ids):
+        self.calls = 0
+        self.node_ids = node_ids
+
+    async def connect(self):
+        pass
+
+    async def list_nodes(self):
+        self.calls += 1
+        if self.calls > 1:
+            raise asyncio.CancelledError  # stops the poll loop in tests
+        return [_RosterNode(n) for n in self.node_ids]
+
+
+def _roster_observer(node_ids, roster_updates, seen_first=False):
+    obs = TelegramObserver.__new__(TelegramObserver)
+    obs.settings = type(
+        "S",
+        (),
+        {"telegram_verbose": False, "telegram_roster_updates": roster_updates, "telegram_poll_s": 5},
+    )()
+    obs.bus = _RosterBus(node_ids)
+    obs.sent = []
+
+    async def broadcast(text, **kwargs):
+        obs.sent.append(text)
+
+    obs.broadcast = broadcast
+    obs._seen_nodes = {"node-a"} if seen_first else set()
+    return obs
+
+
+async def test_roster_churn_suppressed_by_default():
+    obs = _roster_observer(["node-a", "node-a-coder"], False, seen_first=True)
+    with pytest.raises(asyncio.CancelledError):
+        await obs.run_roster()
+    assert obs.sent == []  # churn stays silent without the flag
+
+
+async def test_roster_churn_broadcast_when_enabled():
+    obs = _roster_observer(["node-a", "node-a-coder"], True, seen_first=True)
+    with pytest.raises(asyncio.CancelledError):
+        await obs.run_roster()
+    assert obs.sent == ["mesh: joined: node-a-coder"]
+
+
+async def test_roster_first_poll_is_silent_even_when_enabled():
+    obs = _roster_observer(["node-a", "node-a-coder"], True, seen_first=False)
+    with pytest.raises(asyncio.CancelledError):
+        await obs.run_roster()
+    assert obs.sent == []  # initial snapshot is not announced as churn
