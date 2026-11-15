@@ -1630,3 +1630,42 @@ Open questions for the live run (answer after first real handoff):
 - Exact timing budget: smoke task took ~3-4 min incl. model load; the
   900 s default should hold, but the worker-level timeout for coder tasks on
   node-c may need to rise to 1200 s.
+
+### 15.4.1 opencode INSIDE the worker container (design note, 2026-11-15, before coding)
+
+Gap found after the image rebuild (7765404 on maco): the worker container
+knows the opencode *harness* (`known_harnesses()` = inproc/opencode/pi), but
+the opencode *binary* is not in the image (`command -v opencode` -> nothing
+inside `memnc-worker-planner-1`). A `--harness opencode` task on node-c would
+fail at spawn. Host binary at /usr/bin/opencode (maco) does not help — the
+worker runs inside the container.
+
+Design, four pieces:
+
+1. worker.Dockerfile: install the opencode binary at build time via the
+   official installer (`curl -fsSL https://opencode.ai/install | bash`) with
+   HOME pointed at /usr/local so the binary lands in a fixed location, then
+   symlink /usr/local/bin/opencode. Must be readable+executable by any uid
+   (compose runs the worker as ${UID:-1000}, rootfs read_only).
+2. Config: opencode reads ~/.config/opencode/opencode.json (HOME=/tmp in the
+   container, /tmp is tmpfs). Compose worker services get a bind mount
+   `${HOME}/.config/opencode:/tmp/.config/opencode:ro` so each node carries
+   its own provider config. On nodes without that dir Docker creates an
+   empty dir — harmless (harness only runs when harness=opencode requested).
+3. baseURL: the config says http://localhost:11434/v1 (written for host-side
+   runs). Inside the container localhost is the container itself. We swap it
+   to the node's LAN IP literal (works from the host AND from containers;
+   ollama already listens on all interfaces — proven by the working
+   INFERENCE_BASE_URL=host.docker.internal path). host.docker.internal is
+   NOT an option: it resolves only in containers, but the same file is used
+   by host-side runs (no sudo on maco to patch /etc/hosts).
+4. Model mapping: MODEL_CODER on maco is the bare ollama tag
+   (`mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M`); the same setting feeds the
+   inproc path, which needs the bare name. The opencode harness therefore
+   prefixes `ollama/` when the model string has no known provider prefix —
+   small patch in harnesses/opencode.py + unit test, so the deployment env
+   stays unchanged.
+
+Then: rebuild the maco image, verify `opencode --version` inside the worker
+container, submit a routed task (prefer_node=node-c, harness=opencode) as the
+live handoff check.

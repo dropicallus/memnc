@@ -565,6 +565,26 @@ def test_opencode_harness_run_ok(tmp_path):
     assert (tmp_path / "ws").is_dir()
 
 
+def test_opencode_qualify_model():
+    from memnc.harnesses.opencode import qualify_model
+
+    # bare ollama tag -> provider-qualified (worker MODEL_CODER case)
+    assert qualify_model("mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M") == (
+        "ollama/mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M"
+    )
+    # already qualified -> unchanged
+    assert qualify_model("ollama/mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M") == (
+        "ollama/mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M"
+    )
+    assert qualify_model("openai/gpt-4o") == "openai/gpt-4o"
+    # empty -> unchanged (opencode falls back to its config default)
+    assert qualify_model("") == ""
+    # harness __init__ applies the mapping
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    assert OpenCodeHarness(model="x", opencode_bin="false").model == "ollama/x"
+
+
 def test_opencode_harness_reports_nonzero_exit(tmp_path):
     from memnc.harnesses.opencode import OpenCodeHarness
 
