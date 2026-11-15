@@ -1410,7 +1410,9 @@ evidence for the Einzel-LoRA > Multi thesis.
    data (alpha/beta/tau0, planner-capacity bonus, unsure->external signal).
 2. NATS message tuple schema (message/background/intermediate_output,
    persistent background in workflow_state) — design-first, small slice,
-   TalkHier-derived.
+   TalkHier-derived. STATUS: design written 2026-11-15 —
+   docs/design-message-tuple.md (schema models, workflow_state companion
+   key, opt-in flag, zero extra model calls; build order 4 steps).
 3. Arm C2/D design document BEFORE code: adversarial critic (Ultracode +
    poetry deviate step), k single-criterion evaluator split + eval supervisor
    (TalkHier, cost caveat), plan-in-KV (Ultracode), specialists with search
