@@ -21,6 +21,7 @@ from .fsutil import apply_artifacts
 from .harnesses import get_harness
 from .harnesses.workspace import changed_file_contents
 from .mcp.client import MCPClient
+from .observations import TaskObservation
 from .roles import (
     CONSULT_SYSTEM_PROMPT,
     PROMPT_VERSION,
@@ -1110,6 +1111,45 @@ class Worker:
             await self.bus.emit_event(snapshot, "result.executed_on", envelope.node)
         await self._apply_local(snapshot, event)
 
+    async def _deposit_observation(self, snapshot: TaskSnapshot) -> None:
+        """Deposit a terminal observation into the experience graph.
+
+        Worker-side mirror of the orchestrator's hook (15.3 item 5): in the
+        self_pipeline the worker owns terminal transitions, so deposits and
+        the experience fold live here. Both are best effort — a broken side
+        channel never fails the task lifecycle itself.
+        """
+        from memnc.observations import observation_from_snapshot
+
+        if not hasattr(self.bus, "deposit_observation"):
+            return
+        try:
+            observation = observation_from_snapshot(snapshot)
+            if observation is None:
+                return
+            await self.bus.deposit_observation(observation)
+        except Exception as exc:  # noqa: BLE001 - side channel only
+            log.warning(
+                "observation deposit failed",
+                extra={"task_id": snapshot.task_id, "error": str(exc)},
+            )
+            return
+        if self.settings.experience_from_observations:
+            try:
+                self._record_experience(observation)
+            except Exception as exc:  # noqa: BLE001 - side channel only
+                log.warning(
+                    "experience record failed",
+                    extra={"task_id": snapshot.task_id, "error": str(exc)},
+                )
+
+    def _record_experience(self, observation: TaskObservation) -> None:
+        from .experience_store import ExperienceStore, record_observation
+
+        store = ExperienceStore(self.settings.experience_store_path).load()
+        if record_observation(store, observation):
+            store.save()
+
     async def _verify_gate(self, snapshot: TaskSnapshot) -> None:
         """M14 deterministic verification gate.
 
@@ -1353,6 +1393,12 @@ class Worker:
 
         await self.bus.put_snapshot(snapshot)
         await self.bus.emit_event(snapshot, f"state.{result.state.value.lower()}", event.reason)
+        if result.state in TERMINAL_STATES:
+            # 14.13 step 1 / 15.3 item 5: worker-driven pipeline owns the
+            # terminal transition, so the observation deposit (and the
+            # experience fold) happen here — mirrors the orchestrator's
+            # result path. Duck-typed + best effort, never fails the task.
+            await self._deposit_observation(snapshot)
         log.info(
             "self pipeline transition",
             extra={
