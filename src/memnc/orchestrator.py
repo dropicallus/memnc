@@ -684,6 +684,9 @@ class Orchestrator:
         if result.state in TERMINAL_STATES and hasattr(self.bus, "deposit_observation"):
             await self._deposit_observation(snapshot)
 
+        if result.state in TERMINAL_STATES and hasattr(self.bus, "deposit_pheromone"):
+            await self._deposit_pheromone(snapshot)
+
         for action in result.actions:
             if action.type == "dispatch" and action.role is not None:
                 await self._dispatch(snapshot, action.role)
@@ -738,6 +741,22 @@ class Orchestrator:
         if result.state is TaskState.REVISE:
             await self._apply(snapshot, Event("start"))
 
+    async def _deposit_pheromone(self, snapshot: TaskSnapshot) -> None:
+        """14.15.10: fold the terminal outcome into the pheromone field.
+
+        Live tasks run the fixed pipeline, so they deposit on the single
+        LIVE_EDGE; the accumulated tau per task type is what later strategy
+        selection reads. Best effort, never raising, like observations.
+        """
+        from .pheromone import LIVE_EDGE, task_type_from_prompt
+
+        try:
+            outcome = "success" if snapshot.state.value.lower() == "done" else "failure"
+            await self.bus.deposit_pheromone(
+                task_type_from_prompt(snapshot.task), LIVE_EDGE, outcome
+            )
+        except Exception:  # noqa: BLE001 - side channel, never fail the task
+            log.debug("pheromone deposit failed for %s", snapshot.task_id)
     async def _deposit_observation(self, snapshot: TaskSnapshot) -> None:
         """14.13 step 1: write the terminal snapshot into mesh.observations.
 

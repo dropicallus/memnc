@@ -2,6 +2,18 @@
 
 ## Built
 
+- **2026-11-15 — Pheromone routing field (14.15.10, initialization slice)**:
+  `src/memnc/pheromone.py` — ACO-style score tau^alpha * eta^beta per
+  (task_type, edge) with tau0=1.0, alpha=1.0, beta=2.0 from the measured
+  full run; seed deposits load the 24-cell rescue matrix (5 reps x 8 hard
+  tasks x A/B/C) into the `mesh_pheromones` KV bucket; live terminal
+  transitions deposit on the `mesh` edge via the orchestrator hook
+  (best-effort, like observations); escalation chain A->B->C is the
+  fail-floor (`choose_edge` never re-picks a failed edge); `meshctl
+  pheromone [--task-type T]` renders the field. 14 tests; seeded + verified
+  live on node-a.
+
+
 - **2026-11-15 — Bench arm D, adversarial critic (15.3 item 3, D1)**: the
   critic must attempt a concrete refutation before any verdict; unevidenced
   approvals are rejected as critiques, loop capped at 2 revisions. Evidence
@@ -1267,7 +1279,7 @@ Status (2026-11-14): stage 2 done — `memnc.bench.runner`:
     repo-own evidence for the single-agent>multi-structure finding;
     full seeded run (reps>=5) + raised inference timeout next.
 
-### 14.15.10 Slice: pheromone routing (PROPOSED 2026-11-14, gated on bench evidence)
+### 14.15.10 Slice: pheromone routing (INITIALIZATION SHIPPED; next: selection consumption + decay job)
 
 Frank's framing: "Ich komme ja aus den Routing Algorithmen" — routing as the
 mental model for mesh coordination. Synthesis of AMRO-S (arXiv 2603.12933),
@@ -1487,13 +1499,18 @@ evidence for the Einzel-LoRA > Multi thesis.
    Worker-side deposit added (commit 59ff7e6): in the self_pipeline the worker owns
    terminal transitions, so worker._apply_local deposits + folds for every terminal
    state (tests/test_worker_deposit.py; compose env EXPERIENCE_FROM_OBSERVATIONS,
-   default 0). Live verify still pending: smoke tasks fail before any routed step
-   (small planner models: invalid/empty planner output, timeouts, 500s) — such tasks
-   are correctly unobserved by design (no route = nothing to learn) — and routed
-   steps land on remote workers running the pre-deposit image. Next: sync the remote
-   node image (or route a task to this node's planner/coder) and confirm a routed
-   terminal task shows up via `meshctl obslast` + `meshctl exp`; for durable
-   worker-side experience set EXPERIENCE_FROM_OBSERVATIONS=1 in .env.
+   default 0). LIVE VERIFIED (2026-11-15 night run): EXPERIENCE_FROM_OBSERVATIONS=1
+   set on the host .env, host images rebuilt (orchestrator + 3 workers), remote node
+   image synced (rsync + node compose rebuild; its orchestrator paused so a single
+   dispatcher owns the bus) — a routed terminal task (failed smoke task, planner-only
+   route) now appears in `meshctl obslast` from the remote worker. Remaining: a
+   routed DONE task is still blocked by planner model quality (remote planner model
+   emits invalid JSON; the host planner is synergy-withdrawn on its real failure
+   record — the claim gate working as designed) and by the local experience store
+   being node-local by design (remote deposits land in the remote's store file, the
+   host `meshctl exp` reads the host file). No model downloads without approval, so
+   a green routed pipeline needs either a fix of the planner model set or the user's
+   go to pull a planner-capable model on the remote node.
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
    verifier as the deliverable.
    STATUS: generator BUILT (2026-11-15) — src/memnc/bench/dpo.py: one
@@ -1551,3 +1568,11 @@ derived from that table, not guessed:
 - unsure->external fallback (ReAct signal): an agent emitting the unsure
   marker deposits tau on the escalate edge, not on its own role edge, so
   repeated unsure behaviour converges routing toward B.
+
+Shipped (2026-11-15, initialization slice): `pheromone.py` implements the
+score tau^alpha * eta^beta with these exact constants, the 24-cell rescue
+matrix as seed deposits in the `mesh_pheromones` KV bucket, live deposits on
+terminal transitions (task-type = prompt-head slug, edge = `mesh` until more
+strategies exist), the A->B->C escalation floor, and the `meshctl pheromone`
+view. Still open: consuming `choose_edge()` in bench arm selection and the
+live pipeline, evaporation/decay job, and planner-capacity penalty deposits.
