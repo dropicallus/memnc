@@ -9,13 +9,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from memnc.bench.gepa import (
+    CROSSOVER_SYSTEM_PROMPT,
     Candidate,
     FailureExample,
+    crossover_user_prompt,
     evaluate_candidate,
     evolve,
     load_failures,
     mutation_user_prompt,
     pareto_front,
+    pick_crossover_pair,
+    propose_crossover,
     propose_mutation,
 )
 
@@ -189,3 +193,85 @@ def test_evolve_requires_eval_tasks() -> None:
         pass
     else:
         raise AssertionError("expected ValueError for missing eval_tasks")
+
+
+def test_crossover_user_prompt_lists_both_and_traces() -> None:
+    failures = [FailureExample(task_id="t1", issues=["x"])]
+    text = crossover_user_prompt("AAA", "BBB", failures)
+    assert "PROMPT A:" in text and "AAA" in text
+    assert "PROMPT B:" in text and "BBB" in text
+    assert "t1: x" in text
+
+
+def test_propose_crossover_parses_merge() -> None:
+    async def reflect(system: str, user: str, model: str, temp: float) -> str:
+        assert system == CROSSOVER_SYSTEM_PROMPT
+        return '{"prompt": "MERGED", "rationale": "kept both"}'
+
+    out = asyncio.run(propose_crossover(reflect, "A", "B", []))
+    assert out == "MERGED"
+
+
+def test_propose_crossover_falls_back_to_parent_a() -> None:
+    async def reflect(system: str, user: str, model: str, temp: float) -> str:
+        return "gibberish, no JSON"
+
+    out = asyncio.run(propose_crossover(reflect, "A", "B", []))
+    assert out == "A"
+
+
+def test_pick_crossover_pair_prefers_complement() -> None:
+    top = Candidate(role="coder", prompt="t", gen=0,
+                    scores={"t1": True, "t2": True, "t3": False})
+    strong_dup = Candidate(role="coder", prompt="d", gen=1,
+                           scores={"t1": True, "t2": True, "t3": False})
+    specialist = Candidate(role="coder", prompt="s", gen=1,
+                           scores={"t1": False, "t2": False, "t3": True})
+    a, b = pick_crossover_pair([specialist, strong_dup, top])
+    assert a is top and b is specialist
+
+    # single-candidate pool degenerates to (A, A)
+    only = Candidate(role="coder", prompt="o", gen=0, scores={"t1": True})
+    assert pick_crossover_pair([only]) == (only, only)
+
+
+def test_evolve_uses_crossover_when_frontier_splits() -> None:
+    from memnc.roles import SYSTEM_PROMPTS, Role
+
+    engine = _FakeEngine(succeed_for=set())
+    calls: list[str] = []
+
+    async def reflect(system: str, user: str, model: str, temp: float) -> str:
+        calls.append(system)
+        if system == CROSSOVER_SYSTEM_PROMPT:
+            # crossover fires when the pair is complementary; gen 1 mutates
+            return '{"prompt": "MERGED", "rationale": "r"}'
+        return '{"prompt": "MUT", "rationale": "r"}'
+
+    tasks = [_FakeTask("t1")]
+    # make gen-1 mutation specialize on t2-style split: engine succeeds only
+    # for the merged prompt via seen-prompt check
+    def succeed_by_prompt(task, arm, rep, workroot):
+        async def _run(task, arm, rep, workroot):
+            engine.seen_prompts.append(SYSTEM_PROMPTS[Role.CODER])
+            return _FakeRunResult(
+                success=(SYSTEM_PROMPTS[Role.CODER] == "MERGED"))
+
+        return _run(task, arm, rep, workroot)
+
+    engine.run_task = succeed_by_prompt  # type: ignore[method-assign]
+    pool = asyncio.run(
+        evolve(
+            engine,
+            reflect,
+            "coder",
+            "A",
+            "BASE",
+            [FailureExample(task_id="t1", issues=["x"])],
+            generations=2,
+            eval_tasks=tasks,
+        )
+    )
+    assert CROSSOVER_SYSTEM_PROMPT in calls  # gen 2 used the crossover
+    prompts = {c.prompt for c in pool}
+    assert "MERGED" in prompts

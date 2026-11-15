@@ -1456,10 +1456,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    wraps the bench arm with a per-role prompt override (SYSTEM_PROMPTS
    swapped and restored, engine errors included). Zero weight changes; costs
    rollouts only. Evolution runs are opt-in (bench models, no downloads).
-   The reflective crossover from the design note is NOT built yet — the
-   evolve loop mutates the seed prompt each generation only. Tests:
+   The reflective crossover from the design note is BUILT (2026-11-15):
+   propose_crossover merges the two most complementary frontier candidates
+   (pick_crossover_pair: strongest candidate + the one winning on most tasks
+   the strongest fails; degenerate single-candidate pools fall back to
+   mutation), the evolve loop alternates mutation (thin pool) and crossover
+   (split frontier); unparseable merge proposals keep parent A. Tests:
    tests/test_gepa.py (failure harvest, tolerant proposal parsing, Pareto
-   front, prompt swap/restore incl. error path, evolve loop).
+   front, prompt swap/restore incl. error path, crossover pair selection +
+   evolve-operator alternation).
    A live evolution run awaits the 120-rep full bench run (item 1).
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
