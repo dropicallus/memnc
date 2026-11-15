@@ -1113,6 +1113,30 @@ class Worker:
             await self.bus.emit_event(snapshot, "result.executed_on", envelope.node)
         await self._apply_local(snapshot, event)
 
+    async def _deposit_pheromone(self, snapshot: TaskSnapshot) -> None:
+        """15.3: worker-side pheromone deposit on the self-reflect edge.
+
+        The worker-driven pipeline owns the terminal transition when the
+        orchestrator is not in the loop, so the pheromone fold happens here
+        — mirroring the orchestrator's result path. The self-pipeline's
+        REVISE loop is arm-B behaviour, hence the SELF_REFLECT_EDGE; an
+        unsure marker in the error/critique text folds as a weak "unsure"
+        deposit on that same edge. Duck-typed + best effort.
+        """
+        from .pheromone import SELF_REFLECT_EDGE, task_type_from_prompt, unsure_signal
+
+        try:
+            outcome = "success" if snapshot.state.value.lower() == "done" else "failure"
+            critique = getattr(snapshot, "critique", None)
+            critique_summary = critique.summary if critique else ""
+            if unsure_signal(getattr(snapshot, "error", None), critique_summary):
+                outcome = "unsure"
+            await self.bus.deposit_pheromone(
+                task_type_from_prompt(snapshot.task), SELF_REFLECT_EDGE, outcome
+            )
+        except Exception:  # noqa: BLE001 - side channel, never fail the task
+            log.debug("pheromone deposit failed for %s", snapshot.task_id)
+
     async def _deposit_observation(self, snapshot: TaskSnapshot) -> None:
         """Deposit a terminal observation into the experience graph.
 
@@ -1411,6 +1435,7 @@ class Worker:
             # experience fold) happen here — mirrors the orchestrator's
             # result path. Duck-typed + best effort, never fails the task.
             await self._deposit_observation(snapshot)
+            await self._deposit_pheromone(snapshot)
         log.info(
             "self pipeline transition",
             extra={

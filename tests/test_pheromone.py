@@ -296,3 +296,138 @@ def test_pheromone_loop_calls_decay():
         assert orch.bus.rhos == [0.25, 0.25]
 
     asyncio.run(run())
+
+
+# --- 15.3 wiring: unsure-marker deposits + worker-side self-reflect edge ---
+
+
+def test_unsure_signal_detects_marker_case_insensitive():
+    from memnc.pheromone import unsure_signal
+
+    assert unsure_signal("runtime boom", "critic verdict: UNSURE about edge cases")
+    assert unsure_signal(None, None, "i'm unsure this passes")
+    assert not unsure_signal("boom", None)
+    assert not unsure_signal()
+
+
+def test_worker_terminal_deposits_on_self_reflect_edge():
+    from types import SimpleNamespace
+
+    from memnc.config import Settings
+    from memnc.pheromone import SELF_REFLECT_EDGE, task_type_from_prompt
+    from memnc.worker import Worker
+
+    class DepositBus:
+        def __init__(self):
+            self.calls = []
+
+        async def deposit_pheromone(self, task_type, edge, outcome, tokens=0):
+            self.calls.append((task_type, edge, outcome, tokens))
+
+    bus = DepositBus()
+    worker = Worker(Settings(), bus=bus)
+    snap = SimpleNamespace(
+        task_id="t1",
+        task="write a hello script",
+        state=SimpleNamespace(value="DONE"),
+    )
+    asyncio.run(worker._deposit_pheromone(snap))
+    assert bus.calls == [(task_type_from_prompt(snap.task), SELF_REFLECT_EDGE, "success", 0)]
+
+
+def test_worker_unsure_critique_folds_weak_unsure_deposit():
+    from types import SimpleNamespace
+
+    from memnc.config import Settings
+    from memnc.pheromone import SELF_REFLECT_EDGE
+    from memnc.worker import Worker
+
+    class DepositBus:
+        def __init__(self):
+            self.calls = []
+
+        async def deposit_pheromone(self, task_type, edge, outcome, tokens=0):
+            self.calls.append((task_type, edge, outcome, tokens))
+
+    bus = DepositBus()
+    worker = Worker(Settings(), bus=bus)
+    snap = SimpleNamespace(
+        task_id="t2",
+        task="write a hello script",
+        state=SimpleNamespace(value="DONE"),
+        critique=SimpleNamespace(summary="solution looks right but UNSURE about timeouts"),
+    )
+    asyncio.run(worker._deposit_pheromone(snap))
+    assert bus.calls == [(bus.calls[0][0], SELF_REFLECT_EDGE, "unsure", 0)]
+
+
+def test_worker_deposit_failure_is_swallowed():
+    from types import SimpleNamespace
+
+    from memnc.config import Settings
+    from memnc.worker import Worker
+
+    class BoomBus:
+        async def deposit_pheromone(self, task_type, edge, outcome, tokens=0):
+            raise RuntimeError("kv down")
+
+    worker = Worker(Settings(), bus=BoomBus())
+    snap = SimpleNamespace(
+        task_id="t3",
+        task="write a hello script",
+        state=SimpleNamespace(value="FAILED"),
+)
+    asyncio.run(worker._deposit_pheromone(snap))
+
+
+def test_orchestrator_unsure_error_deposits_on_self_reflect_edge():
+    from types import SimpleNamespace
+
+    from memnc.config import Settings
+    from memnc.orchestrator import Orchestrator
+    from memnc.pheromone import LIVE_EDGE, SELF_REFLECT_EDGE
+
+    class DepositBus:
+        def __init__(self):
+            self.calls = []
+
+        async def deposit_pheromone(self, task_type, edge, outcome, tokens=0):
+            self.calls.append((task_type, edge, outcome, tokens))
+
+    orch = Orchestrator(Settings())
+    orch.bus = DepositBus()
+    snap = SimpleNamespace(
+        task_id="t4",
+        task="write a hello script",
+        state=SimpleNamespace(value="DONE"),
+        error="model unsure about correctness",
+    )
+    asyncio.run(orch._deposit_pheromone(snap))
+    assert orch.bus.calls == [(orch.bus.calls[0][0], SELF_REFLECT_EDGE, "unsure", 0)]
+    assert SELF_REFLECT_EDGE != LIVE_EDGE
+
+
+def test_orchestrator_plain_failure_stays_on_live_edge():
+    from types import SimpleNamespace
+
+    from memnc.config import Settings
+    from memnc.orchestrator import Orchestrator
+    from memnc.pheromone import LIVE_EDGE
+
+    class DepositBus:
+        def __init__(self):
+            self.calls = []
+
+        async def deposit_pheromone(self, task_type, edge, outcome, tokens=0):
+            self.calls.append((task_type, edge, outcome, tokens))
+
+    orch = Orchestrator(Settings())
+    orch.bus = DepositBus()
+    snap = SimpleNamespace(
+        task_id="t5",
+        task="write a hello script",
+        state=SimpleNamespace(value="FAILED"),
+        error="syntax error",
+    )
+    asyncio.run(orch._deposit_pheromone(snap))
+    assert orch.bus.calls == [(orch.bus.calls[0][0], LIVE_EDGE, "failure", 0)]

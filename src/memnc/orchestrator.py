@@ -782,14 +782,23 @@ class Orchestrator:
 
         Live tasks run the fixed pipeline, so they deposit on the single
         LIVE_EDGE; the accumulated tau per task type is what later strategy
-        selection reads. Best effort, never raising, like observations.
+        selection reads. An unsure marker in the error or critique summary
+        is folded as a weak "unsure" deposit on the self-reflect edge
+        instead of a success/failure on LIVE_EDGE. Best effort, never
+        raising, like observations.
         """
-        from .pheromone import LIVE_EDGE, task_type_from_prompt
+        from .pheromone import LIVE_EDGE, SELF_REFLECT_EDGE, task_type_from_prompt, unsure_signal
 
         try:
             outcome = "success" if snapshot.state.value.lower() == "done" else "failure"
+            edge = LIVE_EDGE
+            critique = getattr(snapshot, "critique", None)
+            critique_summary = critique.summary if critique else ""
+            if unsure_signal(getattr(snapshot, "error", None), critique_summary):
+                outcome = "unsure"
+                edge = SELF_REFLECT_EDGE
             await self.bus.deposit_pheromone(
-                task_type_from_prompt(snapshot.task), LIVE_EDGE, outcome
+                task_type_from_prompt(snapshot.task), edge, outcome
             )
         except Exception:  # noqa: BLE001 - side channel, never fail the task
             log.debug("pheromone deposit failed for %s", snapshot.task_id)

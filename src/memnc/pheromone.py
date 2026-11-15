@@ -47,6 +47,19 @@ RHO = 0.1
 # real mesh traffic land on this single edge until more strategies exist.
 LIVE_EDGE = "mesh"
 
+# The worker self-pipeline IS the self-reflect strategy in the live system:
+# its REVISE loop is arm-B behaviour (critique rounds <= 3), so the worker
+# credits/debits the self-reflect edge while the orchestrator-driven path
+# deposits on LIVE_EDGE.
+SELF_REFLECT_EDGE = "B"
+
+# Agents that cannot commit to an answer emit this marker in their
+# critique/error text. An unsure signal is a WEAK deposit on the escalation
+# target edge (see unsure_signal): repeated unsure behaviour under one edge
+# accumulates tau on the more reflective edge, converging routing toward it,
+# without ever crediting the failing edge with a success.
+UNSURE_MARKER = "unsure"
+
 # Escalation floor: single-shot -> self-reflect -> mesh (arm A -> B -> C).
 ESCALATION_CHAIN: tuple[str, ...] = ("A", "B", "C")
 
@@ -81,6 +94,16 @@ SEED_RUN: tuple[tuple[str, str, int, int, int], ...] = (
 )
 
 _KEY_BAD = re.compile(r"[^a-zA-Z0-9._-]")
+
+
+def unsure_signal(*texts: str | None) -> bool:
+    """True when any text carries the unsure marker (case-insensitive).
+
+    Fed with snapshot.error / critique summaries before a pheromone deposit:
+    unsure behaviour is folded as outcome "unsure" onto the escalation
+    target edge instead of a success/failure on the acting edge.
+    """
+    return any(UNSURE_MARKER in (t or "").lower() for t in texts)
 
 
 def edge_key(task_type: str, edge: str) -> str:

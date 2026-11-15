@@ -1607,9 +1607,14 @@ consumes it end to end: each attempt routes over the seeded field, runs the
 chosen edge's arm path, and folds the per-attempt checker verdict back into
 the field — the checker gates ONLY arm escalation (the rescue floor), never
 the inner revision loops. `RunResult.routed_edges` records the attempt
-sequence and the report prints the routed-attempt distribution. Still open:
-live-pipeline consumption (worker-side self-reflect edge), unsure-marker
-deposit wiring, and an arm P full-run measurement.
+sequence and the report prints the routed-attempt distribution. Worker-side self-reflect edge and unsure-marker deposit
+wiring are DONE (2026-11-15): the worker self-pipeline deposits its terminal
+outcomes on the SELF_REFLECT_EDGE ("B" - its REVISE loop is arm-B behaviour,
+mirroring the orchestrator's LIVE_EDGE deposit), and an unsure marker in the
+error or critique summary folds as a weak "unsure" deposit on the
+self-reflect edge instead of a success/failure on the acting edge, so
+repeated unsure behaviour converges routing toward B. Still open: an arm P
+full-run measurement.
 
 ## 15.4 OpenCode harness (design note, 2026-11-15, not yet implemented)
 
