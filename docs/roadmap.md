@@ -1574,8 +1574,21 @@ score tau^alpha * eta^beta with these exact constants, the 24-cell rescue
 matrix as seed deposits in the `mesh_pheromones` KV bucket, live deposits on
 terminal transitions (task-type = prompt-head slug, edge = `mesh` until more
 strategies exist), the A->B->C escalation floor, and the `meshctl pheromone`
-view. Still open: consuming `choose_edge()` in bench arm selection and the
-live pipeline, evaporation/decay job, and planner-capacity penalty deposits.
+view.
+
+Shipped (2026-11-15, decay slice): `PheromoneEntry.evaporate(rho)` scales
+the accumulated deposit counters (successes/unsure/failures/tokens) by
+(1 - rho) per interval — ACO evaporation so the field tracks recent
+behaviour; the static cost prior `cost_tokens` is a measurement of the edge,
+not accumulated belief, and is never decayed. `PheromoneStore.decay(rho)`
+rewrites only cells that materially changed. The orchestrator runs a
+`_pheromone_loop` beside the result/timeout loops every
+`pheromone_decay_interval_s` (default 3600, 0 disables) with
+`pheromone_rho` (default 0.1); Bus exposes `decay_pheromones(rho)` (0 when
+the bucket is absent, so fakes stay silent). CLI consumption surface:
+`meshctl pheromone --pick TASK_TYPE` runs `choose_edge` over the live field
+and prints the chosen edge. Still open: consuming `choose_edge()` in bench
+arm selection and the live pipeline, planner-capacity penalty deposits.
 
 ## 15.4 OpenCode harness (design note, 2026-11-15, not yet implemented)
 
