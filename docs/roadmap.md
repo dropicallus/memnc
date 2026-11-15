@@ -2,6 +2,11 @@
 
 ## Built
 
+- **2026-11-15 — Bench arm D, adversarial critic (15.3 item 3, D1)**: the
+  critic must attempt a concrete refutation before any verdict; unevidenced
+  approvals are rejected as critiques, loop capped at 2 revisions. Evidence
+  gate unit-tested; bench run pending.
+
 - **2026-11-15 — Structured message tuple (15.3 item 2)**: TalkHop-style
   communication tuple (message / background / intermediate_output) built
   end-to-end behind `Settings.tuple_prompts` (default off): schema models,
@@ -1430,6 +1435,11 @@ evidence for the Einzel-LoRA > Multi thesis.
    cost than arm C. STATUS: design written 2026-11-15 —
    docs/design-arm-c2d.md (D1 adversarial single round first, D2 evaluator
    split only if D1 < B, D3 structured tuples + plan-in-KV ships with D1).
+   BUILT (2026-11-15): arm D (adversarial-mesh, D1) implemented in
+   src/memnc/bench/runner.py — planner -> coder -> adversarial critic with an
+   evidence gate (approval without counterexample/tried-list is rejected as a
+   critique), max 2 revisions, checkers unchanged as final authority.
+   Bench run + report pending (needs the 120-rep full run).
 4. GEPA slice: bench-driven prompt evolution over roles.py SYSTEM_PROMPTS.
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.

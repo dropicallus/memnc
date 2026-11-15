@@ -1,6 +1,6 @@
 # Arm C2/D design — adversarial refinement mesh (DESIGN, not built)
 
-Status: DESIGN 2026-11-15 (night). Written BEFORE any code, per the
+Status: DESIGN built into bench arm D (D1 implemented; run pending). Written BEFORE any code, per the
 write-before-code rule. Priority 3 of roadmap section 15.3.
 
 ## Problem statement

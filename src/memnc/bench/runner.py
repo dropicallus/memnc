@@ -6,6 +6,9 @@ Arms (per benchmark design, committed in roadmap 14.15.9):
                     (same model critiques its own output and revises).
   C) mesh         — planner -> coder -> critic loop (max 3 revisions),
                     mirroring the production FSM role set.
+  D) adversarial  — planner -> coder -> adversarial critic (max 2 revisions);
+                    the critic may only approve after a concrete counterexample
+                    attempt (design: docs/design-arm-c2d.md, D1).
 
 The deterministic bench checkers are NEVER shown to the models and never
 terminate a loop early: the benchmark measures what the pipeline achieves on
@@ -40,8 +43,51 @@ REFLECTION_ROUNDS = 3
 # Seeded temperature ladder: one entry per rep, identical across arms.
 REP_TEMPERATURES = (0.0, 0.2, 0.4, 0.6, 0.8)
 
-ARMS = ("A", "B", "C")
-ARM_NAMES = {"A": "single-shot", "B": "self-reflect", "C": "mesh"}
+ARMS = ("A", "B", "C", "D")
+ARM_NAMES = {"A": "single-shot", "B": "self-reflect", "C": "mesh", "D": "adversarial-mesh"}
+
+# Arm D1 (adversarial critic): max 2 rounds to bound cost.
+ADVERSARIAL_REVISIONS = 2
+
+# The critic MUST try to break the code before opining (Ultracode adversarial
+# review + poetry deviate step): an approval without a concrete counterexample
+# attempt or an explicit tried-list is the polite-agreement failure mode and is
+# rejected as a critique (see adversarial_verdict_is_evidenced).
+ADVERSARIAL_CRITIC_PROMPT = (
+    "You are an ADVERSARIAL reviewer. Your job is to BREAK the implementation, "
+    "not to opine on it. Before any verdict you MUST attempt refutation: find a "
+    "concrete counterexample (specific input, edge case, or line that breaks "
+    "the code) OR list explicitly what you tried and why it does not break "
+    '("tried": ["..."]). Reply with ONLY a JSON object: {"approved": true|false, '
+    '"counterexample": "..." or null, "tried": ["..."], "issues": ["..."]}. '
+    "An approval WITHOUT a counterexample attempt or tried-list is invalid. "
+    "No prose, no markdown fences."
+)
+
+
+def adversarial_verdict_is_evidenced(data: dict[str, Any]) -> bool:
+    """True when an adversarial approval carries actual refutation evidence.
+
+    A bare ``approved: true`` with no counterexample and no tried-list is the
+    polite-agreement failure mode; it is rejected as a critique so the loop
+    forces the critic to actually attempt a break.
+    """
+    has_counterexample = bool(str(data.get("counterexample") or "").strip())
+    tried = data.get("tried") or []
+    has_tried = isinstance(tried, list) and any(str(t).strip() for t in tried)
+    return has_counterexample or has_tried
+
+
+def normalize_adversarial_verdict(data: dict[str, Any]) -> dict[str, Any]:
+    """Enforce the evidence contract: unevidenced approval becomes a rejection."""
+    if data.get("approved") and not adversarial_verdict_is_evidenced(data):
+        out = dict(data)
+        out["approved"] = False
+        issues = list(out.get("issues") or [])
+        issues.append("approval without counterexample attempt (evidence contract)")
+        out["issues"] = issues
+        return out
+    return data
 
 CODER_SELF_CRITIQUE_PROMPT = (
     "You are reviewing your OWN implementation against the task. "
@@ -235,8 +281,11 @@ class BenchEngine:
                     result.revisions += 1
                     result.output_files = len(files)
                     self._materialize(workdir, files)
-            else:  # arm == "C"
+            elif arm == "C":
                 files = await self._run_mesh_arm(task, temperature, result)
+                self._materialize(workdir, files)
+            else:  # arm == "D"
+                files = await self._run_adversarial_arm(task, temperature, result)
                 self._materialize(workdir, files)
         except Exception as exc:  # noqa: BLE001 - a failed arm run is a datapoint
             log.warning("bench run %s failed: %s", run_id, exc)
@@ -326,6 +375,95 @@ class BenchEngine:
                 files = revised
                 result.output_files = len(files)
         return files
+
+    async def _run_adversarial_arm(
+        self,
+        task: BenchTask,
+        temperature: float,
+        result: RunResult,
+    ) -> dict[str, str]:
+        """Arm D1: planner -> coder -> ADVERSARIAL critic, max 2 revisions.
+
+        Only the critic contract differs from arm C: an approval without a
+        counterexample attempt or tried-list is rejected as a critique
+        (polite-agreement guard), and the loop is capped at 2 revisions.
+        """
+        from memnc.roles import SYSTEM_PROMPTS
+
+        # 1) planner (same as arm C)
+        plan_data, _raw, t_in, t_out = await self._chat(
+            SYSTEM_PROMPTS[Role.PLANNER],
+            build_user_prompt(Role.PLANNER, {"task": task.prompt}),
+            self._model(Role.PLANNER),
+            temperature,
+        )
+        result.llm_calls += 1
+        result.tokens_in += t_in
+        result.tokens_out += t_out
+        plan = plan_data if isinstance(plan_data, dict) else None
+
+        # 2) coder first pass
+        files, t_in, t_out = await self._coder_pass(
+            task, temperature, extra_payload={"plan": plan} if plan else None
+        )
+        result.llm_calls += 1
+        result.tokens_in += t_in
+        result.tokens_out += t_out
+        result.output_files = len(files)
+
+        # 3) adversarial critic loop (max ADVERSARIAL_REVISIONS)
+        for revision in range(1, ADVERSARIAL_REVISIONS + 1):
+            critique, t_in, t_out = await self._adversarial_critic_call(
+                task, plan, files, temperature
+            )
+            result.llm_calls += 1
+            result.tokens_in += t_in
+            result.tokens_out += t_out
+            critique = normalize_adversarial_verdict(critique)
+            if critique.get("approved"):
+                break
+            revised, t_in, t_out = await self._coder_pass(
+                task,
+                temperature,
+                extra_payload={
+                    "plan": plan,
+                    "code": {"summary": "revision", "files": self._file_entries(files)},
+                    "critique": critique,
+                    "revisions": revision,
+                },
+            )
+            result.llm_calls += 1
+            result.tokens_in += t_in
+            result.tokens_out += t_out
+            result.revisions += 1
+            if revised:
+                files = revised
+                result.output_files = len(files)
+        return files
+
+    async def _adversarial_critic_call(
+        self,
+        task: BenchTask,
+        plan: dict[str, Any] | None,
+        files: dict[str, str],
+        temperature: float,
+    ) -> tuple[dict[str, Any], int, int]:
+        """Critic call under the adversarial refutation contract."""
+        payload: dict[str, Any] = {
+            "task": task.prompt,
+            "code": {"summary": "candidate", "files": self._file_entries(files)},
+        }
+        if plan:
+            payload["plan"] = plan
+        data, _raw, t_in, t_out = await self._chat(
+            ADVERSARIAL_CRITIC_PROMPT,
+            build_user_prompt(Role.CRITIC, payload),
+            self._model(Role.CRITIC),
+            temperature,
+        )
+        if data is None:
+            data = {"approved": False, "summary": "unparseable critic output", "issues": []}
+        return data, t_in, t_out
 
     async def _critic_call(
         self,

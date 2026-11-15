@@ -201,3 +201,101 @@ def test_write_report_has_arm_rows(tmp_path: Path) -> None:
     assert path.exists()
     assert "single-shot" in text and "mesh" in text
     assert "95% CI" in text
+
+# -- arm D: adversarial critic (docs/design-arm-c2d.md D1) -------------------
+
+
+def test_arms_include_d() -> None:
+    assert "D" in ARMS
+    assert build_suite(["D"], 1, ["easy"])
+
+
+def test_adversarial_verdict_evidence_gate() -> None:
+    from memnc.bench.runner import (
+        adversarial_verdict_is_evidenced,
+        normalize_adversarial_verdict,
+    )
+
+    # unevidenced approval is the polite-agreement failure mode -> rejected
+    bare = {"approved": True, "issues": []}
+    assert not adversarial_verdict_is_evidenced(bare)
+    out = normalize_adversarial_verdict(bare)
+    assert out["approved"] is False
+    assert "approval without counterexample attempt" in out["issues"][0]
+
+    # counterexample counts as evidence
+    assert adversarial_verdict_is_evidenced(
+        {"approved": True, "counterexample": "empty list input", "tried": []}
+    )
+    # tried-list counts as evidence
+    assert adversarial_verdict_is_evidenced(
+        {"approved": True, "tried": ["negative n", "unicode input"]}
+    )
+    # rejections pass through unchanged
+    rej = {"approved": False, "issues": ["broken"]}
+    assert normalize_adversarial_verdict(rej) == rej
+
+
+def test_run_task_arm_d_approves_with_evidence(tmp_path: Path, monkeypatch) -> None:
+    task = get_task("easy_palindrome")
+    files = _reference_files(task.id)
+    evidenced = json.dumps(
+        {"approved": True, "counterexample": None, "tried": ["empty string"], "issues": []}
+    )
+    engine = _engine(
+        monkeypatch,
+        [
+            json.dumps({"steps": ["step1"]}),        # planner
+            _coder_payload(files),                    # coder pass 1
+            evidenced,                                # adversarial critic approves
+        ],
+    )
+    result = asyncio.run(engine.run_task(task, "D", 0, tmp_path))
+    assert result.success, result.issues
+    assert result.revisions == 0
+    assert result.llm_calls == 3
+
+
+def test_run_task_arm_d_rejects_unevidenced_approval(tmp_path: Path, monkeypatch) -> None:
+    """A polite bare approval must NOT end the loop — revision follows."""
+    task = get_task("easy_palindrome")
+    files = _reference_files(task.id)
+    bare_approval = _verdict(True)
+    evidenced = json.dumps(
+        {"approved": True, "tried": ["zero", "negative"], "issues": []}
+    )
+    engine = _engine(
+        monkeypatch,
+        [
+            json.dumps({"steps": ["step1"]}),        # planner
+            _coder_payload(files),                    # coder pass 1
+            bare_approval,                            # unevidenced -> forced reject
+            _coder_payload(files),                    # revision 1
+            evidenced,                                # evidenced approval ends loop
+        ],
+    )
+    result = asyncio.run(engine.run_task(task, "D", 0, tmp_path))
+    assert result.success, result.issues
+    assert result.revisions == 1
+    assert result.llm_calls == 5
+
+
+def test_run_task_arm_d_caps_at_two_rounds(tmp_path: Path, monkeypatch) -> None:
+    task = get_task("easy_palindrome")
+    files = _reference_files(task.id)
+    rejection = _verdict(False, ["broken"])
+    engine = _engine(
+        monkeypatch,
+        [
+            json.dumps({"steps": ["step1"]}),   # planner
+            _coder_payload({"bad.py": "x = 1"}),  # pass 1
+            rejection,                          # round 1 reject
+            _coder_payload(files),
+            rejection,                          # round 2 reject
+            _coder_payload(files),              # revision 2 (last, no re-review)
+        ],
+    )
+    result = asyncio.run(engine.run_task(task, "D", 0, tmp_path))
+    # capped: 2 revisions, then the loop ends without another critique call
+    assert result.revisions == 2
+    assert result.llm_calls == 6
