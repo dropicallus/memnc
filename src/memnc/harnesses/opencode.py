@@ -77,6 +77,37 @@ def _maybe_clean_state() -> None:
         shutil.rmtree(state, ignore_errors=True)
 
 
+_KNOWN_PROVIDER_PREFIXES = (
+    "ollama/",
+    "openai/",
+    "anthropic/",
+    "google/",
+    "openrouter/",
+    "azure/",
+    "github-copilot/",
+    "opencode/",
+    "mistral/",
+    "groq/",
+    "xai/",
+    "amazon-bedrock/",
+    "github/",
+)
+
+
+def qualify_model(model: str) -> str:
+    """Prefix a bare model name with the ``ollama/`` provider id.
+
+    Workers carry ONE model setting per role (MODEL_CODER) and feed it to both
+    the inproc path (needs the bare ollama tag) and this harness (opencode
+    resolves `--model provider/id` against the provider config, a bare tag
+    would be read as provider/model). So the harness adds the ``ollama/``
+    prefix itself unless the string is already provider-qualified or empty.
+    """
+    if not model or model.startswith(_KNOWN_PROVIDER_PREFIXES):
+        return model
+    return f"ollama/{model}"
+
+
 @register
 class OpenCodeHarness:
     """External-process harness around the opencode coding agent CLI."""
@@ -89,7 +120,7 @@ class OpenCodeHarness:
         opencode_bin: str | None = None,
         extra_args: list[str] | None = None,
     ):
-        self.model = model
+        self.model = qualify_model(model)
         self.opencode_bin = opencode_bin or shutil.which("opencode") or "opencode"
         self.extra_args = list(extra_args or [])
 

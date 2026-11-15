@@ -74,6 +74,10 @@ x-mesh-service: &mesh-service
     # H4: per-node NKey seeds live here (secrets/<node>.nk, mode 0600,
     # never committed). Point NATS_NKEYS_SEED at /secrets/<node>.nk.
     - ./secrets:/secrets:ro
+    # 15.4.1: per-node opencode provider config (HOME=/tmp inside the
+    # container). Nodes without ~/.config/opencode get an empty read-only
+    # dir; harmless — the opencode harness only runs when a task asks for it.
+    - ${HOME:-/root}/.config/opencode:/tmp/.config/opencode:ro
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
