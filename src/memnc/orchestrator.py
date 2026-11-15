@@ -508,6 +508,16 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             log.warning("bad result payload: %s", exc)
             return
+        # 15.4.5 gap 3: the orchestrator has no filesystem access, so the
+        # worker stamps claimed-vs-existing sizes; a claimed-but-missing
+        # artifact fails the step instead of passing silently.
+        if envelope.role is Role.CODER and any(v < 0 for v in payload.artifact_sizes.values()):
+            missing = [p_ for p_, v_ in payload.artifact_sizes.items() if v_ < 0]
+            payload = ResultPayload(
+                ok=False,
+                error="claimed artifacts missing from workspace: " + ", ".join(missing),
+                tool_steps=payload.tool_steps,
+            )
 
         snapshot.seen_result_ids.append(envelope.id)
         snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]

@@ -84,6 +84,27 @@ def apply_artifacts(
     return written
 
 
+def verify_artifacts(root: Path, files: list) -> dict[str, int]:
+    """15.4.5 gap 3: claimed-vs-existing artifact cross-check.
+
+    Maps every claimed path to its workspace file size in bytes, or -1 when
+    the file does not exist (or the path is unsafe). The worker stamps this
+    into the result so the orchestrator - which has no filesystem access -
+    can refuse work that claims files it never produced.
+    """
+
+    root = Path(root)
+    out: dict[str, int] = {}
+    for item in files:
+        path = item["path"] if isinstance(item, dict) else item.path
+        try:
+            target = safe_path(root, path)
+            out[path] = target.stat().st_size if target.is_file() else -1
+        except Exception:  # noqa: BLE001 - unsafe or invalid path: unverifiable
+            out[path] = -1
+    return out
+
+
 def list_tree(root: Path, depth: int = 2, max_entries: int = 200) -> list[str]:
     root = Path(root).resolve()
     entries: list[str] = []

@@ -1829,12 +1829,13 @@ Gap 2 - deterministic acceptance checks (design, next slice):
   allowlist.
 
 Gap 3 - claimed-vs-existing artifact cross-check (design, with gap 2):
-- The orchestrator has no filesystem access (workers may be remote), so the
-  WORKER stamps verification into its result: for every file path claimed
-  in the code result, stat the workspace and record which exist with which
-  size. The snapshot stores `verified_artifacts`; DONE requires every
-  claimed path to exist. Content fabrication (a written-but-invented
-  report) is only catchable by gap 2 acceptance criteria, not by stat.
+- SHIPPED 2026-11-15: the worker stamps `artifact_sizes` (path -> size in
+  bytes, -1 = claimed but absent) into every coder result
+  (`fsutil.verify_artifacts`), and the orchestrator fails the step with
+  "claimed artifacts missing from workspace: ..." when any claimed path is
+  absent - this also surfaces previously silent oversized-artifact skips.
+  Content fabrication (a written-but-invented report) is only catchable by
+  gap 2 acceptance criteria, not by stat.
 
 ### 15.4.4 Model serving layer: Ollama-in-Docker → per-node llauncher (design note, 2026-11-15, before coding)
 

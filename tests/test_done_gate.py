@@ -8,10 +8,12 @@ from test_worker import FakeTools
 
 from memnc.config import Settings
 from memnc.fsm import done_block_reason
+from memnc.fsutil import verify_artifacts
 from memnc.orchestrator import Orchestrator
 from memnc.schema import (
     CriticOutput,
     Envelope,
+    FileArtifact,
     Kind,
     ResultPayload,
     Role,
@@ -90,6 +92,13 @@ def test_orchestrator_gate_off_allows_done(tmp_path) -> None:
     assert "task.done" in [e.event for e in snap.history]
 
 
+def _stub_publish(bus: FakeBus) -> None:
+    async def _publish(*args, **kwargs):
+        return None
+
+    bus.publish_envelope = _publish  # type: ignore[method-assign]
+
+
 def _worker(settings: Settings, bus: FakeBus) -> Worker:
     return Worker(settings, backend=None, tools=FakeTools(), bus=bus)
 
@@ -125,3 +134,64 @@ def _event():
     from memnc.fsm import Event
 
     return Event("result", ok=True, approved=True)
+
+
+# ---- 15.4.5 gap 3: claimed-vs-existing artifact cross-check ----
+
+
+def test_verify_artifacts_maps_sizes_and_missing(tmp_path) -> None:
+    (tmp_path / "real.txt").write_text("hello")
+    sizes = verify_artifacts(
+        tmp_path, [FileArtifact(path="real.txt", content="x"), FileArtifact(path="ghost.txt", content="x")]
+    )
+    assert sizes["real.txt"] == 5
+    assert sizes["ghost.txt"] == -1
+
+
+def test_verify_artifacts_unsafe_path_is_missing(tmp_path) -> None:
+    sizes = verify_artifacts(tmp_path, [FileArtifact(path="../escape.txt", content="x")])
+    assert sizes == {"../escape.txt": -1}
+
+
+def _coding_snapshot(task_id: str, attempt: int = 0) -> TaskSnapshot:
+    snap = TaskSnapshot(task_id=task_id, trace_id="tr-1", task="code it")
+    snap.state = TaskState.CODING
+    snap.attempt = attempt
+    return snap
+
+
+def _coder_envelope(task_id: str, artifact_sizes: dict[str, int]) -> Envelope:
+    return Envelope(
+        task_id=task_id,
+        trace_id="tr-1",
+        kind=Kind.RESULT,
+        role=Role.CODER,
+        node="node-a",
+        payload=ResultPayload(ok=True, output={"summary": "wrote it"}, artifact_sizes=artifact_sizes).model_dump(),
+    )
+
+
+def test_orchestrator_fails_on_missing_claimed_artifact(tmp_path) -> None:
+    bus = FakeBus()
+    orch = Orchestrator(settings=Settings(data_dir=str(tmp_path)), bus=bus)
+    snap = _coding_snapshot("t-art-1", attempt=2)
+    bus.snapshots[snap.task_id] = snap
+    msg = _FakeMsg(json.dumps(_coder_envelope(snap.task_id, {"ghost.md": -1}).model_dump()).encode())
+
+    asyncio.run(orch._handle_result(msg))
+
+    assert snap.state is TaskState.FAILED
+    assert "claimed artifacts missing from workspace: ghost.md" in (snap.error or "")
+
+
+def test_orchestrator_accepts_existing_claimed_artifacts(tmp_path) -> None:
+    bus = FakeBus()
+    orch = Orchestrator(settings=Settings(data_dir=str(tmp_path)), bus=bus)
+    snap = _coding_snapshot("t-art-2")
+    bus.snapshots[snap.task_id] = snap
+    _stub_publish(bus)
+    msg = _FakeMsg(json.dumps(_coder_envelope(snap.task_id, {"main.py": 120}).model_dump()).encode())
+
+    asyncio.run(orch._handle_result(msg))
+
+    assert snap.state is not TaskState.FAILED
