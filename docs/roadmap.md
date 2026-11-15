@@ -1415,7 +1415,9 @@ evidence for the Einzel-LoRA > Multi thesis.
    poetry deviate step), k single-criterion evaluator split + eval supervisor
    (TalkHier, cost caveat), plan-in-KV (Ultracode), specialists with search
    (Codacus). Success criterion: beat arm B on hard tier at materially lower
-   cost than arm C.
+   cost than arm C. STATUS: design written 2026-11-15 —
+   docs/design-arm-c2d.md (D1 adversarial single round first, D2 evaluator
+   split only if D1 < B, D3 structured tuples + plan-in-KV ships with D1).
 4. GEPA slice: bench-driven prompt evolution over roles.py SYSTEM_PROMPTS.
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
