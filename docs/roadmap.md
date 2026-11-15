@@ -1520,10 +1520,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    Deterministic, no human labels. BenchEngine gained opt-in
    record_solutions (RunResult.solutions; ordinary rows stay lean).
    Tests: tests/test_bench_dpo.py (6). The learned verifier itself
-   (training on these pairs) is the next step of this slice — design
-   landed in docs/design-learned-verifier.md (V1 linear scorer vs V2
-   LoRA verifier ladder; V2 blocked on compute + model-download
-   approval), training NOT built yet.
+   (training on these pairs): design in docs/design-learned-verifier.md
+   (V1 linear scorer vs V2 LoRA verifier ladder). V1 BUILT —
+   src/memnc/bench/verifier.py: pure-stdlib pairwise logistic regression
+   over deterministic solution features (files/bytes/lines/comment &
+   blank ratios, placeholders, empty files, AST syntax errors, duplicate
+   lines, avg line length), JSON artifact with feature-name pinning;
+   scope = shape/fabrication failures only, never a competence judge.
+   Tests: tests/test_bench_verifier.py (7). V2 (LoRA verifier on real
+   pairs) blocked on compute + model-download approval.
 7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
    STATUS: BUILT (2026-11-15) - src/memnc/bench/tasks.py + checkers.py +
    solutions.py + runner.py. Four opt-in sync tasks (load via
