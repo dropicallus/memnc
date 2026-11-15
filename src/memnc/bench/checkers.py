@@ -41,6 +41,89 @@ def _run(checker_name: str, workdir: Path) -> list[str]:
     return list(failures)
 
 
+# ---------------------------------------------------------------- sync ----
+# Sync-tier checkers verify the AMENDED spec only (the environment update
+# delivered after the first coder pass). A solution that implements the
+# original spec alone must FAIL here.
+
+
+def check_sync_rate_limit(workdir: Path) -> list[str]:
+    mod = _load(workdir, "sol_rate_limit.py")
+    f = mod.can_send
+    cases = [
+        ((5, 10, 9), True),
+        ((5, 10, 10), False),
+        ((10, 10, 3), False),
+        ((0, 10, 10), False),
+        ((0, 10, 0), True),
+    ]
+    return [
+        f"can_send{args} -> {f(*args)}, expected {expected}"
+        for args, expected in cases
+        if f(*args) != expected
+    ]
+
+
+def check_sync_user_label(workdir: Path) -> list[str]:
+    mod = _load(workdir, "sol_user_label.py")
+    f = mod.user_label
+    cases = [
+        ({"name": "Ann", "email": "a@b.c"}, "Ann"),
+        ({}, "unknown"),
+        ({"email": "a@b.c"}, "unknown"),
+        ({"name": "", "email": "a@b.c"}, "unknown"),
+    ]
+    failures = [f"user_label({args}) -> {f(args)!r}, expected {expected!r}"
+                for args, expected in cases if f(args) != expected]
+    label = f({"name": "Ann", "email": "a@b.c"})
+    if "@" in label:
+        failures.append("amended spec violated: email still in output")
+    return failures
+
+
+def check_sync_apply_ops(workdir: Path) -> list[str]:
+    mod = _load(workdir, "sol_apply_ops.py")
+    f = mod.apply_ops
+    # Idempotent replay: duplicate op_ids apply once.
+    state = f({}, [
+        {"op": "inc", "key": "n", "value": 2, "op_id": "o1"},
+        {"op": "inc", "key": "n", "value": 2, "op_id": "o1"},
+        {"op": "set", "key": "m", "value": 5, "op_id": "o2"},
+        {"op": "set", "key": "m", "value": 5, "op_id": "o2"},
+    ])
+    failures = []
+    if state.get("n") != 2:
+        failures.append(f"idempotent replay failed: n={state.get('n')!r}, expected 2")
+    if state.get("m") != 5:
+        failures.append(f"idempotent replay failed: m={state.get('m')!r}, expected 5")
+    # Ops without op_id always apply.
+    state2 = f({"n": 1}, [{"op": "inc", "key": "n", "value": 1}])
+    if state2.get("n") != 2:
+        failures.append(f"op without op_id must apply: n={state2.get('n')!r}")
+    # No input mutation.
+    base = {"n": 1}
+    f(base, [{"op": "inc", "key": "n", "value": 1}])
+    if base != {"n": 1}:
+        failures.append("apply_ops must not mutate its input")
+    return failures
+
+
+def check_sync_convert(workdir: Path) -> list[str]:
+    mod = _load(workdir, "sol_convert.py")
+    f = mod.convert
+    cases = [
+        ((1250, 1.5), 18.75),
+        ((999, 1.0), 9.99),
+        ((0, 2.0), 0.0),
+        ((12345, 0.01), 1.23),
+    ]
+    return [
+        f"convert{args} -> {f(*args)}, expected {expected}"
+        for args, expected in cases
+        if f(*args) != expected
+    ]
+
+
 # ---------------------------------------------------------------- easy ----
 
 

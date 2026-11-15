@@ -257,6 +257,7 @@ class BenchEngine:
                 result.llm_calls = 1
                 result.tokens_in += t_in
                 result.tokens_out += t_out
+                files = await self._apply_amendment(task, files, temperature, result)
                 result.output_files = len(files)
                 self._materialize(workdir, files)
             elif arm == "B":
@@ -264,6 +265,7 @@ class BenchEngine:
                 result.llm_calls += 1
                 result.tokens_in += t_in
                 result.tokens_out += t_out
+                files = await self._apply_amendment(task, files, temperature, result)
                 result.output_files = len(files)
                 self._materialize(workdir, files)
                 for _round_no in range(1, REFLECTION_ROUNDS + 1):
@@ -327,6 +329,34 @@ class BenchEngine:
             data = {"approved": False, "issues": ["unparseable critique output"]}
         return data, t_in, t_out
 
+    async def _apply_amendment(
+        self,
+        task: BenchTask,
+        files: dict[str, str],
+        temperature: float,
+        result: RunResult,
+    ) -> dict[str, str]:
+        """Sync tier: deliver the environment update after the first pass.
+
+        SyncMind out-of-sync simulation: the spec changed while the agent
+        worked. One extra coder turn with the amendment as context; the
+        checker (run later) verifies the AMENDED spec only.
+        """
+        if not task.amendment:
+            return files
+        amended, t_in, t_out = await self._coder_pass(
+            task,
+            temperature,
+            extra_payload={
+                "context": "ENVIRONMENT UPDATE: the requirements changed "
+                "after your first version. New requirement: " + task.amendment
+            },
+        )
+        result.llm_calls += 1
+        result.tokens_in += t_in
+        result.tokens_out += t_out
+        return amended if amended else files
+
     async def _run_mesh_arm(
         self,
         task: BenchTask,
@@ -355,6 +385,7 @@ class BenchEngine:
         result.llm_calls += 1
         result.tokens_in += t_in
         result.tokens_out += t_out
+        files = await self._apply_amendment(task, files, temperature, result)
         result.output_files = len(files)
 
         # 3) critic loop (max MAX_REVISIONS revisions, first approval wins)
@@ -419,6 +450,7 @@ class BenchEngine:
         result.llm_calls += 1
         result.tokens_in += t_in
         result.tokens_out += t_out
+        files = await self._apply_amendment(task, files, temperature, result)
         result.output_files = len(files)
 
         # 3) adversarial critic loop (max ADVERSARIAL_REVISIONS)

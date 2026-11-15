@@ -1475,6 +1475,18 @@ evidence for the Einzel-LoRA > Multi thesis.
    (training on these pairs) is the next step of this slice, NOT built
    here.
 7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
+   STATUS: BUILT (2026-11-15) - src/memnc/bench/tasks.py + checkers.py +
+   solutions.py + runner.py. Four opt-in sync tasks (load via
+   load_tasks("sync"); the default 24-task baseline is unchanged so
+   historical runs stay comparable). Each sync task carries an
+   `amendment`: an environment update delivered AFTER the first coder pass
+   via BenchEngine._apply_amendment (SyncMind out-of-sync simulation) -
+   one extra coder turn whose prompt contains "ENVIRONMENT UPDATE" plus
+   the amendment text. All four arms (A/B/C/D) hook the amendment after
+   their first coder pass. Checkers verify the AMENDED spec only, so a
+   solution that ignores the update fails; the pre-amendment spec is
+   verified to fail its checker in tests. Amendment turns count toward
+   llm_calls/tokens. Tests: tests/test_bench_sync.py (6).
 8. P2b parametric memory stays the thesis experiment: single-LoRA >> multi,
    growing-LoRA (MoRAM/CoDyRA) + Fisher-Merge as the bet, now argued against
    a named, peer-reviewed counter-position (12/C2) instead of a strawman.

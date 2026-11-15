@@ -20,6 +20,10 @@ def test_task_set_shape():
     assert by_tier == {"easy": 8, "medium": 8, "hard": 8}
     ids = [t.id for t in tasks]
     assert len(set(ids)) == 24
+    # Sync tier is opt-in.
+    sync_tasks = load_tasks("sync")
+    assert len(sync_tasks) == 4
+    assert all(t.tier == "sync" and t.amendment for t in sync_tasks)
     for t in tasks:
         assert t.files, f"{t.id} must declare produced files"
         assert t.prompt.strip(), f"{t.id} must have a prompt"

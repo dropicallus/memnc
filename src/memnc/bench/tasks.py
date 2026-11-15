@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Tier = Literal["easy", "medium", "hard"]
+Tier = Literal["easy", "medium", "hard", "sync"]
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,64 @@ class BenchTask:
     files: list[str] = field(default_factory=list)
     # Name of the check function in memnc.bench.checkers.
     checker: str = ""
+    # Sync tier only: an environment update delivered AFTER the first coder
+    # pass (SyncMind out-of-sync simulation). The checker verifies the
+    # AMENDED spec only, so ignoring the update fails the task.
+    amendment: str = ""
 
+
+SYNC_PROMPTS = {
+    "sync_rate_limit": (
+        "Create a file named sol_rate_limit.py containing a function "
+        "can_send(sent_today: int, limit: int) -> bool. It must return True "
+        "only when sent_today is strictly below limit. Use only the Python "
+        "standard library."
+    ),
+    "sync_user_label": (
+        "Create a file named sol_user_label.py containing a function "
+        "user_label(user: dict) -> str. It must return the user's name and "
+        "the email in angle brackets, e.g. 'Ann <a@b.c>'. Use only the "
+        "Python standard library."
+    ),
+    "sync_apply_ops": (
+        "Create a file named sol_apply_ops.py containing a function "
+        "apply_ops(state: dict, ops: list) -> dict. Each op is a dict with "
+        "'op' ('set' or 'inc'), 'key', 'value'. 'set' writes the value, "
+        "'inc' adds it to the current value (0 when the key is missing). "
+        "The function must return the updated state without mutating the "
+        "input. Use only the Python standard library."
+    ),
+    "sync_convert": (
+        "Create a file named sol_convert.py containing a function "
+        "convert(amount: float, rate: float) -> float. It must return "
+        "amount * rate rounded to two decimals. Use only the Python "
+        "standard library."
+    ),
+}
+
+# Environment updates delivered AFTER the first coder pass (sync tier).
+SYNC_AMENDMENTS = {
+    "sync_rate_limit": (
+        "A total cap was introduced: can_send now takes a third argument "
+        "total_sent (int) and returns True only when sent_today < limit "
+        "AND total_sent < 10."
+    ),
+    "sync_user_label": (
+        "Privacy change: emails must no longer appear in the output. "
+        "user_label(user: dict) -> str must return just the name, and the "
+        "string 'unknown' when the name is missing or empty."
+    ),
+    "sync_apply_ops": (
+        "Ops now carry an optional 'op_id'. An op whose op_id was already "
+        "applied in this call must be skipped (idempotent replay); ops "
+        "without an op_id always apply. Same signature and semantics "
+        "otherwise."
+    ),
+    "sync_convert": (
+        "Amounts now arrive as integer cents: convert(cents: int, "
+        "rate: float) -> float must return round(cents / 100 * rate, 2)."
+    ),
+}
 
 EASY_PROMPTS = {
     "easy_palindrome": (
@@ -235,6 +292,7 @@ HARD_PROMPTS = {
 }
 
 _PROMPTS: dict[str, dict[str, str]] = {
+    "sync": SYNC_PROMPTS,
     "easy": EASY_PROMPTS,
     "medium": MEDIUM_PROMPTS,
     "hard": HARD_PROMPTS,
@@ -242,14 +300,17 @@ _PROMPTS: dict[str, dict[str, str]] = {
 
 _FILES: dict[str, list[str]] = {
     task_id: [f"sol_{task_id.split('_', 1)[1]}.py"] for task_id in
-    {**EASY_PROMPTS, **MEDIUM_PROMPTS, **HARD_PROMPTS}
+    {**EASY_PROMPTS, **MEDIUM_PROMPTS, **HARD_PROMPTS, **SYNC_PROMPTS}
 }
 
 
 def load_tasks(tier: str | None = None) -> list[BenchTask]:
     """Return all bench tasks, optionally filtered by tier."""
     out: list[BenchTask] = []
-    for tier_name in ("easy", "medium", "hard"):
+    # The sync tier is opt-in: the default suite stays the 24-task baseline
+    # so historical runs remain comparable (sync runs pass tier="sync").
+    tier_names = ("sync",) if tier == "sync" else ("easy", "medium", "hard")
+    for tier_name in tier_names:
         if tier is not None and tier_name != tier:
             continue
         for task_id, prompt in _PROMPTS[tier_name].items():
@@ -260,14 +321,15 @@ def load_tasks(tier: str | None = None) -> list[BenchTask]:
                     prompt=prompt,
                     files=_FILES[task_id],
                     checker=f"check_{task_id}",
+                    amendment=SYNC_AMENDMENTS.get(task_id, ""),
                 )
             )
     return out
 
 
 def get_task(task_id: str) -> BenchTask:
-    """Return the task with the given id."""
-    for task in load_tasks():
+    """Return the task with the given id (any tier, including opt-in sync)."""
+    for task in load_tasks(None) + load_tasks("sync"):
         if task.id == task_id:
             return task
     raise KeyError(f"unknown bench task: {task_id}")

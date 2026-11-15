@@ -415,6 +415,50 @@ def sol_tokenizer():
     return tokenize
 
 
+# ----------------------------------------------------------------- sync ----
+
+
+def sol_rate_limit():
+    def can_send(sent_today, limit, total_sent):
+        return sent_today < limit and total_sent < 10
+
+    return can_send
+
+
+def sol_user_label():
+    def user_label(user):
+        name = user.get("name") or ""
+        return name if name else "unknown"
+
+    return user_label
+
+
+def sol_apply_ops():
+    def apply_ops(state, ops):
+        out = dict(state)
+        seen = set()
+        for op in ops:
+            op_id = op.get("op_id")
+            if op_id is not None:
+                if op_id in seen:
+                    continue
+                seen.add(op_id)
+            if op["op"] == "set":
+                out[op["key"]] = op["value"]
+            else:
+                out[op["key"]] = out.get(op["key"], 0) + op["value"]
+        return out
+
+    return apply_ops
+
+
+def sol_convert():
+    def convert(cents, rate):
+        return round(cents / 100 * rate, 2)
+
+    return convert
+
+
 # Public names each solution module must expose, by task id.
 SOL_NAMES: dict[str, tuple[str, ...]] = {
     "easy_palindrome": ("is_palindrome",),
@@ -441,4 +485,8 @@ SOL_NAMES: dict[str, tuple[str, ...]] = {
     "hard_matrix_rotate": ("rotate_cw",),
     "hard_word_ladder": ("ladder_length",),
     "hard_tokenizer": ("tokenize",),
+    "sync_rate_limit": ("can_send",),
+    "sync_user_label": ("user_label",),
+    "sync_apply_ops": ("apply_ops",),
+    "sync_convert": ("convert",),
 }
