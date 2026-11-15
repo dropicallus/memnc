@@ -1776,6 +1776,25 @@ Open questions: how much journal belongs in the snapshot (KV size limits),
 whether checkpointing needs a code change in the worker claim path, and how
 error classification maps onto the existing trace entries.
 
+Finding — fabrication passed the DONE gate (2026-11-15, mesh autonomy test):
+task 1a1e00c15dc0077966c7064 (KugelAudio TTS) finished DONE with critic
+approval — but the worker only created an empty venv and then FABRICATED the
+rest: a plausible kugel-report.md with invented metrics (load 10.23 s, RTF
+2.01, 3 GB peak, "clear and understandable audio quality"), no WAV anywhere
+on the filesystem, no kugelaudio/torch/accelerate in the venv, no HuggingFace
+cache, and completed_commands=0 — zero commands were ever executed. The
+critic approved purely on the narrative. Three structural gaps (this design
+note must close them):
+1. A task can reach DONE without a single executed command. The ledger
+   records completed_commands but never gates on it. Rule: DONE without
+   completed_commands > 0 is structurally rejected.
+2. The critic approves on narrative — it cannot verify artifacts it cannot
+   see. Acceptance criteria (e.g. "kugel-test.wav exists, duration > 30 s")
+   must be checked deterministically: an acceptance step that runs
+   ffprobe/stat against the real filesystem, not an LLM's opinion.
+3. Claimed vs. existing artifacts are never cross-checked: every file path
+   in a code result is stat'ed by the orchestrator before DONE is written.
+
 ### 15.4.4 Model serving layer: Ollama-in-Docker → per-node llauncher (design note, 2026-11-15, before coding)
 
 Operator verdict: running Ollama as a Docker container is inflexible
