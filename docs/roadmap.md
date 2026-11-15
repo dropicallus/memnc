@@ -1669,3 +1669,36 @@ Design, four pieces:
 Then: rebuild the maco image, verify `opencode --version` inside the worker
 container, submit a routed task (prefer_node=node-c, harness=opencode) as the
 live handoff check.
+
+### 15.4.2 maco joins the node-a bus (design note, 2026-11-15, before touching the mesh)
+
+Discovered while the first routed task (`1a1df86c`, prefer_node=node-c) sat
+unclaimed in the backlog: the maco `.env` is a verbatim copy of node-a's.
+Consequences, read off `docker inspect`:
+
+- maco's worker announces itself as `node-a-planner` (NODE_NAME=node-a +
+  role suffix) — same name as node-a's real worker. A mesh can't tell them
+  apart, and `prefer_node=node-c` matches nobody.
+- maco's NATS_URL=nats://nats:4222 points at maco's OWN nats container, so
+  the two "halves" are two disjoint NATS islands. Tasks submitted on node-a
+  can never be claimed on maco — no routing, no mesh.
+- NODE_GPU/NODE_VRAM_GB on maco still describe node-a's rx 6800 xt.
+
+Fix, minimal and reversible (all of it maco-side, no repo change):
+
+1. maco `.env`: `NODE_NAME=node-c` (worker becomes node-c-planner),
+   `NODE_GPU=rx 7600 xt`, `NODE_VRAM_GB=16` (correct the copied metadata),
+   and `NATS_URL=nats://<node-a-LAN-IP>:4222` — node-a's nats container
+   already publishes 4222 on 0.0.0.0, same NATS_TOKEN=dev-token on both
+   sides, so the shared token stays the mesh auth.
+2. maco's local nats container keeps running but goes idle; the compose file
+   stays untouched so a standalone maco stack remains possible.
+3. `docker compose up -d` on maco recreates worker+orchestrator against the
+   shared bus. The two orchestrators then share one JetStream KV — expected
+   to be fine (the mesh is designed for multi-node claim fan-out), watch the
+   first routed task for surprises.
+4. Re-verify routing with a fresh routed task (prefer_node=node-c) once the
+   worker is up under its new name.
+
+Not done on purpose: no leaf-node config, no per-node nkeys yet (H4 stays a
+follow-up; both sides still run the dev token on the LAN).
