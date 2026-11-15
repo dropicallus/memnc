@@ -1413,6 +1413,10 @@ evidence for the Einzel-LoRA > Multi thesis.
    TalkHier-derived. STATUS: design written 2026-11-15 —
    docs/design-message-tuple.md (schema models, workflow_state companion
    key, opt-in flag, zero extra model calls; build order 4 steps).
+   BUILD PROGRESS: step 1 done — schema models `Background` /
+   `IntermediateOutput` / `MessageTuple` in schema.py + tests
+   (tests/test_tuple_schema.py). Next: orchestrator background persistence
+   (step 2), prompt tuple section behind opt-in flag (step 3).
 3. Arm C2/D design document BEFORE code: adversarial critic (Ultracode +
    poetry deviate step), k single-criterion evaluator split + eval supervisor
    (TalkHier, cost caveat), plan-in-KV (Ultracode), specialists with search
