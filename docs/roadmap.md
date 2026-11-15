@@ -2,6 +2,18 @@
 
 ## Built
 
+- **2026-11-15 — Pheromone routing field (14.15.10, initialization slice)**:
+  `src/memnc/pheromone.py` — ACO-style score tau^alpha * eta^beta per
+  (task_type, edge) with tau0=1.0, alpha=1.0, beta=2.0 from the measured
+  full run; seed deposits load the 24-cell rescue matrix (5 reps x 8 hard
+  tasks x A/B/C) into the `mesh_pheromones` KV bucket; live terminal
+  transitions deposit on the `mesh` edge via the orchestrator hook
+  (best-effort, like observations); escalation chain A->B->C is the
+  fail-floor (`choose_edge` never re-picks a failed edge); `meshctl
+  pheromone [--task-type T]` renders the field. 14 tests; seeded + verified
+  live on node-a.
+
+
 - **2026-11-15 — Bench arm D, adversarial critic (15.3 item 3, D1)**: the
   critic must attempt a concrete refutation before any verdict; unevidenced
   approvals are rejected as critiques, loop capped at 2 revisions. Evidence
@@ -1267,7 +1279,7 @@ Status (2026-11-14): stage 2 done — `memnc.bench.runner`:
     repo-own evidence for the single-agent>multi-structure finding;
     full seeded run (reps>=5) + raised inference timeout next.
 
-### 14.15.10 Slice: pheromone routing (PROPOSED 2026-11-14, gated on bench evidence)
+### 14.15.10 Slice: pheromone routing (INITIALIZATION SHIPPED; next: selection consumption + decay job)
 
 Frank's framing: "Ich komme ja aus den Routing Algorithmen" — routing as the
 mental model for mesh coordination. Synthesis of AMRO-S (arXiv 2603.12933),
@@ -1551,3 +1563,11 @@ derived from that table, not guessed:
 - unsure->external fallback (ReAct signal): an agent emitting the unsure
   marker deposits tau on the escalate edge, not on its own role edge, so
   repeated unsure behaviour converges routing toward B.
+
+Shipped (2026-11-15, initialization slice): `pheromone.py` implements the
+score tau^alpha * eta^beta with these exact constants, the 24-cell rescue
+matrix as seed deposits in the `mesh_pheromones` KV bucket, live deposits on
+terminal transitions (task-type = prompt-head slug, edge = `mesh` until more
+strategies exist), the A->B->C escalation floor, and the `meshctl pheromone`
+view. Still open: consuming `choose_edge()` in bench arm selection and the
+live pipeline, evaporation/decay job, and planner-capacity penalty deposits.

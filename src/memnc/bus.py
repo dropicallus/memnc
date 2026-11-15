@@ -29,6 +29,7 @@ from nats.js.errors import (
 from . import acl
 from .config import Settings
 from .observations import OBSERVATIONS_BUCKET, TaskObservation
+from .pheromone import PheromoneStore
 from .revocation import (
     REVOCATIONS_BUCKET,
     RevocationRecord,
@@ -94,6 +95,7 @@ class Bus:
         self._grants = None
         self._model_requests = None
         self._observations = None
+        self._pheromones = None
         self._revocations = None
 
     # -- lifecycle ---------------------------------------------------------
@@ -142,6 +144,7 @@ class Bus:
         await self.ensure_trust()
         await self.ensure_grants()
         await self.ensure_observations()
+        await self.ensure_pheromones()
         await self.ensure_revocations()
         log.info("connected to NATS at %s", self.settings.nats_url)
 
@@ -568,7 +571,39 @@ class Bus:
             out.append(RevocationRecord.model_validate_json(entry.value))
         return out
 
-    # -- 14.13 step 1: observation deposits (experience graph) --------------
+    # -- 14.15.10 pheromone routing deposits (ACO strategy scores) -----------
+
+    async def ensure_pheromones(self) -> None:
+        """Ensure the pheromone KV bucket exists and seed it once."""
+        assert self.js is not None
+        if self._pheromones is not None:
+            return
+        store = PheromoneStore(self.js)
+        try:
+            await store.ensure()
+            self._pheromones = store
+            await store.seed()
+        except Exception:  # noqa: BLE001 - side channel: never break connect
+            log.warning("pheromone bucket unavailable, deposits disabled")
+
+    async def deposit_pheromone(
+        self, task_type: str, edge: str, outcome: str, tokens: int = 0
+    ) -> None:
+        """Fold one run outcome into the (task_type, edge) pheromone cell."""
+        if self._pheromones is None:
+            return
+        await self._pheromones.deposit(task_type, edge, outcome, tokens)
+
+    async def pheromone_entries(self) -> dict:
+        """Full pheromone field keyed by (task_type, edge) KV keys."""
+        if self._pheromones is None:
+            await self.ensure_pheromones()
+        if self._pheromones is None:
+            return {}
+        return await self._pheromones.entries()
+
+
+# -- 14.13 step 1: observation deposits (experience graph) --------------
 
     async def ensure_observations(self) -> None:
         """Ensure the observation KV bucket exists (history keeps corrections)."""

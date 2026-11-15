@@ -247,6 +247,20 @@ async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_pheromone(args: argparse.Namespace, settings: Settings) -> int:
+    """14.15.10: pheromone field view (ACO strategy scores per task type)."""
+    from memnc.pheromone import format_pheromones
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        entries = await bus.pheromone_entries()
+        print(format_pheromones(entries, args.task_type))
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_similar(args: argparse.Namespace, settings: Settings) -> int:
     """14.13 step 4: ranked attention over deposited observations (read-only)."""
     from memnc.experience import format_ranked, ranked_attention
@@ -984,6 +998,12 @@ def build_parser() -> argparse.ArgumentParser:
     obslast.add_argument("--model", default=None, help="only tasks served by MODEL")
     obslast.add_argument("--limit", type=int, default=10)
     obslast.set_defaults(func=cmd_obslast)
+
+    pheromone = subparsers.add_parser(
+        "pheromone", help="14.15.10: pheromone routing field (ACO scores)"
+    )
+    pheromone.add_argument("--task-type", default=None, help="filter by task type slug")
+    pheromone.set_defaults(func=cmd_pheromone)
 
     synergy = subparsers.add_parser(
         "synergy", help="14.13 step 3: aggregated model-pair synergy"
