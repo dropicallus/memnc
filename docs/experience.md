@@ -377,3 +377,46 @@ second node commits, where the coder must reconcile - would
 discriminate hard (frontier models score ~28%); (4) routing must
 enforce resource discipline from the outside (pheromone/capacity
 signals) because agents will not self-regulate.
+
+## 2026-11-14 external evidence: Flow-DPO (NeurIPS 2024, Frank)
+
+Flow-DPO (Deng & Mineiro, UCLA + Microsoft Research, arXiv 2410.22304,
+NeurIPS 2024 main conference) builds a FLOW of two LLMs that share one
+base model with SEPARATE LoRA adapters: an Answer LLM emits bounded
+chunks of the solution (chunk size 160, max 6 steps), a Stop LLM
+Yes/No-decides whether the partial answer is complete; loop until Yes.
+This is essentially a two-role collaboration loop - a mini version of
+our coder/critic pipeline.
+
+The contribution is the training: ONLINE DPO with rollouts. At each
+output node of the initial generation a random rollout continues to a
+second final answer; when original and rollout differ in correctness,
+that becomes a DPO pair (chunk leading to the correct result =
+preferred). Both roles are trained; the Stop LLM is evaluated on its
+stopping decisions - a denser reward signal than outcome-only.
+
+Results: progressive validation accuracy of the Llama-3-8B flow
+improves 46.5% -> 66.0% over 2000 training samples, while the
+UNTRAINED flow sits UNDER the single model (46.5 vs 51.0 zero-shot) -
+the collaboration structure alone does not help; training makes the
+difference. Compile test (same prompts, fair trace-quality comparison
+via SFT): SFT on Flow traces beats self-generated traces AND even
+ground-truth traces (GSM8K 71.3 vs 68.8 vs 67.2; MATH 27.8 vs 24.2 vs
+25.1). Cost: 36-48h on 4x A100 for the DPO - real training compute,
+unlike GEPA/ACE.
+
+memnc reading: this is the missing ladder rung. ReAct (skill is
+finetunable) -> FireAct (static trajectory SFT) -> GEPA (prompt
+evolution, zero training) -> ACE (external playbook store) -> MEM1
+(internal RL consolidation) -> Flow-DPO (THE MESH PRODUCES ITS OWN
+TRAINING DATA ONLINE: the collaboration loop itself generates DPO
+pairs, and each role learns from the same trace). Two roles on one
+base with separate LoRAs is exactly Frank's growing-LoRA architecture
+- specialists as adapters on a shared base, not multi-model monsters.
+The critic trained on stop decisions points at our verify-gate:
+checker results are stopping supervision, so the gate can become a
+learned verifier. And our bench (seeded reps + deterministic
+checkers) IS the DPO pair generator - preferred vs rejected chunks
+fall out of the runs we already log. Same constraint as ACE: needs
+reliable feedback; math/code with checkers qualifies, free chat does
+not.
