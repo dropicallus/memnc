@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # LM Studio, cloud). agent_allowed_verbs is the fail-closed allowlist.
     agent_llm_base_url: str = "http://127.0.0.1:4000/v1"
     agent_llm_model: str = "local"
+
     @property
     def nats_servers(self) -> list[str]:
         """Split NATS_URL into a server pool (comma-separated seed list)."""
@@ -143,6 +144,11 @@ class Settings(BaseSettings):
     # M14: claimed tasks run their pipeline worker-driven — the finishing
     # worker advances the snapshot itself; the orchestrator is a spectator.
     self_pipeline: bool = True
+    # Structured message tuples (docs/design-message-tuple.md): when on, the
+    # orchestrator attaches a MessageTuple to every dispatch payload and the
+    # worker renders the prompt as MESSAGE/BACKGROUND/INTERMEDIATE OUTPUT
+    # sections instead of re-derived prose. Off = byte-identical arm C.
+    tuple_prompts: bool = False
 
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"

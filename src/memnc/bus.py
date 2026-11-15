@@ -53,6 +53,7 @@ from .schema import (
     TRUST_DEFAULT,
     TRUST_MAX,
     TRUST_MIN,
+    Background,
     Capability,
     Envelope,
     GrantLevel,
@@ -65,6 +66,7 @@ from .schema import (
     TaskSnapshot,
     TaskState,
     TrustEntry,
+    background_key,
     now_iso,
     reputation_key,
     satisfies,
@@ -190,7 +192,11 @@ class Bus:
             self.kv = await self.js.key_value(self.settings.kv_bucket)
         except NotFoundError:
             self.kv = await self.js.create_key_value(
-                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=self.settings.kv_bucket, history=10)
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas,
+                    bucket=self.settings.kv_bucket,
+                    history=10,
+                )
             )
             log.info("created KV bucket %s", self.settings.kv_bucket)
 
@@ -269,7 +275,12 @@ class Bus:
             self._roster = await self.js.key_value(ROSTER_BUCKET)
         except NotFoundError:
             self._roster = await self.js.create_key_value(
-                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=ROSTER_BUCKET, history=1, ttl=ROSTER_TTL)
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas,
+                    bucket=ROSTER_BUCKET,
+                    history=1,
+                    ttl=ROSTER_TTL,
+                )
             )
             log.info("created roster KV bucket %s (ttl=%ss)", ROSTER_BUCKET, ROSTER_TTL)
 
@@ -332,7 +343,11 @@ class Bus:
             self._model_requests = await self.js.key_value(MODEL_REQUESTS_BUCKET)
         except NotFoundError:
             self._model_requests = await self.js.create_key_value(
-                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=MODEL_REQUESTS_BUCKET, history=10)
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas,
+                    bucket=MODEL_REQUESTS_BUCKET,
+                    history=10,
+                )
             )
             log.info("created model-request KV bucket %s", MODEL_REQUESTS_BUCKET)
 
@@ -426,7 +441,9 @@ class Bus:
             self._grants = await self.js.key_value(GRANT_BUCKET)
         except NotFoundError:
             self._grants = await self.js.create_key_value(
-                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=GRANT_BUCKET, history=10)
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas, bucket=GRANT_BUCKET, history=10
+                )
             )
             log.info("created grant KV bucket %s", GRANT_BUCKET)
 
@@ -562,7 +579,9 @@ class Bus:
             self._observations = await self.js.key_value(OBSERVATIONS_BUCKET)
         except NotFoundError:
             self._observations = await self.js.create_key_value(
-                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=OBSERVATIONS_BUCKET, history=10)
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas, bucket=OBSERVATIONS_BUCKET, history=10
+                )
             )
             log.info("created observation KV bucket %s", OBSERVATIONS_BUCKET)
 
@@ -595,7 +614,9 @@ class Bus:
             self._trust = await self.js.key_value(TRUST_BUCKET)
         except NotFoundError:
             self._trust = await self.js.create_key_value(
-                KeyValueConfig(replicas=self.settings.nats_kv_replicas, bucket=TRUST_BUCKET, history=1)
+                KeyValueConfig(
+                    replicas=self.settings.nats_kv_replicas, bucket=TRUST_BUCKET, history=1
+                )
             )
             log.info("created trust KV bucket %s", TRUST_BUCKET)
 
@@ -733,6 +754,22 @@ class Bus:
     async def put_snapshot(self, snapshot: TaskSnapshot) -> None:
         assert self.kv is not None
         await self.kv.put(f"task.{snapshot.task_id}", snapshot.model_dump_json().encode())
+
+    # -- persistent background (docs/design-message-tuple.md) ---------------
+    async def save_background(self, task_id: str, background: Background) -> None:
+        """Persist the task's shared Background as a workflow_state companion
+        key. Snapshots stay backward-compatible; the background is the durable
+        read-only context every subsequent hop consumes."""
+        assert self.kv is not None
+        await self.kv.put(background_key(task_id), background.model_dump_json().encode())
+
+    async def get_background(self, task_id: str) -> Background | None:
+        assert self.kv is not None
+        try:
+            entry = await self.kv.get(background_key(task_id))
+        except (KeyError, NotFoundError):
+            return None
+        return Background.model_validate_json(entry.value)
 
     async def try_claim(
         self, task_id: str, worker_id: str, role: str | None = None

@@ -23,12 +23,15 @@ from .schema import (
     SUBJECT_LEDGER,
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
+    Background,
     CoderOutput,
     ControlCommand,
     CriticOutput,
     Envelope,
     GrantLevel,
+    IntermediateOutput,
     Kind,
+    MessageTuple,
     PlannerOutput,
     ResultPayload,
     Role,
@@ -164,6 +167,7 @@ class Orchestrator:
             state=TaskState.RECEIVED,
         )
         await self.bus.put_snapshot(snapshot)
+        await self._save_background(snapshot)
         await self.bus.emit_event(snapshot, "task.received", f"[{source}] {submission.task[:180]}")
         log.info(
             "task submitted",
@@ -574,6 +578,56 @@ class Orchestrator:
         elif role is Role.CRITIC:
             snapshot.critique = CriticOutput.model_validate(output)
 
+    # -- structured message tuples (docs/design-message-tuple.md) ----------
+    def _background(self, snapshot: TaskSnapshot) -> Background:
+        return Background(
+            task=snapshot.task,
+            context=snapshot.context,
+            plan=snapshot.plan,
+        )
+
+    async def _save_background(self, snapshot: TaskSnapshot) -> None:
+        """Persist the shared Background next to the snapshot. Best-effort and
+        duck-typed like the observation hook: a KV hiccup or a fake bus without
+        the method must never break the pipeline (tuples are an add-on)."""
+        save = getattr(self.bus, "save_background", None)
+        if save is None:
+            return
+        try:
+            await save(snapshot.task_id, self._background(snapshot))
+        except Exception as exc:  # observers keep broad excepts
+            log.warning(
+                "background persist failed",
+                extra={"task_id": snapshot.task_id, "error": str(exc)},
+            )
+
+    def _message_tuple(self, snapshot: TaskSnapshot, role: Role) -> MessageTuple:
+        """Assemble the dispatch tuple: short imperative message, shared
+        background, and the previous hop's intermediate output."""
+        io: IntermediateOutput | None = None
+        if role is Role.CRITIC and snapshot.code is not None:
+            io = IntermediateOutput(
+                role=Role.CODER,
+                summary=snapshot.code.summary,
+                files=list(snapshot.code.files),
+            )
+        elif role is Role.CODER and snapshot.critique is not None:
+            io = IntermediateOutput(
+                role=Role.CRITIC,
+                summary=snapshot.critique.summary,
+                issues=list(snapshot.critique.issues),
+            )
+        messages = {
+            Role.PLANNER: "Produce a plan for the task.",
+            Role.CODER: "Implement the task.",
+            Role.CRITIC: "Review the implementation.",
+        }
+        return MessageTuple(
+            message=messages[role],
+            background=self._background(snapshot),
+            intermediate_output=io,
+        )
+
     # -- transitions -------------------------------------------------------
     async def _apply(self, snapshot: TaskSnapshot, event: Event) -> None:
         result = transition(
@@ -729,6 +783,8 @@ class Orchestrator:
                 "mesh_version": code_version(),
             },
         )
+        if self.settings.tuple_prompts:
+            command.payload["message_tuple"] = self._message_tuple(snapshot, role).model_dump()
         snapshot.last_action = {
             "command_id": command.id,
             "role": role.value,

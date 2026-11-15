@@ -59,9 +59,7 @@ class ToolLoopHarness:
         workspace.mkdir(parents=True, exist_ok=True)
         # Same prompt shape as the worker's in-proc coder path: the harness
         # receives the raw task and asks the model for CoderOutput JSON.
-        user_prompt = (
-            prompt if self.raw_prompt else build_user_prompt(Role.CODER, {"task": prompt})
-        )
+        user_prompt = prompt if self.raw_prompt else build_user_prompt(Role.CODER, {"task": prompt})
         messages = [{"role": "user", "content": user_prompt}]
         if self.system_prompt:
             messages.insert(0, {"role": "system", "content": self.system_prompt})

@@ -2,6 +2,12 @@
 
 ## Built
 
+- **2026-11-15 — Structured message tuple (15.3 item 2)**: TalkHop-style
+  communication tuple (message / background / intermediate_output) built
+  end-to-end behind `Settings.tuple_prompts` (default off): schema models,
+  persistent background as a workflow_state companion key, tuple-rendered
+  prompts with prose fallback; no extra model calls.
+
 - **2026-11-14 — Similarity + ranked attention (§14.13 Step 4)**: Jaccard
   similarity over task text ranks deposited observations against a free-text
   query; `ranked_attention` scores each match by similarity x half-life decay

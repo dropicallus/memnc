@@ -70,9 +70,13 @@ back to the existing prompt — no hard dependency, so rollout is per-role.
 
 ## Build order (one small slice)
 
-1. Schema models above in `schema.py` + unit tests (round-trip, fallback).
-2. Orchestrator writes background to workflow_state; planner hop fills plan.
-3. `build_user_prompt` tuple section + worker read path behind the flag.
+1. [DONE] Schema models above in `schema.py` + unit tests (round-trip, fallback).
+2. [DONE] Orchestrator writes background to workflow_state (`background.<task_id>`
+   companion key, best-effort save on submit and on every planner hop in both
+   the orchestrator result path and the worker self-pipeline).
+3. [DONE] `build_user_prompt` tuple section + worker read path behind the flag
+   (`Settings.tuple_prompts`, default off; dispatch attaches the tuple when on,
+   workers validate it and fall back to prose on any validation error).
 4. Enable flag only when arm D1 lands (success criterion lives in
    docs/design-arm-c2d.md).
 

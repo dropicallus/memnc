@@ -36,12 +36,14 @@ from .schema import (
     SUBJECT_RESULT,
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
+    Background,
     CoderOutput,
     ConsultAnswer,
     ConsultRequest,
     CriticIssue,
     Envelope,
     FileArtifact,
+    MessageTuple,
     ModelRequest,
     NodeInfo,
     ResultPayload,
@@ -500,11 +502,7 @@ class Worker:
         # a compliant node; if none exists it eventually dead-letters —
         # the visible "upgrade this node" signal.
         expected = (envelope.payload or {}).get("mesh_version", "")
-        if (
-            expected
-            and self.settings.enforce_node_version
-            and is_stale(expected, code_version())
-        ):
+        if expected and self.settings.enforce_node_version and is_stale(expected, code_version()):
             log.warning(
                 "version mismatch, refusing command",
                 extra={
@@ -657,7 +655,9 @@ class Worker:
             {"role": "system", "content": SYSTEM_PROMPTS[role]},
             {
                 "role": "user",
-                "content": build_user_prompt(role, envelope.payload or {}),
+                "content": build_user_prompt(
+                    role, envelope.payload or {}, self._message_tuple(envelope)
+                ),
             },
         ]
 
@@ -738,13 +738,11 @@ class Worker:
                 ok=False,
                 error=f"harness {harness_name!r} runs the coder role only",
             )
-        prompt = build_user_prompt(role, envelope.payload or {})
+        prompt = build_user_prompt(role, envelope.payload or {}, self._message_tuple(envelope))
         harness = get_harness(harness_name, model=model)
         workspace = Path(self.settings.workspace_root)
         try:
-            result = await harness.run(
-                prompt, workspace, timeout_s=self.settings.coder_timeout_s
-            )
+            result = await harness.run(prompt, workspace, timeout_s=self.settings.coder_timeout_s)
         except Exception as exc:  # noqa: BLE001
             return ResultPayload(ok=False, error=f"harness error: {exc}")
         if not result.ok:
@@ -753,9 +751,7 @@ class Worker:
                 error=result.error or f"harness {harness_name} failed",
                 tool_steps=result.tool_events,
             )
-        changed = await changed_file_contents(
-            workspace, max_bytes=self.settings.max_artifact_bytes
-        )
+        changed = await changed_file_contents(workspace, max_bytes=self.settings.max_artifact_bytes)
         errors = python_syntax_errors(changed)
         if errors:
             return ResultPayload(
@@ -887,9 +883,7 @@ class Worker:
         )
 
     @staticmethod
-    def _claim_permitted(
-        snapshot: TaskSnapshot, node_name: str, withdrawn: bool
-    ) -> bool:
+    def _claim_permitted(snapshot: TaskSnapshot, node_name: str, withdrawn: bool) -> bool:
         """Weak->strong routing on the M14 claim path.
 
         A snapshot with prefer_node set may only be claimed by the preferred
@@ -930,13 +924,8 @@ class Worker:
                 # track records on this role.
                 withdrawn = False
                 if self.settings.claim_synergy_gate:
-                    _stats = compute_server_success(
-                        await self.bus.list_observations()
-                    )
-                    _server = (
-                        f"{self.settings.node_name}:"
-                        f"{self.settings.model_for(self.role)}"
-                    )
+                    _stats = compute_server_success(await self.bus.list_observations())
+                    _server = f"{self.settings.node_name}:{self.settings.model_for(self.role)}"
                     withdrawn = should_withdraw(
                         _stats,
                         _server,
@@ -945,8 +934,7 @@ class Worker:
                     )
                     if withdrawn:
                         log.info(
-                            "synergy gate: withdrawing from claims "
-                            "(track record below threshold)",
+                            "synergy gate: withdrawing from claims (track record below threshold)",
                             extra={"server": _server},
                         )
                 for snapshot in await self.bus.list_tasks():
@@ -963,9 +951,7 @@ class Worker:
                     # binds a snapshot to its preferred host, and an explicit
                     # preference overrides the synergy-gate withdraw (the
                     # driver deliberately picked that node).
-                    if not self._claim_permitted(
-                        snapshot, self.settings.node_name, withdrawn
-                    ):
+                    if not self._claim_permitted(snapshot, self.settings.node_name, withdrawn):
                         continue
                     # T7: a retired model is not claimable through — the node
                     # that retired it unloads it, so planning around it would
@@ -1088,6 +1074,14 @@ class Worker:
                 output_model = _OUTPUT_SCHEMA[envelope.role]
                 output = output_model.model_validate(result.output)
                 self._store_output(snapshot, envelope.role, output)
+                if envelope.role is Role.PLANNER:
+                    # tuple schema: persist the shared Background (plan update)
+                    save = getattr(self.bus, "save_background", None)
+                    if save is not None:
+                        try:
+                            await save(snapshot.task_id, self._background(snapshot))
+                        except Exception as exc:  # noqa: BLE001 - best effort
+                            log.warning("background persist failed: %s", exc)
                 question = snapshot.question_output(envelope.role)
                 if question:
                     event = Event("ask", reason=question, role=envelope.role)
@@ -1203,6 +1197,21 @@ class Worker:
                     fix="fix the reported runtime/compile errors",
                 )
             ]
+
+    def _background(self, snapshot: TaskSnapshot) -> Background:
+        return Background(task=snapshot.task, context=snapshot.context, plan=snapshot.plan)
+
+    @staticmethod
+    def _message_tuple(envelope: Envelope) -> MessageTuple | None:
+        """Message tuple attached by the orchestrator (tuple_prompts on)."""
+        raw = (envelope.payload or {}).get("message_tuple")
+        if raw is None:
+            return None
+        try:
+            return MessageTuple.model_validate(raw)
+        except ValidationError:
+            log.warning("invalid message_tuple in payload; falling back to prose")
+            return None
 
     def _store_output(self, snapshot: TaskSnapshot, role: Role, output) -> None:
         if role is Role.PLANNER:

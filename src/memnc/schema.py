@@ -98,6 +98,12 @@ MODEL_REQUEST_KEY = "mreq.{request_id}"
 REPUTATION_KEY = "model_rep.{model}"
 
 
+def background_key(task_id: str) -> str:
+    """workflow_state companion key for a task's persistent Background
+    (docs/design-message-tuple.md)."""
+    return f"background.{task_id}"
+
+
 def reputation_key(model: str) -> str:
     """KV-safe reputation key (KV charset forbids ':' — ollama tags use it)."""
     return REPUTATION_KEY.format(model=model.replace(":", "_"))
@@ -169,9 +175,7 @@ class NodeInfo(BaseModel):
             node_id=self.node_id,
             # P4: carry the code fingerprint; the freshest non-default wins
             # (a "dev" entry must not mask a real fingerprint in the merge).
-            version=self.version
-            if self.version and self.version != "dev"
-            else other.version,
+            version=self.version if self.version and self.version != "dev" else other.version,
             roles=sorted(set(self.roles) | set(other.roles)),
             models=sorted(set(self.models) | set(other.models)),
             disk_models=sorted(set(self.disk_models) | set(other.disk_models)),

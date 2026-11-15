@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .schema import Role
+from .schema import MessageTuple, Role
 
 PROMPT_VERSION = "2026-10-31.1"
 
@@ -79,17 +79,50 @@ def _format_files(files: list[dict[str, Any]]) -> str:
     return "\n\n".join(chunks) or "(no files yet)"
 
 
-def build_user_prompt(role: Role, payload: dict[str, Any]) -> str:
-    """Render task context for the model from the orchestrator payload."""
+def build_user_prompt(
+    role: Role,
+    payload: dict[str, Any],
+    message_tuple: MessageTuple | None = None,
+) -> str:
+    """Render task context for the model from the orchestrator payload.
 
-    parts: list[str] = [f"TASK:\n{payload.get('task', '')}"]
-    context = payload.get("context")
-    if context:
-        parts.append(f"ADDITIONAL CONTEXT:\n{context}")
+    With a message tuple (docs/design-message-tuple.md) the task/context/plan
+    sections are replaced by the structured MESSAGE / BACKGROUND /
+    INTERMEDIATE OUTPUT sections; all role-specific sections below are kept.
+    """
 
-    plan = payload.get("plan")
-    if plan:
-        parts.append(f"PLAN:\n{_dump(plan)}")
+    if message_tuple is not None:
+        bg = message_tuple.background
+        bg_parts = [f"TASK:\n{bg.task}"]
+        if bg.context:
+            bg_parts.append(f"CONTEXT:\n{bg.context}")
+        if bg.plan is not None:
+            bg_parts.append(f"PLAN:\n{_dump(bg.plan.model_dump())}")
+        for assumption in bg.assumptions:
+            bg_parts.append(f"ASSUMPTION: {assumption}")
+        parts = [
+            f"MESSAGE:\n{message_tuple.message}",
+            "BACKGROUND (shared, read-only):\n" + "\n".join(bg_parts),
+        ]
+        io = message_tuple.intermediate_output
+        if io is not None:
+            io_parts = [f"ROLE: {io.role.value}"]
+            if io.summary:
+                io_parts.append(f"SUMMARY:\n{io.summary}")
+            if io.files:
+                io_parts.append(f"FILES:\n{_format_files([f.model_dump() for f in io.files])}")
+            if io.issues:
+                io_parts.append(f"ISSUES:\n{_dump([i.model_dump() for i in io.issues])}")
+            parts.append("INTERMEDIATE OUTPUT (superseded by your result):\n" + "\n".join(io_parts))
+    else:
+        parts: list[str] = [f"TASK:\n{payload.get('task', '')}"]
+        context = payload.get("context")
+        if context:
+            parts.append(f"ADDITIONAL CONTEXT:\n{context}")
+
+        plan = payload.get("plan")
+        if plan:
+            parts.append(f"PLAN:\n{_dump(plan)}")
 
     code = payload.get("code")
     if code:
