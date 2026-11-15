@@ -78,6 +78,7 @@ async def cmd_submit(args: argparse.Namespace, settings: Settings) -> int:
             needs=_needs_from_args(args),
             gate=args.gate,  # type: ignore[arg-type]
             harness=getattr(args, "harness", "") or "",
+            prefer_node=getattr(args, "prefer", "") or "",
         )
         response = await client.request(
             # M15: owner-routed submission — default to this machine's node
@@ -942,6 +943,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     submit.add_argument(
         "--needs-vram", type=float, default=0.0, help="T6: VRAM (GB) the claiming node must have"
+    )
+    submit.add_argument(
+        "--prefer",
+        default="",
+        help="Weak->strong routing: node_name prefix the task prefers",
     )
     submit.add_argument(
         "--needs-model", default="", help="T6: model name the claiming node must serve"
