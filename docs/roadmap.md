@@ -1795,6 +1795,47 @@ note must close them):
 3. Claimed vs. existing artifacts are never cross-checked: every file path
    in a code result is stat'ed by the orchestrator before DONE is written.
 
+### 15.4.5 DONE-gate hardening (design note, 2026-11-15, before coding)
+
+Closing the three gaps from the fabrication finding above. Layered defense:
+each gate alone is defeatable; together they make fabrication expensive.
+
+Gap 1 - structural activity gate (shipped with this note):
+- New opt-in setting `done_requires_activity` (default OFF; enable per
+  deployment via `DONE_REQUIRES_ACTIVITY=1` in the environment). Rationale:
+  pure writing/planning tasks legitimately finish with zero executed tools,
+  so the gate must be a deployment-level choice for autonomy runs.
+- Signal: the union of `completed_commands` and `completed_tool_calls` on
+  the snapshot. Either non-empty means a real tool or command executed.
+- Enforcement point: both `finish` action sites (orchestrator result path
+  and worker self-pipeline) consult `fsm.done_block_reason(snapshot)`. The
+  FSM stays pure - the helper only reads the snapshot, the call sites turn
+  a blocked `finish` into `escalate("structurally rejected: no executed
+  commands or tool calls")`, which follows the normal failure path
+  (ledger, DLQ, telegram failure card).
+- Honest limit: this is necessary, not sufficient. A fabricator that runs
+  one real command passes the gate; gaps 2+3 carry the real weight.
+
+Gap 2 - deterministic acceptance checks (design, next slice):
+- The plan carries machine-checkable acceptance criteria (path + kind, e.g.
+  "file exists", "wav duration > 30 s" via ffprobe). After the coder
+  returns, a NEW acceptance step executes the checks on the worker
+  filesystem and returns pass/fail into the snapshot. Only a passing
+  acceptance step lets the critic verdict stand; a failing check drives the
+  normal revision loop with the check output as the issue text.
+- Checks are plain filesystem calls, never LLM judgment. Criterion schema
+  needs design (kinds: file_exists, file_min_size, command_output_matches,
+  ffprobe_duration_min) plus sandbox alignment with the existing tool
+  allowlist.
+
+Gap 3 - claimed-vs-existing artifact cross-check (design, with gap 2):
+- The orchestrator has no filesystem access (workers may be remote), so the
+  WORKER stamps verification into its result: for every file path claimed
+  in the code result, stat the workspace and record which exist with which
+  size. The snapshot stores `verified_artifacts`; DONE requires every
+  claimed path to exist. Content fabrication (a written-but-invented
+  report) is only catchable by gap 2 acceptance criteria, not by stat.
+
 ### 15.4.4 Model serving layer: Ollama-in-Docker → per-node llauncher (design note, 2026-11-15, before coding)
 
 Operator verdict: running Ollama as a Docker container is inflexible

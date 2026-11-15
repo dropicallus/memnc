@@ -13,7 +13,7 @@ from .acl import check_registry_write
 from .api import ApiServer
 from .bus import Bus
 from .config import Settings, get_settings
-from .fsm import Event, transition
+from .fsm import Event, done_block_reason, transition
 from .fsutil import apply_artifacts
 from .observations import TaskObservation, observation_from_snapshot
 from .schema import (
@@ -707,6 +707,16 @@ class Orchestrator:
             if action.type == "dispatch" and action.role is not None:
                 await self._dispatch(snapshot, action.role)
             elif action.type == "finish":
+                # 15.4.5: opt-in structural gate - refuse DONE without any
+                # executed command or tool call on the snapshot.
+                block = done_block_reason(snapshot)
+                if self.settings.done_requires_activity and block:
+                    snapshot.state = TaskState.FAILED
+                    snapshot.record("task.failed", block)
+                    snapshot.error = block
+                    await self.bus.put_snapshot(snapshot)
+                    await self.bus.emit_event(snapshot, "task.failed", block)
+                    continue
                 snapshot.record("task.done")
                 await self.bus.put_snapshot(snapshot)
                 await self.bus.emit_event(snapshot, "task.done", "workflow complete")

@@ -16,7 +16,7 @@ from .agent import extract_json, parse_role_output, run_agent
 from .backends import make_backend
 from .bus import Bus, emit_debate
 from .config import Settings, get_settings
-from .fsm import Event, transition
+from .fsm import Event, done_block_reason, transition
 from .fsutil import apply_artifacts
 from .harnesses import get_harness
 from .harnesses.workspace import changed_file_contents
@@ -1346,6 +1346,16 @@ class Worker:
                 snapshot.claimed_by = ""
                 snapshot.claimable = True
             elif action.type == "finish":
+                # 15.4.5: opt-in structural gate - refuse DONE without any
+                # executed command or tool call on the snapshot.
+                block = done_block_reason(snapshot)
+                if self.settings.done_requires_activity and block:
+                    snapshot.next_role = ""
+                    snapshot.claimable = False
+                    snapshot.state = TaskState.FAILED
+                    snapshot.record("task.failed", block)
+                    snapshot.error = block
+                    continue
                 snapshot.next_role = ""
                 snapshot.claimable = False
                 snapshot.record("task.done")
