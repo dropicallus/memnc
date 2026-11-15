@@ -546,6 +546,37 @@ ROLE_OUTPUT: dict[Role, type[BaseModel]] = {
 }
 
 
+# Structured communication tuple (TalkHier-derived, docs/design-message-tuple.md):
+# every debate hop carries (message, background, intermediate_output) instead of
+# re-derived prose. The background is persistent per task; the intermediate
+# output lives only inside the current hop's envelope payload.
+class Background(BaseModel):
+    """Persistent, shared context for one task. Written once per hop, read by
+    every subsequent hop; never re-summarized per hop."""
+
+    task: str
+    context: str = ""
+    plan: PlannerOutput | None = None
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class IntermediateOutput(BaseModel):
+    """The producing role's working result, superseded by the next hop."""
+
+    role: Role
+    summary: str = ""
+    files: list[FileArtifact] = Field(default_factory=list)
+    issues: list[CriticIssue] = Field(default_factory=list)
+
+
+class MessageTuple(BaseModel):
+    """One hop in the debate pipeline."""
+
+    message: str
+    background: Background
+    intermediate_output: IntermediateOutput | None = None
+
+
 class ResultPayload(BaseModel):
     ok: bool
     output: dict[str, Any] = Field(default_factory=dict)
