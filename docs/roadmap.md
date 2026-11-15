@@ -1331,3 +1331,97 @@ Design consequence for memnc: humans need not more dialogue but LEGIBILITY.
 Status: DISCUSSION POINT (Frank: "Ja mach rein ... mega spannend"). No UI work
 yet — writes-before-code rule. Candidate content for the UI P0 slice and the
 meshctl surface; independent of bench, can start after stage-2 runner.
+
+# 15. Research evidence integration (2026-11-15) — intake CLOSED
+
+Twelve sources processed 2026-11-14/15 (Frank: "dann ist Schluss" — no further
+research material gets added). Each has a full entry in docs/experience.md plus a
+fact-store record. Evidence classes: PEER-REVIEWED — ReAct (ICLR 2023), GEPA
+(ICLR 2026), ACE (ICLR 2026), MEM1 (ICLR 2026), Flow-DPO (NeurIPS 2024),
+non-cooperative poetry (Journal of Language Modelling 2026-02), TalkHier (IEEE
+TAI), MAAI fundamentals (Electronic Markets 2026, conceptual). ARXIV PREPRINT —
+FireAct, SyncMind. PRAXIS — Codacus video, Anthropic Ultracode.
+
+## 15.1 What our own benchmark established
+
+Easy and medium tiers are ceilings (24/24 every arm). The hard tier is the
+discriminating one: single-shot A 6/8 (75%, ~610 tokens/task), self-reflect
+B 8/8 (100%, ~2144), mesh C 6/8 (75%, ~4369). Mesh bought zero success at 7x
+cost; self-reflection was the winner. Consequence: any mesh mechanism must
+justify itself against arm B, not against arm A. This is the first repo-own
+evidence for the Einzel-LoRA > Multi thesis.
+
+## 15.2 The principles, each mapped to its plan item
+
+1. Codacus (praxis): planner = biggest model; specialists need search/harness;
+   never brief-loss (task prompt must reach every role — verified in runner).
+   -> input to 14.15.10 routing; runner fix already committed.
+2. Anthropic Ultracode (praxis): adversarial refutation loop instead of
+   agreeable review; plan artifact persisted in KV; parallel agent spawn.
+   -> arm B built on the refutation loop; plan-in-KV + parallel spawn are
+   arm C2/D design elements.
+3. ReAct (ICLR 2023): reason-act-observe; internal unsure -> external fallback
+   as a routing signal. -> 14.15.10 routing signal candidate.
+4. FireAct (preprint): task-tuned trajectories beat prompted strategies.
+   -> rationale for generating task-specific training data (see 9).
+5. GEPA (ICLR 2026): reflective prompt evolution from ~10% of rollouts can
+   beat RL; prompts are evolvable artifacts, not constants. -> slice:
+   bench-driven prompt evolution of roles.py SYSTEM_PROMPTS (planner/coder/
+   critic); the cheap middle rung between prompting and LoRA.
+6. ACE (ICLR 2026): context as append-only itemized bullets with deterministic
+   merge; two failure modes to guard: brevity bias (over-compression) and
+   context collapse (duplicates). -> slice: automated Erfahrungsspeicher
+   (experience.md is the manual first instance).
+7. MEM1 (ICLR 2026): RL-trained state compression keeps memory constant over
+   long interactions; answers chatstrophic forgetting without weight changes.
+   -> KV-compaction slice; competitor reference for P2b parametric memory.
+8. SyncMind (preprint): agents do NOT self-regulate resources — external
+   discipline required; sync/concurrent execution is a distinct evaluation
+   tier. -> routing must enforce resource discipline from outside; future
+   sync bench tier with concurrent commit semantics.
+9. Flow-DPO (NeurIPS 2024): DPO on multi-agent flows improves the verifier,
+   not the chain policy; pairs come from the flow's own runs. -> bench +
+   deterministic checkers ARE the DPO pair generator; learned-verifier slice.
+10. Non-cooperative poetry (J. Lang. Modelling 2026): weight-trained agents
+    stay durably specialized and diverge; prompted agents homogenize after
+    iteration 1; heterogeneous ensembles win; explicit deviate/disagree steps
+    add diversity+novelty. -> strongest external evidence for Einzel-LoRA and
+    P2b growing-LoRA; arm C2/D gets an adversarial critic; heterogeneous
+    nodes per mesh are a feature, not a bug.
+11. TalkHier (IEEE TAI): structured communication tuples (Message, Background,
+    Intermediate Output) beat free text (Background removal = -8.9pp, biggest
+    single protocol factor); hierarchical refinement with k single-criterion
+    evaluators + eval supervisor = -11.1pp ablation, but k-evaluator cost is
+    the 7x-multiplier class that sank arm C. -> NATS message schema becomes a
+    structured tuple with persistent background in workflow_state; critic
+    split is an arm C2/D candidate with the cost caveat attached.
+12. MAAI fundamentals (Electronic Markets 2026, conceptual): five-layer
+    framework; C2 states the data-centric doctrine explicitly (weights fixed,
+    adaptation only via data/context) — the peer-reviewed formulation of the
+    paradigm P2b argues against; bench = falsification test. C3/C4 map 1:1 to
+    roster/planner + backlog/FSM; their demanded "validation methods for
+    dynamically composed opaque agents" = our deterministic verify-gate;
+    their process-mining agenda = trace/roster observability.
+
+## 15.3 Plan consequences in priority order
+
+1. Finish the full seeded run (120) and publish pooled Wilson CIs in
+   bench-report.md; then initialize 14.15.10 routing parameters from measured
+   data (alpha/beta/tau0, planner-capacity bonus, unsure->external signal).
+2. NATS message tuple schema (message/background/intermediate_output,
+   persistent background in workflow_state) — design-first, small slice,
+   TalkHier-derived.
+3. Arm C2/D design document BEFORE code: adversarial critic (Ultracode +
+   poetry deviate step), k single-criterion evaluator split + eval supervisor
+   (TalkHier, cost caveat), plan-in-KV (Ultracode), specialists with search
+   (Codacus). Success criterion: beat arm B on hard tier at materially lower
+   cost than arm C.
+4. GEPA slice: bench-driven prompt evolution over roles.py SYSTEM_PROMPTS.
+5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
+   deterministic merge, brevity-bias + context-collapse guards.
+6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
+   verifier as the deliverable.
+7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
+8. P2b parametric memory stays the thesis experiment: single-LoRA >> multi,
+   growing-LoRA (MoRAM/CoDyRA) + Fisher-Merge as the bet, now argued against
+   a named, peer-reviewed counter-position (12/C2) instead of a strawman.
