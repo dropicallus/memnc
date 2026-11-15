@@ -1418,7 +1418,13 @@ evidence for the Einzel-LoRA > Multi thesis.
 
 1. Finish the full seeded run (120) and publish pooled Wilson CIs in
    bench-report.md; then initialize 14.15.10 routing parameters from measured
-   data (alpha/beta/tau0, planner-capacity bonus, unsure->external signal).
+   data (alpha/beta/tau0, planner-capacity bonus, unsure->external signal). STATUS: DONE 2026-11-15 —
+   docs/bench/report-full-2026-11-15.md (A 33/40 [68.0,91.3] @609 tok, B
+   38/40 [83.5,98.6] @1910, C 35/40 [73.9,94.5] @4295; B never worse than C,
+   no task where C > B) and 14.15.10 routing initialization appended to the
+   roadmap (tau0=1.0, alpha=1, beta=2, rescue-matrix-seeded deposits,
+   A->B->C escalation floor, planner-capacity penalty, unsure->external
+   deposits).
 2. NATS message tuple schema (message/background/intermediate_output,
    persistent background in workflow_state) — design-first, small slice,
    TalkHier-derived. STATUS: design written 2026-11-15 —
@@ -1510,3 +1516,33 @@ evidence for the Einzel-LoRA > Multi thesis.
 8. P2b parametric memory stays the thesis experiment: single-LoRA >> multi,
    growing-LoRA (MoRAM/CoDyRA) + Fisher-Merge as the bet, now argued against
    a named, peer-reviewed counter-position (12/C2) instead of a strawman.
+
+### 14.15.10 routing initialization (from measured data, 2026-11-15)
+
+Gate satisfied: full seeded hard-tier run complete, docs/bench/
+report-full-2026-11-15.md (A 33/40 [68.0,91.3] @609 tok; B 38/40
+[83.5,98.6] @1910; C 35/40 [73.9,94.5] @4295). Initial pheromone parameters
+derived from that table, not guessed:
+
+- tau0 = 1.0 uniform (no prior edge favored before evidence).
+- Prior reinforcement seeded per edge from the run: r = success_rate /
+  ln(1 + tokens_per_task). A 0.126, B 0.124, C 0.052 — A and B nearly tie
+  per cost unit; the discriminator is per-task, not per-arm, so deposits are
+  tracked per (task_type, edge) with the rescue matrix as the seed:
+  rate_limiter-type tasks -> self-reflect edges get B's 4/5, planner-heavy
+  mesh edges get C's 1/5 (deposit gate must NOT credit C for planner
+  restarts that hurt).
+- alpha = 1.0, beta = 2.0 (heuristic weight eta = 1/cost dominates tau until
+  enough deposits accumulate — matches the 7x wall-time spread mattering more
+  than one-off successes).
+- Escalation chain hard-coded as the epsilon-exploration floor: route to A
+  first on cheap tiers (easy/medium saturated 24/24 for every arm), escalate
+  A->B on verify fail, B->C only on repeated B failure (the data shows C
+  never beats B on this tier, so C is the fallback, not the default).
+- planner-capacity signal: node-a planner (qwen2.5:7b) vs node-c planner
+  (qwen2.5-coder:7b) both below the coder tier; C's planner restarts cost
+  success on rate_limiter — planner edges carry a capacity penalty until a
+  strong planner model is registered.
+- unsure->external fallback (ReAct signal): an agent emitting the unsure
+  marker deposits tau on the escalate edge, not on its own role edge, so
+  repeated unsure behaviour converges routing toward B.
