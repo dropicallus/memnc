@@ -1465,6 +1465,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    Next: wire producers (observation deposits), read verb in meshctl.
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
    verifier as the deliverable.
+   STATUS: generator BUILT (2026-11-15) — src/memnc/bench/dpo.py: one
+   (chosen, rejected) pair per task with both a checker-passing and a
+   checker-failing run; chosen = cheapest successful solution (fewest
+   tokens, tie: lowest run_id), rejected = costliest failing one.
+   Deterministic, no human labels. BenchEngine gained opt-in
+   record_solutions (RunResult.solutions; ordinary rows stay lean).
+   Tests: tests/test_bench_dpo.py (6). The learned verifier itself
+   (training on these pairs) is the next step of this slice, NOT built
+   here.
 7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
 8. P2b parametric memory stays the thesis experiment: single-LoRA >> multi,
    growing-LoRA (MoRAM/CoDyRA) + Fisher-Merge as the bet, now argued against

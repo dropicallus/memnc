@@ -58,6 +58,7 @@ def _engine(monkeypatch: pytest.MonkeyPatch, responses: list[str]) -> BenchEngin
     engine = BenchEngine.__new__(BenchEngine)
     engine.settings = _settings()
     engine.backend = fake
+    engine.record_solutions = False
     return engine
 
 
@@ -184,6 +185,7 @@ def test_run_task_records_backend_error(tmp_path: Path, monkeypatch) -> None:
     engine = BenchEngine.__new__(BenchEngine)
     engine.settings = _settings()
     engine.backend = ExplodingBackend([])
+    engine.record_solutions = False
     task = get_task("easy_palindrome")
     result = asyncio.run(engine.run_task(task, "A", 0, tmp_path))
     assert not result.success

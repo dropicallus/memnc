@@ -165,6 +165,10 @@ class RunResult:
     tokens_out: int = 0
     prompt_version: str = PROMPT_VERSION
     error: str = ""
+    # Final coder files, recorded ONLY when the engine was built with
+    # record_solutions=True (keeps ordinary JSONL rows lean). Needed as
+    # chosen/rejected payloads for the DPO pair generator (memnc.bench.dpo).
+    solutions: dict[str, str] | None = None
 
 
 # --------------------------------------------------------------------------
@@ -174,8 +178,11 @@ class RunResult:
 class BenchEngine:
     """Executes bench tasks under one of the three arms, fully inproc."""
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(
+        self, settings: Settings | None = None, record_solutions: bool = False
+    ):
         self.settings = settings or Settings()
+        self.record_solutions = record_solutions
         from memnc.backends import make_backend
 
         self.backend = make_backend(self.settings)
@@ -243,6 +250,7 @@ class BenchEngine:
         )
         workdir = workroot / run_id
         started = time.monotonic()
+        files: dict[str, str] = {}
         try:
             if arm == "A":
                 files, t_in, t_out = await self._coder_pass(task, temperature)
@@ -290,6 +298,8 @@ class BenchEngine:
         except Exception as exc:  # noqa: BLE001 - a failed arm run is a datapoint
             log.warning("bench run %s failed: %s", run_id, exc)
             result.error = f"{type(exc).__name__}: {exc}"
+        if self.record_solutions and files:
+            result.solutions = dict(files)
         result.elapsed_s = round(time.monotonic() - started, 2)
         issues = verify_task(task, workdir) if workdir.is_dir() else ["no workspace"]
         result.issues = issues
