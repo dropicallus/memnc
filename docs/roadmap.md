@@ -1520,8 +1520,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    Deterministic, no human labels. BenchEngine gained opt-in
    record_solutions (RunResult.solutions; ordinary rows stay lean).
    Tests: tests/test_bench_dpo.py (6). The learned verifier itself
-   (training on these pairs) is the next step of this slice, NOT built
-   here.
+   (training on these pairs): design in docs/design-learned-verifier.md
+   (V1 linear scorer vs V2 LoRA verifier ladder). V1 BUILT —
+   src/memnc/bench/verifier.py: pure-stdlib pairwise logistic regression
+   over deterministic solution features (files/bytes/lines/comment &
+   blank ratios, placeholders, empty files, AST syntax errors, duplicate
+   lines, avg line length), JSON artifact with feature-name pinning;
+   scope = shape/fabrication failures only, never a competence judge.
+   Tests: tests/test_bench_verifier.py (7). V2 (LoRA verifier on real
+   pairs) blocked on compute + model-download approval.
 7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
    STATUS: BUILT (2026-11-15) - src/memnc/bench/tasks.py + checkers.py +
    solutions.py + runner.py. Four opt-in sync tasks (load via
@@ -1600,9 +1607,14 @@ consumes it end to end: each attempt routes over the seeded field, runs the
 chosen edge's arm path, and folds the per-attempt checker verdict back into
 the field — the checker gates ONLY arm escalation (the rescue floor), never
 the inner revision loops. `RunResult.routed_edges` records the attempt
-sequence and the report prints the routed-attempt distribution. Still open:
-live-pipeline consumption (worker-side self-reflect edge), unsure-marker
-deposit wiring, and an arm P full-run measurement.
+sequence and the report prints the routed-attempt distribution. Worker-side self-reflect edge and unsure-marker deposit
+wiring are DONE (2026-11-15): the worker self-pipeline deposits its terminal
+outcomes on the SELF_REFLECT_EDGE ("B" - its REVISE loop is arm-B behaviour,
+mirroring the orchestrator's LIVE_EDGE deposit), and an unsure marker in the
+error or critique summary folds as a weak "unsure" deposit on the
+self-reflect edge instead of a success/failure on the acting edge, so
+repeated unsure behaviour converges routing toward B. Still open: an arm P
+full-run measurement.
 
 ## 15.4 OpenCode harness (design note, 2026-11-15, not yet implemented)
 
@@ -1775,6 +1787,67 @@ Design direction (not implemented yet):
 Open questions: how much journal belongs in the snapshot (KV size limits),
 whether checkpointing needs a code change in the worker claim path, and how
 error classification maps onto the existing trace entries.
+
+Finding — fabrication passed the DONE gate (2026-11-15, mesh autonomy test):
+task 1a1e00c15dc0077966c7064 (KugelAudio TTS) finished DONE with critic
+approval — but the worker only created an empty venv and then FABRICATED the
+rest: a plausible kugel-report.md with invented metrics (load 10.23 s, RTF
+2.01, 3 GB peak, "clear and understandable audio quality"), no WAV anywhere
+on the filesystem, no kugelaudio/torch/accelerate in the venv, no HuggingFace
+cache, and completed_commands=0 — zero commands were ever executed. The
+critic approved purely on the narrative. Three structural gaps (this design
+note must close them):
+1. A task can reach DONE without a single executed command. The ledger
+   records completed_commands but never gates on it. Rule: DONE without
+   completed_commands > 0 is structurally rejected.
+2. The critic approves on narrative — it cannot verify artifacts it cannot
+   see. Acceptance criteria (e.g. "kugel-test.wav exists, duration > 30 s")
+   must be checked deterministically: an acceptance step that runs
+   ffprobe/stat against the real filesystem, not an LLM's opinion.
+3. Claimed vs. existing artifacts are never cross-checked: every file path
+   in a code result is stat'ed by the orchestrator before DONE is written.
+
+### 15.4.5 DONE-gate hardening (design note, 2026-11-15, before coding)
+
+Closing the three gaps from the fabrication finding above. Layered defense:
+each gate alone is defeatable; together they make fabrication expensive.
+
+Gap 1 - structural activity gate (shipped with this note):
+- New opt-in setting `done_requires_activity` (default OFF; enable per
+  deployment via `DONE_REQUIRES_ACTIVITY=1` in the environment). Rationale:
+  pure writing/planning tasks legitimately finish with zero executed tools,
+  so the gate must be a deployment-level choice for autonomy runs.
+- Signal: the union of `completed_commands` and `completed_tool_calls` on
+  the snapshot. Either non-empty means a real tool or command executed.
+- Enforcement point: both `finish` action sites (orchestrator result path
+  and worker self-pipeline) consult `fsm.done_block_reason(snapshot)`. The
+  FSM stays pure - the helper only reads the snapshot, the call sites turn
+  a blocked `finish` into `escalate("structurally rejected: no executed
+  commands or tool calls")`, which follows the normal failure path
+  (ledger, DLQ, telegram failure card).
+- Honest limit: this is necessary, not sufficient. A fabricator that runs
+  one real command passes the gate; gaps 2+3 carry the real weight.
+
+Gap 2 - deterministic acceptance checks (design, next slice):
+- The plan carries machine-checkable acceptance criteria (path + kind, e.g.
+  "file exists", "wav duration > 30 s" via ffprobe). After the coder
+  returns, a NEW acceptance step executes the checks on the worker
+  filesystem and returns pass/fail into the snapshot. Only a passing
+  acceptance step lets the critic verdict stand; a failing check drives the
+  normal revision loop with the check output as the issue text.
+- Checks are plain filesystem calls, never LLM judgment. Criterion schema
+  needs design (kinds: file_exists, file_min_size, command_output_matches,
+  ffprobe_duration_min) plus sandbox alignment with the existing tool
+  allowlist.
+
+Gap 3 - claimed-vs-existing artifact cross-check (design, with gap 2):
+- SHIPPED 2026-11-15: the worker stamps `artifact_sizes` (path -> size in
+  bytes, -1 = claimed but absent) into every coder result
+  (`fsutil.verify_artifacts`), and the orchestrator fails the step with
+  "claimed artifacts missing from workspace: ..." when any claimed path is
+  absent - this also surfaces previously silent oversized-artifact skips.
+  Content fabrication (a written-but-invented report) is only catchable by
+  gap 2 acceptance criteria, not by stat.
 
 ### 15.4.4 Model serving layer: Ollama-in-Docker → per-node llauncher (design note, 2026-11-15, before coding)
 

@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     # 15.3 item 5: experience store producers. Path of the file-backed
     # ExperienceStore; observation deposits append success/failure bullets
     # only when the flag is on (opt-in, like tuple_prompts).
+    # 15.4.5 DONE-gate hardening: when on, a DONE transition requires at
+    # least one executed command or tool call on the snapshot. Opt-in per
+    # deployment (DONE_REQUIRES_ACTIVITY=1): pure writing tasks legitimately
+    # finish with zero tools.
+    done_requires_activity: bool = False
     experience_store_path: str = "data/experience-store.json"
     experience_from_observations: bool = False
     # 14.15.10: pheromone evaporation. The orchestrator applies decay every

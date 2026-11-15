@@ -7,7 +7,7 @@ the current state plus an event, which makes the workflow trivially testable.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .schema import TERMINAL_STATES, Role, TaskState
 
@@ -43,6 +43,21 @@ class Action:
     type: ActionType
     role: Role | None = None
     reason: str = ""
+
+
+
+
+def done_block_reason(snapshot: Any) -> str:
+    """15.4.5: reason a DONE transition must be refused, or "" if allowed.
+
+    Reads only the snapshot (no settings, no I/O) so callers on both sides
+    of the pipeline can consult it before applying a ``finish`` action.
+    """
+    if getattr(snapshot, "completed_commands", None) or getattr(
+        snapshot, "completed_tool_calls", None
+    ):
+        return ""
+    return "structurally rejected: no executed commands or tool calls"
 
 
 @dataclass(frozen=True)

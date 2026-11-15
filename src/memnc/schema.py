@@ -587,6 +587,9 @@ class ResultPayload(BaseModel):
     error: str | None = None
     prompt_version: str | None = None
     tool_steps: int = 0
+    # 15.4.5 gap 3: claimed-vs-existing artifact cross-check. The worker
+    # stamps path -> size in bytes (-1 = claimed but absent in the workspace).
+    artifact_sizes: dict[str, int] = Field(default_factory=dict)
     # T4 (model-routing-visible): the model the worker actually ran, so the
     # orchestrator can record node:model per role on the task snapshot.
     model: str | None = None

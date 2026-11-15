@@ -13,7 +13,7 @@ from .acl import check_registry_write
 from .api import ApiServer
 from .bus import Bus
 from .config import Settings, get_settings
-from .fsm import Event, transition
+from .fsm import Event, done_block_reason, transition
 from .fsutil import apply_artifacts
 from .observations import TaskObservation, observation_from_snapshot
 from .schema import (
@@ -508,6 +508,16 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             log.warning("bad result payload: %s", exc)
             return
+        # 15.4.5 gap 3: the orchestrator has no filesystem access, so the
+        # worker stamps claimed-vs-existing sizes; a claimed-but-missing
+        # artifact fails the step instead of passing silently.
+        if envelope.role is Role.CODER and any(v < 0 for v in payload.artifact_sizes.values()):
+            missing = [p_ for p_, v_ in payload.artifact_sizes.items() if v_ < 0]
+            payload = ResultPayload(
+                ok=False,
+                error="claimed artifacts missing from workspace: " + ", ".join(missing),
+                tool_steps=payload.tool_steps,
+            )
 
         snapshot.seen_result_ids.append(envelope.id)
         snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]
@@ -707,6 +717,16 @@ class Orchestrator:
             if action.type == "dispatch" and action.role is not None:
                 await self._dispatch(snapshot, action.role)
             elif action.type == "finish":
+                # 15.4.5: opt-in structural gate - refuse DONE without any
+                # executed command or tool call on the snapshot.
+                block = done_block_reason(snapshot)
+                if self.settings.done_requires_activity and block:
+                    snapshot.state = TaskState.FAILED
+                    snapshot.record("task.failed", block)
+                    snapshot.error = block
+                    await self.bus.put_snapshot(snapshot)
+                    await self.bus.emit_event(snapshot, "task.failed", block)
+                    continue
                 snapshot.record("task.done")
                 await self.bus.put_snapshot(snapshot)
                 await self.bus.emit_event(snapshot, "task.done", "workflow complete")
@@ -762,14 +782,23 @@ class Orchestrator:
 
         Live tasks run the fixed pipeline, so they deposit on the single
         LIVE_EDGE; the accumulated tau per task type is what later strategy
-        selection reads. Best effort, never raising, like observations.
+        selection reads. An unsure marker in the error or critique summary
+        is folded as a weak "unsure" deposit on the self-reflect edge
+        instead of a success/failure on LIVE_EDGE. Best effort, never
+        raising, like observations.
         """
-        from .pheromone import LIVE_EDGE, task_type_from_prompt
+        from .pheromone import LIVE_EDGE, SELF_REFLECT_EDGE, task_type_from_prompt, unsure_signal
 
         try:
             outcome = "success" if snapshot.state.value.lower() == "done" else "failure"
+            edge = LIVE_EDGE
+            critique = getattr(snapshot, "critique", None)
+            critique_summary = critique.summary if critique else ""
+            if unsure_signal(getattr(snapshot, "error", None), critique_summary):
+                outcome = "unsure"
+                edge = SELF_REFLECT_EDGE
             await self.bus.deposit_pheromone(
-                task_type_from_prompt(snapshot.task), LIVE_EDGE, outcome
+                task_type_from_prompt(snapshot.task), edge, outcome
             )
         except Exception:  # noqa: BLE001 - side channel, never fail the task
             log.debug("pheromone deposit failed for %s", snapshot.task_id)
