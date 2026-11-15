@@ -15,7 +15,7 @@ from .bus import Bus
 from .config import Settings, get_settings
 from .fsm import Event, transition
 from .fsutil import apply_artifacts
-from .observations import observation_from_snapshot
+from .observations import TaskObservation, observation_from_snapshot
 from .schema import (
     SUBJECT_CMD,
     SUBJECT_CONTROL,
@@ -754,6 +754,29 @@ class Orchestrator:
                 "observation deposit failed",
                 extra={"task_id": snapshot.task_id, "error": str(exc)},
             )
+            return
+        if self.settings.experience_from_observations:
+            try:
+                self._record_experience(observation)
+            except Exception as exc:  # noqa: BLE001 - side channel only
+                log.warning(
+                    "experience record failed",
+                    extra={"task_id": snapshot.task_id, "error": str(exc)},
+                )
+
+    def _record_experience(self, observation: TaskObservation) -> None:
+        """15.3 item 5: fold a terminal observation into the experience store.
+
+        File-backed, never raises into the pipeline (caller catches). The
+        store is a side channel: a write failure costs one bullet, nothing
+        else.
+        """
+        from .experience_store import ExperienceStore, record_observation
+
+        store = ExperienceStore(self.settings.experience_store_path).load()
+        added = record_observation(store, observation)
+        if added:
+            store.save()
 
     async def _dispatch(self, snapshot: TaskSnapshot, role: Role) -> None:
         timeout_s = self.settings.timeout_for(role)

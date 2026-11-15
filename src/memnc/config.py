@@ -149,6 +149,11 @@ class Settings(BaseSettings):
     # worker renders the prompt as MESSAGE/BACKGROUND/INTERMEDIATE OUTPUT
     # sections instead of re-derived prose. Off = byte-identical arm C.
     tuple_prompts: bool = False
+    # 15.3 item 5: experience store producers. Path of the file-backed
+    # ExperienceStore; observation deposits append success/failure bullets
+    # only when the flag is on (opt-in, like tuple_prompts).
+    experience_store_path: str = "data/experience-store.json"
+    experience_from_observations: bool = False
 
     # inference (external runtime)
     inference_provider: Literal["ollama", "openai"] = "ollama"

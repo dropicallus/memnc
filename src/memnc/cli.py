@@ -224,6 +224,15 @@ async def cmd_tasks(_: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_exp(args: argparse.Namespace, settings: Settings) -> int:
+    """15.3 item 5: read the automated experience store (no NATS connection)."""
+    from memnc.experience_store import ExperienceStore, format_bullets
+
+    store = ExperienceStore(settings.experience_store_path).load()
+    print(format_bullets(store, args.topic, args.limit))
+    return 0
+
+
 async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
     """14.13 step 2: latest deposited observations, optional model filter."""
     from memnc.observations import format_observations
@@ -959,6 +968,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     roster = subparsers.add_parser("roster", help="T6: list live node capabilities")
     roster.set_defaults(func=cmd_roster)
+
+    exp = subparsers.add_parser(
+        "exp", help="15.3 item 5: read the automated experience store"
+    )
+    exp.add_argument("--topic", default=None, help="only bullets in TOPIC")
+    exp.add_argument(
+        "--limit", type=int, default=50, help="max bullets to print (default 50)"
+    )
+    exp.set_defaults(func=cmd_exp)
 
     obslast = subparsers.add_parser(
         "obslast", help="14.13 step 2: latest deposited task observations"

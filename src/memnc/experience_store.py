@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .observations import TaskObservation
+
 # One merge may retire at most this fraction of a topic's existing bullets
 # (brevity-bias guard: compression in small deliberate steps only).
 MAX_PRUNE_RATIO = 0.3
@@ -174,6 +176,45 @@ class ExperienceStore:
             )
         report.added = [b.text for b in self.topic(topic)]
         return report
+
+
+def record_observation(store: ExperienceStore, observation: TaskObservation) -> list[str]:
+    """Producer: turn one terminal-task observation into experience bullets.
+
+    Deterministic, no LLM calls. Successes and failures go to separate
+    topics so a reader can pull either ledger independently. Bullets are
+    folded through merge() so repeated similar outcomes collapse (ACE
+    context-collapse guard) instead of accumulating per task.
+    """
+    route = observation.route or {}
+    steps = " ".join(f"{role}={node}" for role, node in sorted(route.items()))
+    if observation.outcome == "done":
+        text = (
+            f"task {observation.task_id[:8]} DONE via {steps}"
+            f" ({observation.revisions} revisions)"
+        )
+    else:
+        error = (observation.error or "no error recorded")[:200]
+        text = (
+            f"task {observation.task_id[:8]} {observation.outcome} on {steps}:"
+            f" {error}"
+        )
+    topic = "success" if observation.outcome == "done" else "failure"
+    store.merge(topic, [text], source=observation.task_id)
+    # Return what the store now holds for this task (a near-duplicate fold
+    # may have replaced our text with the longer existing bullet).
+    return [b.text for b in store.topic(topic) if observation.task_id[:8] in b.text]
+
+
+def format_bullets(store: ExperienceStore, topic: str | None, limit: int) -> str:
+    """Render store bullets newest-first, optionally filtered by topic."""
+    bullets = list(reversed(store.bullets))
+    if topic:
+        bullets = [b for b in bullets if b.topic == topic.lower()]
+    if not bullets:
+        return "no experience bullets"
+    bullets = bullets[:limit]
+    return "\n".join(f"{b.id}  {b.text}" for b in bullets)
 
 
 def record_bench_run(jsonl_path: str | Path, store: ExperienceStore) -> dict[str, MergeReport]:

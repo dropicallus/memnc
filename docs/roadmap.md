@@ -1426,8 +1426,11 @@ evidence for the Einzel-LoRA > Multi thesis.
    key, opt-in flag, zero extra model calls; build order 4 steps).
    BUILD PROGRESS: step 1 done — schema models `Background` /
    `IntermediateOutput` / `MessageTuple` in schema.py + tests
-   (tests/test_tuple_schema.py). Next: orchestrator background persistence
-   (step 2), prompt tuple section behind opt-in flag (step 3).
+   (tests/test_tuple_schema.py). BUILD COMPLETE (2026-11-15, commit c547815):
+   all four steps shipped — orchestrator background persistence
+   (bus.save_background/load_background + KV write-backs), worker/orchestrator
+   tuple path behind Settings.tuple_prompts (opt-in), tests
+   (tests/test_tuple_schema.py, e2e tuple.py verified end-to-end).
 3. Arm C2/D design document BEFORE code: adversarial critic (Ultracode +
    poetry deviate step), k single-criterion evaluator split + eval supervisor
    (TalkHier, cost caveat), plan-in-KV (Ultracode), specialists with search
@@ -1462,7 +1465,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    (brevity-bias guard: keeps >= 70% of bullets per compression). First
    producer: record_bench_run() turns a bench JSONL into per-arm bullets.
    No LLM calls in the store. Tests: tests/test_experience_store.py (12).
-   Next: wire producers (observation deposits), read verb in meshctl.
+   BUILD COMPLETE (2026-11-15): producer wiring shipped —
+   orchestrator._deposit_observation folds every terminal observation into
+   the store via record_observation() (success/failure topics, deterministic
+   bullet text, near-duplicates fold through merge(); best-effort, never
+   raises into the pipeline) behind Settings.experience_from_observations
+   (opt-in, default off) + Settings.experience_store_path;
+   `meshctl exp [--topic T] [--limit N]` read verb prints bullets
+   newest-first (format_bullets shared). Tests: tests/test_experience_wiring.py.
+   Next: verify live against the mesh (flag on, one task, `meshctl exp`).
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
    verifier as the deliverable.
    STATUS: generator BUILT (2026-11-15) — src/memnc/bench/dpo.py: one
