@@ -184,6 +184,55 @@ def escalate(current: str) -> str:
     return ESCALATION_CHAIN[min(idx + 1, len(ESCALATION_CHAIN) - 1)]
 
 
+# Planner-heavy edges pay a capacity penalty at SELECTION time until a strong
+# planner model is actually registered on the mesh (14.15.10): their score is
+# discounted so routing does not chase the mesh arm on nodes that cannot serve
+# a planner-grade model. Deposits always record what really happened — the
+# penalty never rewrites evidence.
+PLANNER_EDGES: frozenset[str] = frozenset({"C", "mesh"})
+PLANNER_CAPACITY_PENALTY = 0.5
+
+
+def route_strategy(
+    entries: dict[str, PheromoneEntry],
+    task_type: str,
+    failed_edge: str | None = None,
+    weak_planner: bool = True,
+) -> str:
+    """Pick the strategy for one task under the escalation floor.
+
+    Candidates are the ESCALATION_CHAIN edges at or above the floor —
+    escalate(failed_edge) when the failed edge is on the chain, chain head
+    otherwise. Among them the highest score (tau^alpha * eta^beta) wins;
+    pheromone may only raise the choice above the floor, never pick a weaker
+    edge after a failure. Planner-heavy edges are discounted by
+    PLANNER_CAPACITY_PENALTY while weak_planner is set. Falls back to the
+    floor edge when no candidate cell exists (e.g. the failed edge is the
+    chain end — routing stays there, mirroring escalate()).
+    """
+    chain = ESCALATION_CHAIN
+    floor_idx = chain.index(failed_edge) + 1 if failed_edge in chain else 0
+    best_edge: str | None = None
+    best_score = -1.0
+    prefix = f"{task_type}."
+    for key, entry in entries.items():
+        if not key.startswith(prefix):
+            continue
+        edge = key[len(prefix):]
+        if edge == failed_edge or edge not in chain:
+            continue
+        if chain.index(edge) < floor_idx:
+            continue
+        score = entry.score()
+        if weak_planner and edge in PLANNER_EDGES:
+            score *= PLANNER_CAPACITY_PENALTY
+        if score > best_score:
+            best_edge, best_score = edge, score
+    if best_edge is None:
+        return chain[min(floor_idx, len(chain) - 1)]
+    return best_edge
+
+
 def format_pheromones(entries: dict[str, PheromoneEntry], task_type: str | None = None) -> str:
     """Human view for meshctl: tau, cost prior, score per edge cell."""
     keys = sorted(entries)
