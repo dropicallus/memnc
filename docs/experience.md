@@ -420,3 +420,41 @@ checkers) IS the DPO pair generator - preferred vs rejected chunks
 fall out of the runs we already log. Same constraint as ACE: needs
 reliable feedback; math/code with checkers qualifies, free chat does
 not.
+
+## 2026-11-15 external evidence: multi-agent poetry in non-cooperative environments (Zhang & Eger, Frank)
+
+"LLM-based multi-agent poetry generation in non-cooperative
+environments" (Zhang & Eger, Univ. Mannheim / UTN Nuremberg, arXiv
+2409.03659, PEER-REVIEWED: Journal of Language Modelling, published
+2026-02-20; code/data released). A 4-agent social network with BOTH
+cooperative interactions ("poets appreciate each other's work and
+learn from the others") and NON-cooperative interactions ("poets
+dislike each other's work and deviate from each other"). Evaluation
+over 96k generated poems, with training-based agents (GPT-2) and
+prompting-based agents (GPT-3.5/GPT-4).
+
+Findings: (1) non-cooperative environments boost diversity -
+training-based agents gain +3.0-3.7pp diversity and +5.6-11.3pp
+novelty (distinct/novel n-grams), with the JOINT positive+negative
+learning strategy most effective; (2) training-based agents show
+STABLE group divergence in lexicon, style and semantics along their
+predefined group affiliation; (3) the decisive contrast: prompting-
+based agents barely improve lexical diversity after the first
+iteration, show NO group-based divergence, and their styles
+HOMOGENIZE over time (authors suspect LLM memorization) - a
+non-homogeneous (heterogeneous-model) ensemble adds +7.0-17.5pp.
+
+memnc reading: this is the strongest external evidence yet for the
+Einzel-LoRA thesis. Identical structure, two learning modes, clear
+result: SPECIALIZATION IN WEIGHTS STAYS DURABLE, PROMPTED
+SPECIALIZATION DECAYS TO HOMOGENEITY - ACE's context collapse,
+measured at agent level. Design consequences: (a) a
+deviate/disagree step belongs in our cooperative pipeline - the
+adversarial critic idea for arm C2/D gains a diversity argument on
+top of the correctness argument; (b) heterogeneous nodes per mesh
+(different models per node) are a feature, not a workaround. Caveat:
+creative domain, metric is diversity/novelty not correctness -
+transfers as hypothesis, not bench-grade proof.
+
+(Series complete: ReAct -> FireAct -> GEPA -> ACE -> MEM1 -> SyncMind
+-> Flow-DPO -> this. Research-material intake paused per Frank.)
