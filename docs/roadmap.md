@@ -1441,6 +1441,17 @@ evidence for the Einzel-LoRA > Multi thesis.
    critique), max 2 revisions, checkers unchanged as final authority.
    Bench run + report pending (needs the 120-rep full run).
 4. GEPA slice: bench-driven prompt evolution over roles.py SYSTEM_PROMPTS.
+   STATUS: BUILT (2026-11-15) — src/memnc/bench/gepa.py: failure-driven
+   reflective mutation from bench JSONL, Pareto candidate selection (keep
+   best-on-at-least-one-task, prune dominated; ties survive), evaluation
+   wraps the bench arm with a per-role prompt override (SYSTEM_PROMPTS
+   swapped and restored, engine errors included). Zero weight changes; costs
+   rollouts only. Evolution runs are opt-in (bench models, no downloads).
+   The reflective crossover from the design note is NOT built yet — the
+   evolve loop mutates the seed prompt each generation only. Tests:
+   tests/test_gepa.py (failure harvest, tolerant proposal parsing, Pareto
+   front, prompt swap/restore incl. error path, evolve loop).
+   A live evolution run awaits the 120-rep full bench run (item 1).
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
