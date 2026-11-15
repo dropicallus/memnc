@@ -458,3 +458,51 @@ transfers as hypothesis, not bench-grade proof.
 
 (Series complete: ReAct -> FireAct -> GEPA -> ACE -> MEM1 -> SyncMind
 -> Flow-DPO -> this. Research-material intake paused per Frank.)
+
+## 2026-11-15 external evidence: TalkHier - Talk Structurally, Act Hierarchically (IEEE TAI, Frank)
+
+"Talk Structurally, Act Hierarchically: A Collaborative Framework
+for LLM Multi-Agent Systems" (Zhao Wang, Sota Moriyama, Wei-Yao
+Wang, Briti Gangopadhyay, Shingo Takamatsu; Sony Group Corporation,
+arXiv 2502.11098, PEER-REVIEWED: IEEE Transactions on Artificial
+Intelligence (TAI); code: github.com/sony/talkhier).
+
+Two core mechanisms: (1) a STRUCTURED COMMUNICATION PROTOCOL - every
+communication event is an explicit tuple (Message, Background,
+Intermediate Output) instead of free text; supervisor prompt template
+demands: thoughts -> who acts next (or FINISH) -> instructions ->
+background -> intermediate_output. (2) HIERARCHICAL REFINEMENT - the
+evaluation step is its own nested team: an Evaluation Supervisor
+coordinates k member evaluators, each evaluating with exactly ONE
+criterion; feedback is summarized and coordinated (fixing order bias
+and summarization failure as agent count grows) and handed to a
+Revisor. Members of one team can be supervisors of another team.
+Each agent keeps an INDEPENDENT persistent memory - deliberately not
+a shared pool and not session-bound.
+
+Results (GPT-4o backbone, temp=0): MMLU 5-domain avg 88.38% vs
+o1-preview 87.56, AgentVerse 83.66, AgentPrune 83.60, GPT4o-7@
+majority voting 71.15, ReAct 58.50; WikiQA Rouge-1 0.3461 vs 0.3286
+best baseline (AutoGPT); advertisement-text generation wins on all
+quality metrics. Ablations (the most informative part): removing the
+evaluation team -11.1pp; removing the evaluation supervisor -5.4pp;
+structured protocol -> flat text -2.8pp; removing the Background
+field -8.9pp (the biggest single protocol factor); removing
+Intermediate Output -4.7pp.
+
+memnc reading: (1) the Background ablation (-8.9pp) validates the
+pattern our bench uses implicitly - every role receives the full
+task context; TalkHier generalizes it: NATS messages between roles
+should be structured tuples (message, background, intermediate
+output) with background persisted in workflow_state, not prose.
+(2) Critic split: our critic is one agent with all criteria at once;
+TalkHier's k single-criterion evaluators + coordinated supervisor is
+a concrete design for arm C2/D - with the caveat that k evaluators
+per iteration is the same cost-multiplier class that put our arm C
+at 7x arm A. (3) Role-specific persistent memory (per-node
+namespaces) vs one shared pool is a concrete alternative for the
+mesh memory design that the Einzel-LoRA thesis also supports.
+
+(FINAL research-material intake item per Frank - series complete:
+ReAct -> FireAct -> GEPA -> ACE -> MEM1 -> SyncMind -> Flow-DPO ->
+non-cooperative poetry -> TalkHier.)
