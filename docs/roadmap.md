@@ -1454,6 +1454,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    A live evolution run awaits the 120-rep full bench run (item 1).
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
+   STATUS: BUILT (2026-11-15) — src/memnc/experience_store.py (design in
+   docs/design-ace-experience.md): file-backed append-only itemized
+   bullets grouped by topic; deterministic merge with the context-collapse
+   guard (Jaccard >= 0.8 near-duplicates folded, longer text wins) and a
+   monotone merge (never shrinks); explicit guarded compress() step
+   (brevity-bias guard: keeps >= 70% of bullets per compression). First
+   producer: record_bench_run() turns a bench JSONL into per-arm bullets.
+   No LLM calls in the store. Tests: tests/test_experience_store.py (12).
+   Next: wire producers (observation deposits), read verb in meshctl.
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
    verifier as the deliverable.
 7. Sync bench tier (SyncMind): concurrent-commit semantics as a separate tier.
