@@ -1473,7 +1473,16 @@ evidence for the Einzel-LoRA > Multi thesis.
    (opt-in, default off) + Settings.experience_store_path;
    `meshctl exp [--topic T] [--limit N]` read verb prints bullets
    newest-first (format_bullets shared). Tests: tests/test_experience_wiring.py.
-   Next: verify live against the mesh (flag on, one task, `meshctl exp`).
+   Worker-side deposit added (commit 59ff7e6): in the self_pipeline the worker owns
+   terminal transitions, so worker._apply_local deposits + folds for every terminal
+   state (tests/test_worker_deposit.py; compose env EXPERIENCE_FROM_OBSERVATIONS,
+   default 0). Live verify still pending: smoke tasks fail before any routed step
+   (small planner models: invalid/empty planner output, timeouts, 500s) — such tasks
+   are correctly unobserved by design (no route = nothing to learn) — and routed
+   steps land on remote workers running the pre-deposit image. Next: sync the remote
+   node image (or route a task to this node's planner/coder) and confirm a routed
+   terminal task shows up via `meshctl obslast` + `meshctl exp`; for durable
+   worker-side experience set EXPERIENCE_FROM_OBSERVATIONS=1 in .env.
 6. Flow-DPO slice: bench JSONL + checkers as DPO pair generator, learned
    verifier as the deliverable.
    STATUS: generator BUILT (2026-11-15) — src/memnc/bench/dpo.py: one
