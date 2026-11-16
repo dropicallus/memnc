@@ -128,6 +128,12 @@ class Settings(BaseSettings):
     # now -- see docs/roadmap.md 14.14). Harnesses share one contract
     # (memnc.harnesses.Harness), so weak->strong handoff stays routing policy.
     harness_coder: str = "inproc"
+    # DiscussHarness (14.14 item 4): models that debate the coder prompt as
+    # text before one winner is executed by the in-proc tool loop. JSON env
+    # list; empty falls back to [model_coder] (single-proposal degenerate case).
+    discuss_models: list[str] = []
+    # Judge for the debate; empty uses the first discuss model.
+    judge_model: str = ""
     critic_timeout_s: int = 180
     orchestrator_grace_s: int = 30
     apply_artifacts: bool = True
