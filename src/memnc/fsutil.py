@@ -105,6 +105,32 @@ def verify_artifacts(root: Path, files: list) -> dict[str, int]:
     return out
 
 
+def artifact_line_counts(root: Path, files: list) -> dict[str, int]:
+    """Ship-gate V2: non-blank line count per claimed artifact.
+
+    Maps every claimed path to its number of non-blank lines in the
+    workspace, or -1 when the file does not exist (or the path is unsafe).
+    Computed by the worker (the only side with filesystem access) so the
+    orchestrator can refuse thin stub deliverables mechanically.
+    """
+
+    root = Path(root)
+    out: dict[str, int] = {}
+    for item in files:
+        path = item["path"] if isinstance(item, dict) else item.path
+        try:
+            target = safe_path(root, path)
+            if not target.is_file():
+                out[path] = -1
+            else:
+                out[path] = sum(
+                    1 for line in target.read_text(errors="replace").splitlines() if line.strip()
+                )
+        except Exception:  # noqa: BLE001 - unsafe, unreadable or invalid path
+            out[path] = -1
+    return out
+
+
 def list_tree(root: Path, depth: int = 2, max_entries: int = 200) -> list[str]:
     root = Path(root).resolve()
     entries: list[str] = []

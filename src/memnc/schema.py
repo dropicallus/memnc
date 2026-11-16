@@ -590,6 +590,10 @@ class ResultPayload(BaseModel):
     # 15.4.5 gap 3: claimed-vs-existing artifact cross-check. The worker
     # stamps path -> size in bytes (-1 = claimed but absent in the workspace).
     artifact_sizes: dict[str, int] = Field(default_factory=dict)
+    # Ship-gate V2: path -> non-blank line count (-1 = claimed but absent).
+    # Lets the orchestrator refuse thin stub files mechanically, without
+    # trusting the coder narrative.
+    artifact_lines: dict[str, int] = Field(default_factory=dict)
     # T4 (model-routing-visible): the model the worker actually ran, so the
     # orchestrator can record node:model per role on the task snapshot.
     model: str | None = None

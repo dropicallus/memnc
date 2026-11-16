@@ -508,16 +508,42 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             log.warning("bad result payload: %s", exc)
             return
-        # 15.4.5 gap 3: the orchestrator has no filesystem access, so the
-        # worker stamps claimed-vs-existing sizes; a claimed-but-missing
-        # artifact fails the step instead of passing silently.
-        if envelope.role is Role.CODER and any(v < 0 for v in payload.artifact_sizes.values()):
-            missing = [p_ for p_, v_ in payload.artifact_sizes.items() if v_ < 0]
-            payload = ResultPayload(
-                ok=False,
-                error="claimed artifacts missing from workspace: " + ", ".join(missing),
-                tool_steps=payload.tool_steps,
+        # 15.4.5 gap 3 + ship-gate V2: the orchestrator has no filesystem
+        # access, so the worker stamps claimed-vs-existing sizes and line
+        # counts. Missing artifacts, thin stub files and empty deliveries
+        # fail the step mechanically instead of passing on the narrative.
+        if envelope.role is Role.CODER:
+            sizes = payload.artifact_sizes or {}
+            lines = payload.artifact_lines or {}
+            missing = [p_ for p_, v_ in sizes.items() if v_ < 0]
+            # A worker that does not stamp artifact_lines yet counts as 0
+            # lines per claimed file: an old worker cannot smuggle stubs
+            # past the gate while the rollout is in flight.
+            thin = [
+                f"{p_} ({lines.get(p_, 0)} lines < {self.settings.verify_min_lines})"
+                for p_ in sizes
+                if sizes[p_] >= 0 and lines.get(p_, 0) < self.settings.verify_min_lines
+            ]
+            too_few = (
+                self.settings.verify_min_files > 0
+                and len(sizes) < self.settings.verify_min_files
             )
+            if missing or thin or too_few:
+                reasons = []
+                if missing:
+                    reasons.append("claimed artifacts missing from workspace: " + ", ".join(missing))
+                if thin:
+                    reasons.append("deliverables below verify_min_lines: " + ", ".join(thin))
+                if too_few:
+                    reasons.append(
+                        f"only {len(sizes)} artifacts claimed, verify_min_files="
+                        f"{self.settings.verify_min_files}"
+                    )
+                payload = ResultPayload(
+                    ok=False,
+                    error="; ".join(reasons),
+                    tool_steps=payload.tool_steps,
+                )
 
         snapshot.seen_result_ids.append(envelope.id)
         snapshot.seen_result_ids = snapshot.seen_result_ids[-50:]

@@ -163,6 +163,10 @@ class Settings(BaseSettings):
     # deployment (DONE_REQUIRES_ACTIVITY=1): pure writing tasks legitimately
     # finish with zero tools.
     done_requires_activity: bool = False
+    # Ship-gate V2 (docs/design-ship-gate.md): mechanical deliverable
+    # checks, opt-in like done_requires_activity. 0 = check off.
+    verify_min_lines: int = 0
+    verify_min_files: int = 0
     experience_store_path: str = "data/experience-store.json"
     experience_from_observations: bool = False
     # 14.15.10: pheromone evaporation. The orchestrator applies decay every

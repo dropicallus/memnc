@@ -17,7 +17,7 @@ from .backends import make_backend
 from .bus import Bus, emit_debate
 from .config import Settings, get_settings
 from .fsm import Event, done_block_reason, transition
-from .fsutil import apply_artifacts, verify_artifacts
+from .fsutil import apply_artifacts, artifact_line_counts, verify_artifacts
 from .harnesses import get_harness
 from .harnesses.workspace import changed_file_contents
 from .mcp.client import MCPClient
@@ -725,6 +725,9 @@ class Worker:
             artifact_sizes=verify_artifacts(
                 Path(self.settings.workspace_root), getattr(output, "files", [])
             ),
+            artifact_lines=artifact_line_counts(
+                Path(self.settings.workspace_root), getattr(output, "files", [])
+            ),
         )
 
     async def _run_harness(
@@ -796,6 +799,7 @@ class Worker:
             prompt_version=PROMPT_VERSION,
             tool_steps=result.tool_events,
             artifact_sizes=verify_artifacts(workspace, output.files),
+            artifact_lines=artifact_line_counts(workspace, output.files),
         )
 
     async def _repair(self, role: Role, model: str, run, error: str):
