@@ -27,6 +27,10 @@ x-mesh-env: &mesh-env
   CODER_TIMEOUT_S: ${CODER_TIMEOUT_S:-600}
   CRITIC_TIMEOUT_S: ${CRITIC_TIMEOUT_S:-180}
   ORCHESTRATOR_GRACE_S: ${ORCHESTRATOR_GRACE_S:-30}
+  # Ship-gate V2 (docs/design-ship-gate.md): mechanical deliverable checks.
+  # 0 = off. Recommended on the orchestrator side: VERIFY_MIN_LINES=20.
+  VERIFY_MIN_LINES: ${VERIFY_MIN_LINES:-0}
+  VERIFY_MIN_FILES: ${VERIFY_MIN_FILES:-0}
   MCP_ENABLED: ${MCP_ENABLED:-true}
   ALLOW_SHELL: ${ALLOW_SHELL:-true}
   SHELL_TIMEOUT_S: ${SHELL_TIMEOUT_S:-120}
