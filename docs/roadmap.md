@@ -2,6 +2,15 @@
 
 ## Built
 
+- **2026-11-16 — DiscussHarness (14.14 item 4)**: multi-model debate as a coder
+  harness on the shared contract. Proposals are plain text (parallel, per-call
+  timeouts), one critique round, judge returns `WINNER: <model>`, the winner is
+  executed by the in-proc tool loop; every failure degrades instead of blocking.
+  Config: `harness_coder="discuss"`, `discuss_models` (JSON list, empty ->
+  `[model_coder]`), `judge_model`. Tests: `tests/test_harnesses_discuss.py`
+  (phases, judge fallbacks, empty-models degenerate case, worker wiring).
+  Design note: `docs/design-discuss-harness.md`.
+
 - **2026-11-15 — Pheromone routing field (14.15.10, initialization slice)**:
   `src/memnc/pheromone.py` — ACO-style score tau^alpha * eta^beta per
   (task_type, edge) with tau0=1.0, alpha=1.0, beta=2.0 from the measured
@@ -934,8 +943,8 @@ the harness (deterministic via monkeypatch, immune to test pollution), default
 stays inproc.
 
 
-Status: core built + proven end-to-end; worker wiring and per-task selection
-are built (see above). Remaining: DiscussHarness.
+Status: core built + proven end-to-end; worker wiring, per-task selection, and
+the DiscussHarness are built (see above).
 
 The weak->strong proof (7b dirty pass -> produktiv fixer, 11/11 green in
 `~/memnc-harness-wt`) showed the *product* of a coding agent is workspace
@@ -999,7 +1008,13 @@ using throwaway fake `pi` scripts.
 3. ~~Per-task harness selection (instead of per-node config)~~ DONE (see
    "Per-task harness selection" above) — the step toward
    mesh self-organization: cheap models draft dirty, strong models fix.
-4. `DiscussHarness` (multi-model debate) on the same contract.
+4. ~~`DiscussHarness` (multi-model debate) on the same contract.~~ DONE —
+   `harnesses/discuss.py` + `settings.discuss_models`/`judge_model`; design
+   note in `docs/design-discuss-harness.md`. Debate object is the plan: K
+   text proposals, one critique round, judge picks a WINNER line, winner is
+   executed by the in-proc tool loop (same contract, same tools). Degrades:
+   failed judge/garbage winner -> first valid proposal; zero proposals ->
+   ok=False. Cost caveat: 2K+1 extra inference calls vs one for inproc.
 
 ## 14.15 Backlog: plan-level task queue with atomic claim (BUILT 2026-11-14)
 

@@ -64,7 +64,7 @@ def get_harness(name: str, **kwargs) -> Harness:
     """Instantiate a registered harness by name."""
     # Always import plugins: pi may already be registered via a top-level
     # import, and the guard would then skip registering later harnesses.
-    from . import inproc, opencode, pi  # noqa: F401  (register themselves)
+    from . import discuss, inproc, opencode, pi  # noqa: F401  (register themselves)
 
     try:
         cls = _REGISTRY[name]
@@ -74,7 +74,7 @@ def get_harness(name: str, **kwargs) -> Harness:
 
 
 def known_harnesses() -> list[str]:
-    from . import inproc, opencode, pi  # noqa: F401
+    from . import discuss, inproc, opencode, pi  # noqa: F401
 
     return sorted(_REGISTRY)
 

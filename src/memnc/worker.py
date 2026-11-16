@@ -743,7 +743,30 @@ class Worker:
                 error=f"harness {harness_name!r} runs the coder role only",
             )
         prompt = build_user_prompt(role, envelope.payload or {}, self._message_tuple(envelope))
-        harness = get_harness(harness_name, model=model)
+        if harness_name == "discuss":
+            # DiscussHarness (14.14 item 4): debate the plan among models,
+            # then execute the winner through the same in-proc tool loop.
+            tools = (
+                list(self.tools.schemas)
+                if self.tools is not None and getattr(self.tools, "available", False)
+                else []
+            )
+            tools.append(MESH_SUBMIT_TOOL)
+
+            async def _execute(name: str, arguments: dict) -> str:
+                return await self._execute_tool(envelope, name, arguments)
+
+            harness = get_harness(
+                harness_name,
+                model=model,
+                backend=self.backend,
+                discuss_models=self.settings.discuss_models,
+                judge_model=self.settings.judge_model,
+                tools=tools,
+                execute_tool=_execute,
+            )
+        else:
+            harness = get_harness(harness_name, model=model)
         workspace = Path(self.settings.workspace_root)
         try:
             result = await harness.run(prompt, workspace, timeout_s=self.settings.coder_timeout_s)
