@@ -722,7 +722,9 @@ class Worker:
             output=output.model_dump(),
             prompt_version=PROMPT_VERSION,
             tool_steps=run.tool_steps,
-            artifact_sizes=verify_artifacts(Path(self.settings.workspace_root), output.files),
+            artifact_sizes=verify_artifacts(
+                Path(self.settings.workspace_root), getattr(output, "files", [])
+            ),
         )
 
     async def _run_harness(
