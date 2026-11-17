@@ -1607,7 +1607,14 @@ evidence for the Einzel-LoRA > Multi thesis.
    (pick_crossover_pair: strongest candidate + the one winning on most tasks
    the strongest fails; degenerate single-candidate pools fall back to
    mutation), the evolve loop alternates mutation (thin pool) and crossover
-   (split frontier); unparseable merge proposals keep parent A. Tests:
+   (split frontier); unparseable merge proposals keep parent A. Live-run
+   driver BUILT (2026-11-17): `python -m memnc.bench.gepa_run --arm B
+   --role coder --tier hard --jsonl <bench.jsonl> --out <frontier.jsonl>
+   [--generations N]` — harvests the arm's failures from a bench JSONL,
+   evaluates candidates only on the failing tasks (rep 0), reflects with
+   the critic-tier model, and persists the Pareto frontier (role, gen,
+   prompt, scores, wins) to JSONL. A run without failures is a no-op.
+   Tests:
    tests/test_gepa.py (failure harvest, tolerant proposal parsing, Pareto
    front, prompt swap/restore incl. error path, crossover pair selection +
    evolve-operator alternation).
