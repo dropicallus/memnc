@@ -433,6 +433,19 @@ def format_model_requests(requests: list[ModelRequest]) -> str:
     return "\n".join(lines)
 
 
+def format_pending_request(r: ModelRequest) -> str:
+    """Card for one newly pending model request (pending-request push)."""
+    disk = f" disk@{','.join(r.nodes_disk)}" if r.nodes_disk else ""
+    lines = [f"model request pending: {r.request_id}"]
+    lines.append(f"{r.action} {r.model}{disk}")
+    if r.task_id:
+        lines.append(f"task: {r.task_id}")
+    if r.reason:
+        lines.append(f"reason: {r.reason}")
+    lines.append("decide: buttons or /mreqs")
+    return "\n".join(lines)
+
+
 def failure_suggestion(snapshot) -> str:
     """P2 item 9: the orchestrator's alternative-model suggestion from the
     snapshot history (last ``model.suggest`` entry), if any. Duck-typed:
@@ -464,8 +477,23 @@ class TelegramObserver:
         self._last_state: dict[str, str] = {}
         self._announced: set[tuple[str, str, str]] = set()
         self._seen_nodes: set[str] = set()
+        self._seen_requests: set[str] = set()
 
     # -- outbound ----------------------------------------------------------
+    async def _push_pending_requests(self) -> None:
+        """Pending-request push (14.11 P0 remnant): announce newly pending
+        model requests once, config-gated (default OFF -- only messages that
+        need the operator's action are pushed)."""
+        if not getattr(self.settings, "telegram_pending_requests", False):
+            return
+        for r in await self.bus.list_model_requests():
+            if r.status == "pending" and r.request_id not in self._seen_requests:
+                self._seen_requests.add(r.request_id)
+                await self.broadcast(
+                    format_pending_request(r),
+                    markup=mreq_buttons(r.request_id),
+                )
+
     async def broadcast(self, text: str, markup: dict[str, Any] | None = None) -> None:
         for chat in sorted(self.chats):
             try:
@@ -583,6 +611,7 @@ class TelegramObserver:
                         parts.append("left: " + ", ".join(left))
                     await self.broadcast("mesh: " + "; ".join(parts))
                 self._seen_nodes = current
+                await self._push_pending_requests()
             except Exception as exc:  # noqa: BLE001 - observer must never disturb the mesh
                 log.warning(
                     "roster poll failed: %s", _redact(str(exc), getattr(self.bot, "token", ""))

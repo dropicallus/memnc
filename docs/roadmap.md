@@ -41,6 +41,19 @@
   approvals are rejected as critiques, loop capped at 2 revisions. Evidence
   gate unit-tested; bench run pending.
 
+- **2026-11-17 — Synergy dashboard views (§14.13 step 3)**: read verb
+  `obs.synergy` on the mesh API (computed from deposited observations),
+  console "Synergy (model pairs)" table via the standard API-client/fallback
+  path, and Telegram `/synergy [limit]` reusing `format_synergy`. Measurement
+  only — no routing decisions. Tests in `tests/test_synergy.py` (5 new).
+
+- **2026-11-17 — Pending-request push (14.11 P0 remnant)**: `Settings.
+  telegram_pending_requests` (env `TELEGRAM_PENDING_REQUESTS`, default OFF)
+  makes the Telegram observer broadcast each newly pending model request
+  once as a card with Approve/Reject buttons (`_push_pending_requests()` in
+  the roster poll). Only action-needed messages are pushed, per the standing
+  broadcast rule. Tests in `tests/test_telegram_observer.py` (4 new).
+
 - **2026-11-15 — Structured message tuple (15.3 item 2)**: TalkHop-style
   communication tuple (message / background / intermediate_output) built
   end-to-end behind `Settings.tuple_prompts` (default off): schema models,
@@ -558,7 +571,7 @@ The Experience Graph is designed to capture, store, and eventually leverage the 
 
 ### Step 3: Team-Synergy Aggregation (Measurement)
 **Goal:** Surface metrics that quantify how well different model pairings/roles are performing.
-**Status:** 3.1 + CLI table DONE (`src/memnc/synergy.py`, `meshctl synergy`); console dashboard + Telegram digest open. (Crucial: No behavioral changes at this stage.)
+**Status:** 3.1 + CLI table DONE (`src/memnc/synergy.py`, `meshctl synergy`); console dashboard + Telegram digest DONE (2026-11-17: `obs.synergy` API verb, console table, Telegram `/synergy`). (Crucial: No behavioral changes at this stage.)
 
 | Task | Description | Targeted Files | Interface/Key Changes | Acceptance Criteria |
 | :--- | :--- | :--- | :--- | :--- |
@@ -656,8 +669,11 @@ today.
    (`mr:<req-id>:approve|reject`) and node buttons (`nd:<node>:pause|resume`)
    parse through a fixed verb table; every press still rides the grant-checked
    `_control`/`_decide` API path (no new authority path), unauthorized chats
-   only get the callback answered. Model-request/node cards are handled but
-   not yet auto-announced — pending-request push is a later slice.
+   only get the callback answered. Model-request cards are now auto-announced
+   (pending-request push, DONE 2026-11-17: `TELEGRAM_PENDING_REQUESTS` config,
+   default OFF, each pending request broadcast once with Approve/Reject
+   buttons via `_push_pending_requests()` in the roster poll); node pause/
+   resume cards stay manual-only.
    Fixes: copying 20-hex IDs on mobile, typo risk, slow approval loop.
 2. **Short task IDs everywhere** — DONE (slice 1). `resolve_task_id()`
    accepts unambiguous prefixes (≥6 chars, exact full ids always win) for

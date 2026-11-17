@@ -250,6 +250,7 @@ class Settings(BaseSettings):
     # details still broadcast. Set TELEGRAM_QUIET_PROGRESS=0 for the full stream.
     telegram_quiet_progress: bool = True
     telegram_roster_updates: bool = False
+    telegram_pending_requests: bool = False
 
     def model_for(self, role: Role) -> str:
         return {

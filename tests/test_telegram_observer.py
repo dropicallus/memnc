@@ -363,3 +363,73 @@ async def test_roster_first_poll_is_silent_even_when_enabled():
     with pytest.raises(asyncio.CancelledError):
         await obs.run_roster()
     assert obs.sent == []  # initial snapshot is not announced as churn
+
+
+# -- pending-request push (14.11 P0 remnant) ---------------------------------
+
+
+class _ReqBus:
+    def __init__(self, requests):
+        self._requests = requests
+
+    async def list_model_requests(self):
+        return self._requests
+
+
+def _req_observer(requests, flag):
+    from memnc.schema import ModelRequest  # noqa: F401  (typing helper below)
+
+    obs = TelegramObserver.__new__(TelegramObserver)
+    obs.settings = type("S", (), {"telegram_pending_requests": flag})()
+    obs.bus = _ReqBus(requests)
+    obs.chats = {"chat1"}
+    obs.sent = []
+
+    async def broadcast(text, markup=None):
+        obs.sent.append((text, markup))
+
+    obs.broadcast = broadcast
+    obs._seen_requests = set()
+    return obs
+
+
+def _mreq(request_id, status="pending"):
+    from memnc.schema import ModelRequest
+
+    return ModelRequest(
+        request_id=request_id,
+        model="m8b",
+        task_id="t1",
+        status=status,
+        reason="unmet needs.model",
+    )
+
+
+async def test_pending_request_pushed_once_with_buttons():
+    obs = _req_observer([_mreq("mr1")], True)
+    await obs._push_pending_requests()
+    await obs._push_pending_requests()
+    assert len(obs.sent) == 1
+    text, markup = obs.sent[0]
+    assert "mr1" in text and "m8b" in text
+    assert markup["inline_keyboard"][0][0]["callback_data"] == "mr:mr1:approve"
+
+
+async def test_pending_push_disabled_by_default():
+    obs = _req_observer([_mreq("mr1")], False)
+    await obs._push_pending_requests()
+    assert obs.sent == []
+
+
+async def test_decided_requests_not_pushed():
+    obs = _req_observer([_mreq("mr1", "approved")], True)
+    await obs._push_pending_requests()
+    assert obs.sent == []
+
+
+def test_format_pending_request_card():
+    from memnc.telegram import format_pending_request
+
+    text = format_pending_request(_mreq("mr1"))
+    assert "mr1" in text and "m8b" in text
+    assert "t1" in text and "unmet needs.model" in text
