@@ -1584,7 +1584,17 @@ evidence for the Einzel-LoRA > Multi thesis.
    src/memnc/bench/runner.py — planner -> coder -> adversarial critic with an
    evidence gate (approval without counterexample/tried-list is rejected as a
    critique), max 2 revisions, checkers unchanged as final authority.
-   Bench run + report pending (needs the 120-rep full run).
+   MEASURED (2026-11-17, hard-tier 40-row run: 8 tasks x 5 reps): D 30/40
+   (75%, pooled Wilson CI [59.8, 85.8]) at 3030 tok/task mean, 3.45 llm
+   calls — below arm B (38/40 [83.5, 98.6] @ 1910 tok) on BOTH quality and
+   cost. 9/40 attempts died on inference ReadTimeouts (infra noise, counted
+   as failures); weak tasks rate_limiter (2/5) and dijkstra (2/5). D1 FAILS
+   its qualification gate (>= 7/8 AND < 3000 tok mean — it misses both).
+   D2 (k-evaluator split, strictly more expensive than D1) is disqualified
+   by the 3000-tok cost ceiling. Per the 16.3 decision rule:
+   mesh-as-refiner is DEAD for this task class — mesh stays
+   supervisor-of-one (14.15.3) and the quality difference routes into GEPA
+   prompt evolution (item 4).
 4. GEPA slice: bench-driven prompt evolution over roles.py SYSTEM_PROMPTS.
    STATUS: BUILT (2026-11-15) — src/memnc/bench/gepa.py: failure-driven
    reflective mutation from bench JSONL, Pareto candidate selection (keep
@@ -2238,6 +2248,16 @@ sources: Ultracode (adversarial refutation), non-cooperative poetry
 k-evaluators -11.1pp), Codacus (planner = biggest model), ReAct (escalate
 on unsure). A variant must rescue at least one of A's two hard failures
 (rate_limiter, dijkstra) to count as progress.
+
+MEASURED (2026-11-17, hard tier 8 tasks x 5 reps = 40 rows): D1 30/40 (75%,
+Wilson [59.8, 85.8]) @ 3030 tok/task mean, 3.45 llm calls — worse than B
+(38/40 @ 1910 tok) on quality AND cost; no rescue of the A failures
+(rate_limiter 2/5, dijkstra 2/5). D1 misses both qualification gates; the
+evidence-gate critic added ~1.6x B cost for negative quality. D2 is
+disqualified by cost before running (strictly more expensive than D1,
+which already exceeds the 3000-tok ceiling). Consequence: mesh-as-refiner
+is DEAD for this task class; keep mesh as supervisor-of-one (14.15.3) and
+route the quality difference into GEPA prompt evolution (15.3 item 4).
 
 ## 16.4 design-message-tuple.md (TalkHop communication — BUILT)
 
