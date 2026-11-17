@@ -1588,7 +1588,15 @@ evidence for the Einzel-LoRA > Multi thesis.
    (75%, pooled Wilson CI [59.8, 85.8]) at 3030 tok/task mean, 3.45 llm
    calls — below arm B (38/40 [83.5, 98.6] @ 1910 tok) on BOTH quality and
    cost. 9/40 attempts died on inference ReadTimeouts (infra noise, counted
-   as failures); weak tasks rate_limiter (2/5) and dijkstra (2/5). D1 FAILS
+   as failures); weak tasks rate_limiter (2/5) and dijkstra (2/5).
+   RETRY (2026-11-17 night): the 9 infra-failed combos re-ran on two lanes
+   (ollama lane re-failed 3x the same ReadTimeout way at ~2050s; llauncher
+   lane rescued 3: hard_bst rep0, hard_word_ladder rep1, hard_tokenizer
+   rep2; 2 dijkstra reps were still in flight). With retries folded in D
+   stands at 33/40 (82.5%) and the token mean rises to ~4800/task (rescued
+   passes were expensive: 6.7k-22.8k tokens each) — still below arm B
+   (38/40 @ 1910 tok) on BOTH quality and cost.
+   D1 FAILS
    its qualification gate (>= 7/8 AND < 3000 tok mean — it misses both).
    D2 (k-evaluator split, strictly more expensive than D1) is disqualified
    by the 3000-tok cost ceiling. Per the 16.3 decision rule:

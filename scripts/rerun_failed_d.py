@@ -1,7 +1,10 @@
 """Re-run only failed (task, rep) combos of the arm-D hard bench (ReadTimeout reruns)."""
-import asyncio, json, sys, time
-from pathlib import Path
+import asyncio
+import json
+import time
 from dataclasses import asdict
+from pathlib import Path
+
 from memnc.bench.runner import BenchEngine
 
 # (task_id, rep) of the 9 ReadTimeout failures
@@ -12,14 +15,16 @@ FAILED = [
     ("hard_word_ladder", 0), ("hard_word_ladder", 1),
     ("hard_tokenizer", 2),
 ]
+MINE = FAILED[:5]  # lane 1 splits: lower half
 
 async def main() -> None:
     import tempfile
-    from memnc.bench.tasks import load_tasks
+
     from memnc.bench.runner import write_report
+    from memnc.bench.tasks import load_tasks
     tasks = load_tasks("hard")
     by_id = {t.id: t for t in tasks}
-    suite = [{"arm": "D", "task": by_id[rid], "rep": rep} for rid, rep in FAILED]
+    suite = [{"arm": "D", "task": by_id[rid], "rep": rep} for rid, rep in MINE]
     engine = BenchEngine()
     workroot = Path(tempfile.gettempdir()) / "memnc-bench" / time.strftime("%Y%m%d-%H%M%S")
     out_path = Path("workspace/bench-d-hard-retry.jsonl")
@@ -36,7 +41,7 @@ async def main() -> None:
         await engine.close()
         if results:
             write_report(results, Path("workspace/bench-d-hard-retry.md"))
-            print(f"report written: workspace/bench-d-hard-retry.md", flush=True)
+            print("report written: workspace/bench-d-hard-retry.md", flush=True)
     n_pass = sum(1 for r in results if r.success)
     print(f"done: {n_pass}/{len(results)} passed", flush=True)
 
