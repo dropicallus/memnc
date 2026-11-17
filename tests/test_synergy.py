@@ -1,3 +1,7 @@
+"""Tests for synergy aggregation (plan section 14.13, step 3/5)."""
+
+import asyncio
+
 from memnc.observations import TaskObservation
 from memnc.synergy import (
     compute_server_success,
@@ -137,3 +141,115 @@ def test_one_in_three_keeps_claiming_at_default() -> None:
     # only clearly-bad records (0/3) bench themselves
     stats = {"node-x:model": {"total": 3, "successes": 1, "success_ratio": 1 / 3}}
     assert not should_withdraw(stats, "node-x:model")
+
+
+# -- 14.13 step 3 views: console dashboard + Telegram digest ------------------
+
+
+class _ObsBus:
+    """Fake bus exposing only list_observations (API dispatch surface)."""
+
+    def __init__(self, observations: list) -> None:
+        self._observations = observations
+
+    async def list_observations(self) -> list:
+        return self._observations
+
+
+def test_api_obs_synergy_verb() -> None:
+    from memnc.api import ApiServer
+    from memnc.config import Settings
+
+    bus = _ObsBus([_obs("t1", "done", ROUTE_A), _obs("t2", "failed", ROUTE_A)])
+    server = ApiServer(Settings(node_name="n"), bus)  # type: ignore[arg-type]
+    rows = asyncio.run(server.dispatch("obs.synergy", {}))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["pair"] == "model-a|+|model-b"
+    assert row["total"] == 2 and row["successes"] == 1
+    assert abs(row["success_ratio"] - 0.5) < 1e-9
+    assert abs(row["mean_revisions"]) < 1e-9
+
+
+def test_api_obs_synergy_empty() -> None:
+    from memnc.api import ApiServer
+    from memnc.config import Settings
+
+    server = ApiServer(Settings(node_name="n"), _ObsBus([]))  # type: ignore[arg-type]
+    assert asyncio.run(server.dispatch("obs.synergy", {})) == []
+
+
+class _ConsoleBus:
+    """Fake console-side bus: no API server reachable (nc=None) so every
+    read takes the direct-bus fallback path."""
+
+    def __init__(self, observations: list) -> None:
+        self.nc = None
+        self._observations = observations
+
+    async def list_tasks(self):
+        return []
+
+    async def list_nodes(self):
+        return []
+
+    async def list_capabilities(self):
+        return []
+
+    async def list_grants(self):
+        return []
+
+    async def list_trust(self):
+        return []
+
+    async def list_observations(self):
+        return self._observations
+
+    async def read_ledger(self):
+        return []
+
+
+def test_console_collect_state_includes_synergy() -> None:
+    from memnc.config import Settings
+    from memnc.console import collect_state
+
+    bus = _ConsoleBus([_obs("t1", "done", ROUTE_A)])
+    state = asyncio.run(collect_state(Settings(node_name="n"), bus))  # type: ignore[arg-type]
+    assert len(state["synergy"]) == 1
+    row = state["synergy"][0]
+    assert row["pair"] == "model-a|+|model-b" and row["total"] == 1
+
+
+class _FakeBot:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def send_message(self, chat: str, text: str) -> None:
+        self.sent.append((chat, text))
+
+
+class _TelegramBus(_ObsBus):
+    pass
+
+
+def test_telegram_synergy_command() -> None:
+    from memnc.telegram import TelegramObserver
+
+    obs = TelegramObserver.__new__(TelegramObserver)
+    obs.bus = _TelegramBus([_obs("t1", "done", ROUTE_A)])  # type: ignore[attr-defined]
+    obs.bot = _FakeBot()  # type: ignore[attr-defined]
+    asyncio.run(TelegramObserver.handle_command(obs, "chat1", "/synergy"))  # type: ignore[attr-defined]
+    text = obs.bot.sent[0][1]  # type: ignore[attr-defined]
+    assert "model-a + model-b" in text
+    assert "1" in text  # n column
+    assert "no model pairs" not in text
+
+
+def test_telegram_synergy_empty() -> None:
+    from memnc.telegram import TelegramObserver
+
+    obs = TelegramObserver.__new__(TelegramObserver)
+    obs.bus = _TelegramBus([])  # type: ignore[attr-defined]
+    obs.bot = _FakeBot()  # type: ignore[attr-defined]
+    asyncio.run(TelegramObserver.handle_command(obs, "chat1", "/synergy 5"))  # type: ignore[attr-defined]
+    assert "no model pairs observed yet" in obs.bot.sent[0][1]  # type: ignore[attr-defined]

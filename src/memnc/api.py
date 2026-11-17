@@ -115,6 +115,13 @@ class ApiServer:
             ]
         if verb == "trust.list":
             return [t.model_dump() for t in await self.bus.list_trust()]
+        if verb == "obs.synergy":
+            # 14.13 step 3 view: model-pair synergy for console/Telegram
+            # dashboards (read-only, computed from deposited observations).
+            from .synergy import compute_synergy_metrics
+
+            metrics = compute_synergy_metrics(await self.bus.list_observations())
+            return [{"pair": pair, **m} for pair, m in metrics.items()]
         if verb == "ledger.read":
             return await self.bus.read_ledger()
         raise ValueError(f"unknown verb {verb!r}")

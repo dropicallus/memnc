@@ -56,6 +56,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("state", "task state", "<task-id>"),
             ("trace", "debate trace + routing", "<task-id>"),
             ("obslast", "recent observations", "[model] [limit]"),
+            ("synergy", "model-pair synergy table", "[limit]"),
             ("mreqs", "model requests", ""),
             ("mrep", "model reputation", ""),
         ],
@@ -620,6 +621,16 @@ class TelegramObserver:
             observations = await self.bus.list_observations()
             model = parts[1].strip() if len(parts) >= 2 else None
             await self.bot.send_message(chat, format_observations(observations, model))
+        elif cmd == "synergy":
+            from memnc.synergy import compute_synergy_metrics, format_synergy
+
+            observations = await self.bus.list_observations()
+            limit = 10
+            if len(parts) >= 2 and parts[1].strip().isdigit():
+                limit = int(parts[1].strip())
+            await self.bot.send_message(
+                chat, format_synergy(compute_synergy_metrics(observations), limit)
+            )
         elif cmd in ("node", "nodes"):
             # M11a: query the mesh API, not local state — this is the
             # first Telegram command routed through mesh.api.request.*.

@@ -468,7 +468,7 @@ revisions, sample size per unordered model pair), exposed as
 `meshctl synergy [--limit N]` (verified live against the mesh KV).
 Console dashboard + optional Telegram digest still open. No routing
 decisions — measurement first (
-§14.13 Steps 1–4 all DONE (Step 4 similarity/ranked attention: `experience.py`, commit below); console dashboard + Telegram digest still open |
+§14.13 Steps 1–4 all DONE (Step 4 similarity/ranked attention: `experience.py`, commit below); console dashboard + Telegram digest DONE (2026-11-17 night-builder: read verb `obs.synergy` in `api.py`, console "Synergy (model pairs)" table via the standard API-client/fallback path, Telegram `/synergy [limit]` reusing `format_synergy`) |
 | B2 | Role-specific LoRA adapters | One adapter slot per role (planner/coder/critic) on a shared base; trained on TaskObservations from B1. **Training backend exists as a standalone vendored copy** (Unsloth QLoRA+EWC on Qwen2.5-7B, Fisher tooling, GGUF/Ollama hot-swap — proven loop from the memory project, 2026-09). B2 = data bridge (observations → per-role splits), not a new training stack. Dense LoRAs only: MoE-expert LoRAs are not servable on AMD/Vulkan. | §19 P0 (MoRSE) |
 | B3 | Leader synthesis layer (MLPO pattern, no RL yet) | Orchestrator/critic prompt layer: leader receives all worker outputs with an explicit verify-and-backtrack instruction; difficulty filter skips routing tasks every available worker solves. Orchestration code, not training. | §18 + §19 P0 (MLPO, arXiv 2507.08960) |
 | B4 | Fisher-Merge pipeline | mergekit-based merge of role adapters with a subspace-divergence check (principal angles) before merging; naive averaging is known to degrade (MoRSE result). | §19 P0 + synthesis.md §5 |

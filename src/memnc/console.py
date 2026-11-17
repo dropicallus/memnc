@@ -73,6 +73,7 @@ a { color:#58a6ff; text-decoration:none; }
 <h2>Node roster (capabilities)</h2><table id="caps"></table>
 <h2>Grants</h2><table id="grants"></table>
 <h2>Trust</h2><table id="trust"></table>
+<h2>Synergy (model pairs)</h2><table id="synergy"></table>
 <h2>Ledger</h2><pre id="ledger">…</pre>
 <div id="detail"></div>
 <script>
@@ -131,6 +132,15 @@ async function poll() {
         `<tr><td>${esc(t.subject)}</td>` +
         `<td class="${t.score < .3 ? "bad" : "ok"}">${t.score.toFixed(2)}</td>` +
         `<td>${esc(t.last_outcome ?? "")}</td></tr>`).join(""));
+    fill("synergy",
+      "<tr><th>pair</th><th>n</th><th>successes</th><th>ratio</th><th>mean rev</th></tr>" +
+      (d.synergy || []).map(s => {
+        const parts = s.pair.split("|+|");
+        const a = parts[0], b = parts.length > 1 ? parts[1] : "?";
+        const cls = s.success_ratio >= .7 ? "ok" : (s.success_ratio < .4 ? "bad" : "warn");
+        return `<tr><td>${esc(a)} + ${esc(b)}</td><td>${s.total}</td>` +
+          `<td>${s.successes}</td><td class="${cls}">${s.success_ratio.toFixed(2)}</td>` +
+          `<td>${s.mean_revisions.toFixed(2)}</td></tr>`;}).join(""));
     fill("ledger", esc(JSON.stringify(d.ledger, null, 2)));
   } catch (e) {
     document.getElementById("status").innerHTML =
@@ -216,11 +226,18 @@ async def collect_state(settings, bus) -> dict:
         except Exception:  # noqa: BLE001 - degrade to direct read, keep UI alive
             return await fallback()
 
+    async def _synergy_fallback() -> list[dict]:
+        from .synergy import compute_synergy_metrics
+
+        metrics = compute_synergy_metrics(await bus.list_observations())
+        return [{"pair": pair, **m} for pair, m in metrics.items()]
+
     tasks = await try_api("task.list", bus.list_tasks)
     nodes = await try_api("node.list", bus.list_nodes)
     caps = await try_api("cap.list", bus.list_capabilities)
     grants = await try_api("grant.list", bus.list_grants)
     trust = await try_api("trust.list", bus.list_trust)
+    synergy = await try_api("obs.synergy", _synergy_fallback)
     ledger = await try_api("ledger.read", bus.read_ledger)
     return {
         "nats_url": settings.nats_url,
@@ -268,6 +285,7 @@ async def collect_state(settings, bus) -> dict:
             }
             for t in trust
         ],
+        "synergy": synergy,
         "ledger": ledger,
     }
 
