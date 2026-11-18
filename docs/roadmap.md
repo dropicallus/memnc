@@ -2061,6 +2061,38 @@ note must close them):
 3. Claimed vs. existing artifacts are never cross-checked: every file path
    in a code result is stat'ed by the orchestrator before DONE is written.
 
+### 15.4.6 Scheduling gate: VRAM as schedulable resource (design note, 2026-11-18, before coding)
+
+Frank's rule (standing decision): a model either fits fully in VRAM or is a
+MoE with a hot cache for the experts. Model configs where less than half
+the model sits in VRAM (observed in production: an ollama rest-split of a
+MoE-class quant where only a small fraction of the weights stayed in VRAM)
+are senseless and must be rejected DETERMINISTICALLY — not
+by agent judgment, but by the loader. Kubernetes analogy: a pod that fits
+no node never starts; it stays Pending with FailedScheduling. No
+half-started substitutes.
+
+Design:
+1. VRAM becomes a schedulable resource like cpu/memory in K8s. Every
+   registry entry declares `model_bytes + kv_cache_bytes` (computable
+   from quant, n_ctx, ngl); every node reports free VRAM (scan-refresh
+   inventory already carries this).
+2. Admission BEFORE load: the loader / llauncher runs a fit check —
+   `fit(node, model)` -> zero fitting nodes means REJECT before load,
+   status `unschedulable`, event published to health/backlog. No
+   ngl-rest-split fallback; a model that fits nowhere is never started.
+3. MoE models are the special case, mapped to K8s taints/labels: only
+   nodes with hot-cache capability carry the label; MoE-with-hot-cache
+   models schedule only there. `placement: full | moe-hot-cache` field
+   on the registry entry makes this a static loader check.
+4. Ollama specifically: set num_gpu so no partial load can happen; after
+   any load, probe `size_vram` and if it is below a threshold (e.g.
+   <90% of model bytes) discard the load automatically and publish
+   health `degraded:rest-split`.
+
+Non-goal: a new scheduler. This is one fit() function + one field +
+one reject path in the existing load/validate flow.
+
 ### 15.4.5 DONE-gate hardening (design note; gaps 1-2 shipped)
 
 Closing the three gaps from the fabrication finding above. Layered defense:
