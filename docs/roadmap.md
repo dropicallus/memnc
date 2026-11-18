@@ -962,8 +962,8 @@ API client too: collect_state/task detail/control POST go through
 api_request (reads: task.list/node.list + new cap.list/grant.list/
 trust.list/ledger.read verbs; fallback to direct Bus reads if the API
 server is down); node load is part of the resource view.
-Next: M11d NL agent. Channels/human-as-peer from 5a feed into S4
-(approval gate) — S4 and M11b merge.
+Next: M11d NL agent — design written, see section 17. Channels/human-as-peer
+from 5a feed into S4 (approval gate) — S4 and M11b merge.
 
 ## P4 — Infra robustness (decided 2026-11-13)
 
@@ -2373,3 +2373,83 @@ Two layers: this roadmap file (distilled, versioned) + KV pheromones
   report-full-2026-11-15.md — seeded bench results (120-row full run:
   A 82.5% @ 609 tok/task, CIs and per-tier tables inside). Durable numbers
   live in section 15 and the experience notes above.
+
+# 17. M11d — model-mediated NL agent (design note, before code)
+
+The operator asks natural-language questions of the mesh ("what failed
+overnight?", "why did the dijkstra task fail?", "which node should take the
+next hard task?") and gets answers grounded in live mesh state, with
+optional control actions executed ONLY through the existing grant-checked
+control path. Design-first per the standing rule: nothing here is built
+until the design is approved.
+
+## 17.1 Shape
+
+- One new frontend, same class as Telegram/console: `src/memnc/nlagent.py`,
+  CLI entry `meshctl ask "<question>"` (no new long-lived daemon in v1 — a
+  daemon is only needed once the agent becomes conversational across turns,
+  deferred). The agent is an API client, never a second writer.
+- Model-mediated tool loop: the LLM sees the question plus a catalog of the
+  API read verbs (task.list, task.detail, node.list, node.detail, cap.list,
+  grant.list, trust.list, ledger.read, obs.synergy, observations via the
+  same path `meshctl obslast` uses) and calls them as tools; results come
+  back as tool messages; the loop ends with an answer. Reuses the
+  tool-call-echo parsing rules from the role pipeline (collect ALL JSON
+  candidates, skip echoes, validate, richest wins).
+- Budget guards (hard caps, not advisory): max 8 tool calls and max 3 model
+  turns per question; per-call timeout = the shared inference timeout;
+  oversized verb results are truncated head+tail to a bounded char budget
+  before entering the prompt (task.detail traces are the big ones).
+
+## 17.2 Authority and security (standing invariants, restated for this slice)
+
+- Read verbs are directly callable. WRITE verbs are never executed by the
+  agent in v1: when the model concludes an action is warranted, the answer
+  renders a PROPOSAL block (`proposed: task.retry <id>` etc.) for the human
+  to run. v2 may add one-tap confirm, riding the Telegram button path —
+  buttons only transport existing ControlCommands, no new authority path.
+- `agent_id` for any future write ride-along must avoid `:` (KV key rule),
+  e.g. `nlagent-cli`; the orchestrator's grant gate still applies unchanged
+  — autonomy limits control, never authentication.
+- Untrusted data rule: task summaries, trace text, critic objections and
+  error strings fed to the model are UNTRUSTED DATA, never instructions.
+  The system prompt states this explicitly; a prompt-injection attempt
+  inside a task error message must not be able to trigger tool calls beyond
+  the read set. Belt: only the fixed read-verb table is even callable, so
+  injected instructions cannot reach a write path at all in v1.
+- No secrets in payloads: settings/secrets are resolved at point of use;
+  the curated-env subprocess rules apply if the agent ever shells out (v1:
+  it does not).
+- Listening surface: none (CLI runs, connects to the bus, exits). No port,
+  nothing to expose.
+
+## 17.3 Model and failure behaviour
+
+- Config: `nlagent_model` (default = the critic-tier model — synthesis and
+  review is its measured strength; NOT the coder), `nlagent_max_turns` (3),
+  `nlagent_max_tool_calls` (8). Inference via the local serving layer URL
+  from Settings, same as other frontends.
+- Fail-closed: unparseable model output or exhausted budget returns the
+  tool results as a raw digest with a "could not synthesize" marker instead
+  of a confident hallucinated answer. No model reachable -> the command
+  fails with that reason; it never falls back to guessing.
+
+## 17.4 Non-goals (v1)
+
+- No conversational memory across invocations (each `ask` is fresh; the
+  experience store + pheromones are the mesh's memory, not the agent's).
+- No task submission through the agent (the backlog/meshctl submit flow
+  already owns intent capture), no WAIT_INPUT answering (that stays the
+  human's job via the chain grant), no channel/human-as-peer integration
+  (feeds in later from the M11a leftover).
+- No embeddings/graph retrieval — reads go through the existing verbs; the
+  experience-graph Step 4 surfaces (similar/obslast) are reachable later by
+  exposing them as verbs, not by giving the agent direct KV access.
+
+## 17.5 Tests (style: sync tests + asyncio.run, no decorators)
+
+- Verb catalog rendering; tool-call parse (echo skipping, invalid JSON
+  tolerated); budget exhaustion returns digest not answer; untrusted-data
+  system-prompt text present; proposal block rendering; fake bus/api stubs
+  per the FakeBus patterns (no publish_envelope assumption).
+
