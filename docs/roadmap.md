@@ -740,6 +740,58 @@ Scheduled offline walk: decay, consolidate corroborated traces,
 archive contradicted edges, refresh god-node rankings. Human-approved
 design first; optional proposal digest for human sign-off.
 
+**Step 6 design (written 2026-11-18, build pending — human sign-off = enable
+the flag).** The dreaming job is a scheduled, deterministic, offline walk over
+the durable knowledge stores. STATUS: DESIGN — no code yet; nothing below may
+ship without the operator enabling `dreaming_enabled`.
+
+- **Stores walked (all already shipped):** `mesh_observations` KV (TaskObservation
+  deposits), the file-backed experience store (experience_store.py bullets),
+  the `mesh_pheromones` field, the synergy/success aggregation (synergy.py).
+- **Timing:** systemd user timer on the host node, nightly, one invocation.
+  Skip-if-busy gate: the job reads task snapshots first and SKIPS (logs, no
+  error) while any task is in a claim state — it must never race the CAS
+  layer. Secondary single-writer guard: KV lock key `dream.lock` (timestamp
+  claim, stale-claim reclaim, backlog-style) so a manual rerun cannot double
+  consolidate.
+- **Passes (in order, each pass deterministic, no model calls, `now` injectable):**
+  1. *Consolidate:* cluster observations by token similarity (reuse
+     `experience.jaccard` / `observation_similarity`, threshold = the existing
+     corroboration threshold); per cluster emit ONE task-pattern bullet via
+     experience_store `merge()` — "task-type T: n runs, success rate, best
+     route/model pair, dominant failure cause". Deterministic bullet text, no
+     free prose from models. These bullets feed `ranked_attention` corroboration
+     and act as pheromone seed deposits for future routing.
+  2. *Contradiction sweep:* within a task-type cluster, if the newest
+     observations flip the previously best route/synergy pair, append a
+     supersession bullet (old pattern explicitly superseded with the evidence
+     line). The old bullet stays — consolidation, never deletion.
+  3. *Archive accounting:* observations older than the retention window are
+     counted and reported; their KV entries are NOT deleted (KV history keeps
+     them). Deletion stays out of dreaming entirely.
+  4. *Rankings refresh:* recompute synergy metrics + server success ratios and
+     write a summary bullet per changed ranking (only when changed, to keep
+     near-duplicate folding cheap).
+- **Decay discipline:** pheromone decay already runs hourly in the orchestrator
+  `_pheromone_loop`; dreaming does NOT double-decay the field. Attention decay
+  lives only in read paths (`ranked_attention` half-life). Dreaming is additive
+  over the experience store only.
+- **Output + sign-off:** the job appends its own bullets under topic
+  `dream.<run-id>` and prints a digest via `meshctl dream [--dry-run]`
+  (dry-run: no store writes, prints the proposed bullets). A Telegram digest
+  broadcast is a separate config flag, default OFF (noise rule: only real
+  outcomes reach the chat). Enabling `dreaming_enabled` is the human approval
+  step; `--dry-run` lets the operator audit before enabling.
+- **Guardrails:** best-effort end to end (never raises into the pipeline); the
+  only writes are monotone experience-store appends through the guarded
+  `merge()`/`compress()` path (brevity-bias guard unchanged); no secrets, no
+  hardware facts in bullets; bullet text English only.
+- **Build order:** (1) pure-logic module `src/memnc/dreaming.py` (cluster +
+  bullet generation, sync functions, unit tests without network); (2) job
+  wrapper `python -m memnc.dreaming --dry-run/--apply` (Bus, lock, store
+  append); (3) systemd unit + timer under `scripts/systemd/`; (4) `meshctl
+  dream` read verb. Each step extends/tests/hardens separately.
+
 **Step 7 — Distributed graphs + god nodes (later).**
 Per-node graph shards, selective merge, god-node risk hook in claims.
 
