@@ -1643,8 +1643,19 @@ evidence for the Einzel-LoRA > Multi thesis.
    INFERENCE_TIMEOUT_S=180 s; Gemma-31B reflection needs minutes). Restarted
    with INFERENCE_TIMEOUT_S=7200 + INFERENCE_BASE_URL=http://127.0.0.1:11434
    (ollama lane), -u unbuffered, --arm D --role coder --tier hard
-   --generations 3 -> workspace/gepa-d-coder-frontier.jsonl. Overnight run;
-   verdict appended when done.
+   --generations 3 -> workspace/gepa-d-coder-frontier.jsonl.
+   VERDICT (2026-11-18): run completed — the frontier holds two candidates
+   whose union covers ALL 3 seed failures (gen1 wins hard_rate_limiter +
+   hard_word_ladder, gen2 wins hard_dijkstra; gen0 baseline wins none). The
+   reflective mutations are task-relevant: verify workspace accessibility,
+   complete-file-inclusion in the JSON, self-verify via run_shell, and
+   failure-trace-derived rules (e.g. the burst semantics rule that fixed
+   rate_limiter). Caveats, per design: single rep0 pass (no statistical
+   weight), the gen1 prompt carries a task-specific "rate limiter" rule —
+   overfitting risk; the generalizable core is the workspace-verify +
+   complete-files + self-verify trio. Next (deferred, needs an unattended
+   multi-hour window): a multi-rep validation run of the gen1 prompt on the
+   full hard tier before promoting it into roles.py.
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
    STATUS: BUILT (2026-11-15) — src/memnc/experience_store.py (design in
