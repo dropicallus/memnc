@@ -63,13 +63,13 @@ class ApiAgent:
     async def ask(self, question: str) -> str:
         verb, args = await self._plan(question)
         if not verb:
-            return "Das ist keine Mesh-Afrage — ich kann Tasks, Nodes, Caps, Grants, Trust und Ledger abfragen."
+            return "That is not a mesh API question - I can query tasks, nodes, caps, grants, trust and ledger."
         if verb not in self.allowed:
-            return f"verweigert: Verb {verb!r} ist für den Agenten nicht freigegeben"
+            return f"refused: verb {verb!r} is not allowed for the agent"
         try:
             resp = await api_request(self.bus, verb, timeout=30, **args)
         except Exception as exc:  # noqa: BLE001 - surface the cause, never crash
-            return f"Fehler bei {verb}: {exc}"
+            return f"error calling {verb}: {exc}"
         return self._format(verb, resp["data"])
 
     # -- model call -----------------------------------------------------------
@@ -115,12 +115,12 @@ class ApiAgent:
     def _format(verb: str, data: Any) -> str:
         if verb == "task.list":
             if not data:
-                return "Keine Tasks."
+                return "No tasks."
             rows = [
                 f"#{t['task_id'][:12]} {t['state']} ({t.get('claimed_by', '') or 'unclaimed'})"
                 for t in data
             ]
-            return f"{len(rows)} Tasks:\n" + "\n".join(rows)
+            return f"{len(rows)} tasks:\n" + "\n".join(rows)
         if verb == "node.list":
             rows = [
                 f"{n['node_id']}: roles={','.join(n['roles'])} load={n.get('load', 0):.0%}"
@@ -137,7 +137,7 @@ class ApiAgent:
                 f" load={node.get('load', 0):.0%} vram={node.get('vram_gb', 0)}GB"
             )
             if not tasks:
-                return head + " — keine Tasks"
+                return head + " - no tasks"
             return head + "\n" + "\n".join(f"#{t['task_id'][:12]} {t['state']}" for t in tasks)
         if verb == "task.submit":
             return f"submitted: #{data.get('task_id')}"

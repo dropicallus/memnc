@@ -962,7 +962,7 @@ API client too: collect_state/task detail/control POST go through
 api_request (reads: task.list/node.list + new cap.list/grant.list/
 trust.list/ledger.read verbs; fallback to direct Bus reads if the API
 server is down); node load is part of the resource view.
-Next: M11d NL agent — design written, see section 17. Channels/human-as-peer
+M11d NL agent: shipped as src/memnc/api_agent.py + `meshctl ask` (see section 17). Channels/human-as-peer
 from 5a feed into S4 (approval gate) — S4 and M11b merge.
 
 ## P4 — Infra robustness (decided 2026-11-13)
@@ -2407,6 +2407,16 @@ Two layers: this roadmap file (distilled, versioned) + KV pheromones
   live in section 15 and the experience notes above.
 
 # 17. M11d — model-mediated NL agent (design note, before code)
+
+**Status (shipped):** implemented as `src/memnc/api_agent.py` + `meshctl ask`
+(CLI wired in cli.py). Deliberate deviations from the v1 sketch below, kept
+small on purpose: the agent is a single-turn plan -> one API call -> render
+(no multi-turn tool loop yet; the loop and proposal blocks are the v2
+refinement). The write-verb rule is enforced by the fail-closed
+`agent_allowed_verbs` allowlist instead of proposal rendering — the default
+allowlist includes `task.submit`, so a write is still grant-checked by the
+orchestrator. Budget guards, untrusted-data system prompt, and echo-skipping
+parse follow the design. Tests: tests/test_api_agent.py.
 
 The operator asks natural-language questions of the mesh ("what failed
 overnight?", "why did the dijkstra task fail?", "which node should take the

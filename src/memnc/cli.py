@@ -249,6 +249,20 @@ async def cmd_obslast(args: argparse.Namespace, settings: Settings) -> int:
         await bus.close()
 
 
+async def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
+    """M11d: one natural-language question, answered via the mesh API agent."""
+    from memnc.api_agent import ApiAgent
+
+    bus = Bus(settings)
+    await bus.connect()
+    try:
+        agent = ApiAgent(settings, bus)
+        print(await agent.ask(args.question))
+        return 0
+    finally:
+        await bus.close()
+
+
 async def cmd_pheromone(args: argparse.Namespace, settings: Settings) -> int:
     """14.15.10: pheromone field view (ACO strategy scores per task type)."""
     from memnc.pheromone import format_pheromones
@@ -1058,6 +1072,12 @@ def build_parser() -> argparse.ArgumentParser:
     obslast.add_argument("--model", default=None, help="only tasks served by MODEL")
     obslast.add_argument("--limit", type=int, default=10)
     obslast.set_defaults(func=cmd_obslast)
+    ask = subparsers.add_parser(
+        "ask", help="M11d: ask a natural-language question about the mesh"
+    )
+    ask.add_argument("question", help="the question, in quotes")
+    ask.set_defaults(func=cmd_ask)
+
 
     pheromone = subparsers.add_parser(
         "pheromone", help="14.15.10: pheromone routing field (ACO scores)"

@@ -63,7 +63,7 @@ async def test_ask_routes_nl_to_api_verb(monkeypatch):
     )
     out = await agent.ask("Was macht node-a gerade?")
     assert "node node-a roles=coder" in out
-    assert "no tasks" not in out or "keine Tasks" in out
+    assert "- no tasks" in out
 
 
 @pytest.mark.asyncio
@@ -95,14 +95,14 @@ async def test_ask_refuses_disallowed_verb(monkeypatch):
         agent_allowed_verbs="task.list,node.list",
     )
     out = await agent.ask("Stop the worker")
-    assert "verweigert" in out and "node.stop_worker" in out
+    assert "refused" in out and "node.stop_worker" in out
 
 
 @pytest.mark.asyncio
 async def test_ask_handles_non_api_question(monkeypatch):
     agent, _bus = _agent(monkeypatch, json.dumps({"verb": "", "args": {}}))
     out = await agent.ask("Erzähl mir einen Witz")
-    assert "keine Mesh-Afrage" in out
+    assert "not a mesh API question" in out
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_ask_surfaces_api_error(monkeypatch):
         json.dumps({"verb": "task.detail", "args": {"task_id": "missing"}}),
     )
     out = await agent.ask("Wo ist task missing?")
-    assert "Fehler bei task.detail" in out
+    assert "error calling task.detail" in out
 
 
 def test_parse_plan_tolerates_fences():
@@ -122,3 +122,21 @@ def test_parse_plan_tolerates_fences():
     )
     assert ApiAgent._parse_plan("no json here") == ("", {})
     assert ApiAgent._parse_plan('{"verb": "task.list", "args": null}') == ("task.list", {})
+
+def test_ask_cli_parser_wiring():
+
+    from memnc import cli
+
+    parser = cli.build_parser() if hasattr(cli, "build_parser") else None
+    if parser is None:
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            try:
+                cli.main(["ask", "--help"])
+            except SystemExit:
+                pass
+        assert "question" in buf.getvalue()
+        return
+    ns = parser.parse_args(["ask", "how many tasks?"])
+    assert ns.question == "how many tasks?"
