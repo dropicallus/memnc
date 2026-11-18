@@ -84,6 +84,20 @@ class TestDump:
         data = await dump_buckets(bus)
         assert set(data["buckets"]) == {"workflow_state"}
 
+    async def test_empty_bucket_keys_error_dumps_empty(self) -> None:
+        # a bucket that exists but holds no keys raises NoKeysError on
+        # keys() (nats-py) — the dump must treat it as {} not crash
+        from nats.js.errors import NoKeysError
+
+        class EmptyKV(FakeKV):
+            async def keys(self):
+                raise NoKeysError
+
+        kv = EmptyKV()
+        bus = _bus({"workflow_state": kv})
+        data = await dump_buckets(bus)
+        assert data["buckets"]["workflow_state"] == {}
+
     async def test_empty_value_backed_up_as_empty_string(self) -> None:
         kv = FakeKV()
         kv._store["task.x"] = None

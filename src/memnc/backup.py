@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from nats.js.errors import NoKeysError
+
 from .config import Settings
 from .observations import OBSERVATIONS_BUCKET
 from .revocation import REVOCATIONS_BUCKET
@@ -48,7 +50,11 @@ async def dump_buckets(bus) -> dict:
             log.info("backup: bucket %s absent, skipped", name)
             continue
         entries: dict[str, str] = {}
-        for key in sorted(await kv.keys()):
+        try:
+            key_list = await kv.keys()
+        except NoKeysError:  # empty bucket — valid, dumps as {}
+            key_list = []
+        for key in sorted(key_list):
             entry = await kv.get(key)
             entries[key] = entry.value.decode("utf-8") if entry.value else ""
         buckets[name] = entries
