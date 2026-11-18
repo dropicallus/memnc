@@ -2494,4 +2494,37 @@ until the design is approved.
   tolerated); budget exhaustion returns digest not answer; untrusted-data
   system-prompt text present; proposal block rendering; fake bus/api stubs
   per the FakeBus patterns (no publish_envelope assumption).
+## 18. Throughput verdict + monitoring MCP tools (shipped, live-verified)
+
+### 18.1 Monitor MCP tools
+`src/memnc/mcp/tools_monitor.py` adds `gpu_status`, `inference_status`,
+`run_status`, `daemon_status` to the memnc MCP server. They read kernel
+interfaces and service sockets directly (no subprocess shell-outs for
+read-only status). Use these tools instead of one-off tail/pgrep/curl
+loops in agent chats.
+
+### 18.2 Throughput verdict (Frank's formula)
+Decode is bandwidth-limited: a dense model reads all weights per token, a
+MoE only the active experts.
+
+    expected_tok_s ~ sum(gpu_bandwidth_i) / weighted_bytes_per_token
+    efficiency     = real / expected
+
+Verdict thresholds on `efficiency`: below 0.5 -> `setup-unfit` (the setup
+is pointless for coding), below 0.75 -> `suboptimal`, otherwise `ok`.
+An absolute warning (`tok_s_warn_below`, default 30 tok/s) fires when the
+real decode speed falls under that line.
+
+Config: `~/.config/memnc/throughput.json` — deliberately OUTSIDE the repo
+(it names concrete hardware and must never leak into a shared tree;
+overridable via `MEMNC_THROUGHPUT_CONFIG`). Without a config file the
+throughput fields return `null` and the tool stays fully functional, just
+without a verdict.
+
+### 18.3 llauncher backend
+`src/memnc/backends/llauncher.py` adds a backend that talks to the local
+llauncher-managed llama-server lane, registered alongside the existing
+backends in `backends/__init__.py`. Follow-up: unit tests for the monitor
+tools, the llauncher backend and the GEPA checkpoint-resume path (all
+three shipped live-verified first).
 

@@ -13,6 +13,10 @@ from .tools_fs import list_dir as _list_dir
 from .tools_fs import read_file as _read_file
 from .tools_fs import search_text as _search_text
 from .tools_fs import write_file as _write_file
+from .tools_monitor import daemon_status as _daemon_status
+from .tools_monitor import gpu_status as _gpu_status
+from .tools_monitor import inference_status as _inference_status
+from .tools_monitor import run_status as _run_status
 from .tools_shell import run_shell as _run_shell
 
 log = logging.getLogger(__name__)
@@ -48,6 +52,26 @@ def create_server(
     def search_text(pattern: str, glob: str = "**/*", max_results: int = 100) -> str:
         """Regex-search text files in the workspace."""
         return _search_text(workspace, pattern, glob, max_results)
+
+    @server.tool()
+    def gpu_status() -> dict:
+        """Per-GPU used/total VRAM on this node."""
+        return _gpu_status()
+
+    @server.tool()
+    def inference_status() -> dict:
+        """Both inference lanes: ollama :11434 and llama-server :8098."""
+        return _inference_status()
+
+    @server.tool()
+    def run_status(pattern: str, log: str = "", ckpt: str = "") -> dict:
+        """Long-running job status: process liveness + checkpoint progress + log tail."""
+        return _run_status(pattern, log=log or None, ckpt=ckpt or None)
+
+    @server.tool()
+    def daemon_status(units: str = "memnc-backlog-driver") -> dict:
+        """systemd --user unit states (comma-separated unit names)."""
+        return _daemon_status(units)
 
     @server.tool()
     async def run_shell(cmd: str, cwd: str = ".", timeout_s: int = 0) -> str:
