@@ -957,14 +957,16 @@ Next: M11d NL agent. Channels/human-as-peer from 5a feed into S4
 
 Topology support is DONE (see Built). Open infra slices:
 
-1. **NATS cold-standby backup (Duo topology)**: periodic KV/ledger backup
-   on the active node (nats stream backup / KV export into the nats-data
-   companion), documented promote/restore for the second host. Recovery
-   point = time since last backup; acceptable for a 2-host setup (Raft
-   majority impossible without a 3rd voter). Decision: this is the
-   failover story until the mesh goes productive; a data-less witness
-   (tiny VPS, ~30 MB RAM) is the upgrade path to real automatic failover
-   (Mesh topology, replicas=3).
+1. **NATS cold-standby backup (Duo topology)**: DONE — `meshctl backup`
+   dumps the durable KV buckets, cron `scripts/cold-standby-backup.sh`
+   every 15 min, 14d retention. 2026-11-18 hardening after the H4 NKey
+   migration silently broke the cron (Authorization Violation, no backups
+   for 4 days): the script now authenticates with the operator NKey seed
+   (`NATS_NKEYS_SEED`) instead of the legacy token, forces the loopback
+   URL (the `.env` URL is the compose hostname, unresolvable on the
+   host), and derives the repo root from the meshctl path correctly.
+   `dump_buckets` no longer crashes on an empty bucket (nats-py raises
+   `NoKeysError` on `keys()` — now dumped as `{}`, regression-tested).
 2. **Node update logic**: DONE — deterministic code fingerprints
    (`memnc.version`), orchestrator stamps `mesh_version` into dispatch,
    workers refuse mismatched code when `enforce_node_version` is on
