@@ -1628,7 +1628,14 @@ evidence for the Einzel-LoRA > Multi thesis.
    tests/test_gepa.py (failure harvest, tolerant proposal parsing, Pareto
    front, prompt swap/restore incl. error path, crossover pair selection +
    evolve-operator alternation).
-   A live evolution run awaits the 120-rep full bench run (item 1).
+   LIVE RUN (2026-11-18 night, in flight): first two starts died — one
+   no-op (--arm B: no failures in the D-only merged.jsonl), one httpx
+   ReadTimeout on the reflection call (backend timeout defaults to
+   INFERENCE_TIMEOUT_S=180 s; Gemma-31B reflection needs minutes). Restarted
+   with INFERENCE_TIMEOUT_S=7200 + INFERENCE_BASE_URL=http://127.0.0.1:11434
+   (ollama lane), -u unbuffered, --arm D --role coder --tier hard
+   --generations 3 -> workspace/gepa-d-coder-frontier.jsonl. Overnight run;
+   verdict appended when done.
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
    STATUS: BUILT (2026-11-15) — src/memnc/experience_store.py (design in
