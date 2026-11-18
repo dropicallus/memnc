@@ -34,8 +34,10 @@ outputs — unit tests inject a fake reflection backend.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
+import os
 import tempfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -272,6 +274,7 @@ async def evaluate_candidate(
     candidate: Candidate,
     tasks: Iterable[Any],
     arm: str,
+    ckpt_path: Path | None = None,
 ) -> Candidate:
     """Re-run the bench arm with ONLY this role's prompt overridden.
 
@@ -279,6 +282,10 @@ async def evaluate_candidate(
     roles.SYSTEM_PROMPTS[<role>] is swapped for the candidate prompt and
     restored afterwards (finally) — concurrent evaluations share the
     process, so this must run serially.
+
+    With ``ckpt_path``, per-task results are appended to that JSONL as
+    they finish and previously recorded (prompt-key, task_id) results are
+    skipped — an interrupted run resumes instead of re-rolling.
     """
     from memnc.roles import SYSTEM_PROMPTS, Role
 
@@ -286,10 +293,25 @@ async def evaluate_candidate(
     original = SYSTEM_PROMPTS[role]
     SYSTEM_PROMPTS[role] = candidate.prompt
     try:
+        key = prompt_key(candidate.gen, candidate.prompt)
         for task in tasks:
+            if ckpt_path is not None and (key, task.id) in load_eval_ckpt(ckpt_path):
+                log.info("ckpt hit: %s/%s — skipping rollout", key[:8], task.id)
+                continue
             with tempfile_workdir() as workroot:
                 result = await engine.run_task(task, arm, 0, workroot)
             candidate.scores[task.id] = bool(result.success)
+            if ckpt_path is not None:
+                append_ckpt(
+                    ckpt_path,
+                    {
+                        "kind": "eval",
+                        "key": key,
+                        "prompt": candidate.prompt,
+                        "task_id": task.id,
+                        "success": bool(result.success),
+                    },
+                )
     finally:
         SYSTEM_PROMPTS[role] = original
     return candidate
@@ -304,6 +326,7 @@ async def evolve(
     failures: list[FailureExample],
     generations: int = 3,
     eval_tasks: list[Any] | None = None,
+    ckpt_path: Path | None = None,
 ) -> list[Candidate]:
     """GEPA loop: mutate from failures, evaluate, Pareto-prune, crossover.
 
@@ -311,6 +334,10 @@ async def evolve(
     to caller-supplied eval_tasks; callers should always pass them — the
     module never maps failure ids back to tasks). Returns the final Pareto
     frontier (best-on-at-least-one-task set).
+
+    With ``ckpt_path``, reflection proposals AND per-task eval results are
+    checkpointed (append-only JSONL); on resume, already-recorded
+    proposals and eval results are reused instead of re-computed.
     """
     if eval_tasks is None:
         raise ValueError(
@@ -320,21 +347,94 @@ async def evolve(
     tasks = eval_tasks
     seed = Candidate(role=role_name, prompt=base_prompt, gen=0)
     pool = [seed]
+    proposals = load_proposal_ckpt(ckpt_path) if ckpt_path is not None else {}
     for gen in range(1, generations + 1):
         # GEPA alternates the two operators: mutate from failures while the
         # pool is thin, crossover once the frontier holds complementary
         # specialists (a degenerate pool falls back to mutation).
         a, b = pick_crossover_pair(pool)
         if gen > 1 and a is not b:
-            child_prompt = await propose_crossover(
-                reflect_chat, a.prompt, b.prompt, failures
-            )
+            p_key = proposal_key("crossover", a.prompt, b.prompt)
+            if p_key in proposals:
+                child_prompt = proposals[p_key]
+            else:
+                child_prompt = await propose_crossover(
+                    reflect_chat, a.prompt, b.prompt, failures
+                )
+                if ckpt_path is not None:
+                    append_ckpt(
+                        ckpt_path,
+                        {"kind": "proposal", "key": p_key, "prompt": child_prompt},
+                    )
         else:
-            child_prompt = await propose_mutation(reflect_chat, pool[0].prompt, failures)
+            p_key = proposal_key("mutate", pool[0].prompt)
+            if p_key in proposals:
+                child_prompt = proposals[p_key]
+            else:
+                child_prompt = await propose_mutation(
+                    reflect_chat, pool[0].prompt, failures
+                )
+                if ckpt_path is not None:
+                    append_ckpt(
+                        ckpt_path,
+                        {"kind": "proposal", "key": p_key, "prompt": child_prompt},
+                    )
         child = Candidate(role=role_name, prompt=child_prompt, gen=gen)
-        pool.append(await evaluate_candidate(engine, role_name, child, tasks, arm))
+        pool.append(
+            await evaluate_candidate(
+                engine, role_name, child, tasks, arm, ckpt_path=ckpt_path
+            )
+        )
         pool = pareto_front(pool)
     return pool
+
+
+def prompt_key(gen: int, prompt: str) -> str:
+    """Stable short key for a (generation, prompt) pair across resumes."""
+    return hashlib.sha256(f"{gen}\x00{prompt}".encode()).hexdigest()[:16]
+
+
+def proposal_key(op: str, *inputs: str) -> str:
+    """Stable key for a reflection call (operator + its prompt inputs)."""
+    joined = "\x00".join([op, *inputs])
+    return hashlib.sha256(joined.encode()).hexdigest()[:16]
+
+
+def append_ckpt(path: Path, record: dict[str, object]) -> None:
+    """Append one JSON line and flush — crash-safe incremental checkpoint."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def load_eval_ckpt(path: Path) -> dict[tuple[str, str], bool]:
+    """(prompt_key, task_id) -> success from the checkpoint JSONL."""
+    results: dict[tuple[str, str], bool] = {}
+    if not path.exists():
+        return results
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if rec.get("kind") == "eval":
+            results[(rec["key"], rec["task_id"])] = bool(rec["success"])
+    return results
+
+
+def load_proposal_ckpt(path: Path) -> dict[str, str]:
+    """proposal_key -> child prompt from the checkpoint JSONL."""
+    proposals: dict[str, str] = {}
+    if not path.exists():
+        return proposals
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if rec.get("kind") == "proposal":
+            proposals[rec["key"]] = rec["prompt"]
+    return proposals
 
 
 

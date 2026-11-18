@@ -32,6 +32,7 @@ async def run_evolution(
     out_path: Path,
     generations: int = 3,
     engine: BenchEngine | None = None,
+    ckpt_path: Path | None = None,
 ) -> list[dict[str, object]]:
     """Run one evolution and persist the Pareto frontier. Returns candidates."""
     failures = load_failures(jsonl, arm)
@@ -66,6 +67,7 @@ async def run_evolution(
         failures,
         generations=generations,
         eval_tasks=eval_tasks,
+        ckpt_path=ckpt_path,
     )
     if own_engine:
         await engine.close()
@@ -106,6 +108,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jsonl", required=True, help="bench results JSONL to harvest")
     parser.add_argument("--out", required=True, help="frontier output JSONL")
     parser.add_argument("--generations", type=int, default=3)
+    parser.add_argument(
+        "--ckpt",
+        default=None,
+        help="incremental checkpoint JSONL (default: <out>.ckpt.jsonl); "
+        "existing records are resumed, not recomputed",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     frontier = asyncio.run(
@@ -116,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.jsonl),
             Path(args.out),
             generations=args.generations,
+            ckpt_path=Path(args.ckpt) if args.ckpt else Path(args.out + ".ckpt.jsonl"),
         )
     )
     for cand in frontier:
