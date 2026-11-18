@@ -32,6 +32,7 @@ import logging
 import shutil
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -721,7 +722,54 @@ def write_report(results: list[RunResult], path: Path) -> str:
     return text
 
 
+@contextmanager
+def prompt_override(role_name: str | None, prompt_text: str | None):
+    """Swap one role's system prompt for the duration of the block, then restore it.
+
+    Used by the GEPA validation path: run a bench arm with an evolved prompt
+    (e.g. the gen1 coder frontier winner) without permanently touching
+    ``roles.SYSTEM_PROMPTS``. Both arguments are required together or both absent.
+    """
+    from memnc.roles import SYSTEM_PROMPTS
+
+    if (role_name is None) != (prompt_text is None):
+        raise ValueError("prompt_role and prompt_text must be given together")
+    if role_name is None:
+        yield
+        return
+    try:
+        role = Role(role_name.lower())
+    except ValueError:
+        raise ValueError(f"unknown role: {role_name!r}") from None
+    original = SYSTEM_PROMPTS[role]
+    assert prompt_text is not None  # validated above: both args given together
+    SYSTEM_PROMPTS[role] = prompt_text
+    try:
+        yield
+    finally:
+        SYSTEM_PROMPTS[role] = original
+
+
 async def run_suite(
+    arms: list[str],
+    reps: int,
+    tiers: list[str] | None,
+    out_path: Path,
+    report_path: Path | None,
+    limit: int | None = None,
+    prompt_role: str | None = None,
+    prompt_text: str | None = None,
+) -> list[RunResult]:
+    """Execute the suite sequentially, appending each result to a JSONL file.
+
+    ``prompt_role``/``prompt_text`` (GEPA validation) swap one role's system
+    prompt for the whole suite and restore it afterwards.
+    """
+    with prompt_override(prompt_role, prompt_text):
+        return await _run_suite(arms, reps, tiers, out_path, report_path, limit)
+
+
+async def _run_suite(
     arms: list[str],
     reps: int,
     tiers: list[str] | None,
@@ -765,11 +813,23 @@ def main() -> None:
     parser.add_argument("--out", default="bench-results.jsonl")
     parser.add_argument("--report", default="bench-report.md")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--prompt-role",
+        default=None,
+        help="GEPA validation: swap this role's system prompt (e.g. coder)",
+    )
+    parser.add_argument(
+        "--prompt-file",
+        default=None,
+        help="GEPA validation: file with the replacement prompt text",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
     arms = [a.strip().upper() for a in args.arms.split(",") if a.strip()]
     tiers = [t.strip() for t in args.tiers.split(",") if t.strip()] or None
+    prompt_role = args.prompt_role
+    prompt_text = Path(args.prompt_file).read_text(encoding="utf-8") if args.prompt_file else None
     results = asyncio.run(
         run_suite(
             arms=arms,
@@ -778,6 +838,8 @@ def main() -> None:
             out_path=Path(args.out),
             report_path=Path(args.report),
             limit=args.limit,
+            prompt_role=prompt_role,
+            prompt_text=prompt_text,
         )
     )
     ok = sum(1 for r in results if r.success)

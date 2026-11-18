@@ -1653,9 +1653,13 @@ evidence for the Einzel-LoRA > Multi thesis.
    rate_limiter). Caveats, per design: single rep0 pass (no statistical
    weight), the gen1 prompt carries a task-specific "rate limiter" rule —
    overfitting risk; the generalizable core is the workspace-verify +
-   complete-files + self-verify trio. Next (deferred, needs an unattended
-   multi-hour window): a multi-rep validation run of the gen1 prompt on the
-   full hard tier before promoting it into roles.py.
+   complete-files + self-verify trio. VALIDATION PATH (2026-11-18): the bench
+   runner gained `--prompt-role/--prompt-file` (prompt_override contextmanager,
+   swaps one role's SYSTEM_PROMPTS entry for the suite and restores it; tests
+   in tests/test_bench_prompt_override.py). A multi-rep validation of the gen1
+   coder prompt (arm B, full hard tier, 3 reps vs the B baseline 38/40 @ 1910
+   tok) runs as workspace/bench-b-gen1-hard.jsonl once the in-flight arm P run
+   frees the lane; promote into roles.py only if B+gen1 matches or beats B.
 5. ACE slice: automated Erfahrungsspeicher — append-only itemized bullets,
    deterministic merge, brevity-bias + context-collapse guards.
    STATUS: BUILT (2026-11-15) — src/memnc/experience_store.py (design in
