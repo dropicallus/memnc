@@ -2371,23 +2371,12 @@ hard tasks only, not a default. Guardrails: no new authority path
 (proposals/critiques are data, never executed); shared `coder_timeout_s`
 budget; no pytest.mark decorators (repo content-filter rule).
 
-## 16.6 design-learned-verifier.md (Flow-DPO step 2 — design, not built)
-
-Why: deterministic checkers exist only for bench tasks; live verify-gate
-relies on the critic alone (fabrication incident 2026-11-15: critic
-approved an empty result). V1 (buildable now): cheap linear scorer —
-features from the files dict (file count, bytes, lines, AST-parse flag,
-comment fraction, duplicate ratio, placeholder detection: TODO/pass/empty/
-fabricated-metric constants), logistic regression, pure-python optimizer,
-weights as JSON artifact, `verify(files) -> score`. Honest scope: catches
-SHAPE failures (fabrication), never semantic wrongness — complements, never
-replaces, the checkers. V2: LoRA verifier on the shared base (Flow-DPO real
-step, rung toward growing-LoRA), blocked on user compute approval + a
-`record_solutions=True` hard-tier run (current 120-rep run has 0 recorded
-solutions). Non-goals: no verifier output gates the bench loop (leakage
-rule); no downloads without explicit approval; no sklearn/torch for V1.
-
-## 16.7 docs/experience.md (Erfahrungsspeicher — folded into this file)
+#!BREAK_MARKER!## 16.6 Learned Verifier V1 (SHIPPED)
+- **Implementation**: Lightweight linear scorer using Python stdlib.
+- **Details**: Detects "shape" failures (empty, stubs, fabrication-style text) using basic file metrics and a simple logistic regression.
+- **Corpus**: Small, training set derived from actual repo files and patterns from the KugelAudio incident.
+- **Note**: This is a heuristic shape-detector, not a semantic validator.
+ 16.7 docs/experience.md (Erfahrungsspeicher — folded into this file)
 
 Was the curated "what we know about our models" store (framing
 2026-11-14: shared Erfahrungspeicher — which models are good at what, which
