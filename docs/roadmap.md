@@ -2064,7 +2064,7 @@ note must close them):
 
 ### 15.4.6 Scheduling gate: VRAM as schedulable resource (design note, 2026-11-18, before coding)
 
-Frank's rule (standing decision): a model either fits fully in VRAM or is a
+Standing rule (fit gate): a model either fits fully in VRAM or is a
 MoE with a hot cache for the experts. Model configs where less than half
 the model sits in VRAM (observed in production: an ollama rest-split of a
 MoE-class quant where only a small fraction of the weights stayed in VRAM)
@@ -2504,7 +2504,7 @@ interfaces and service sockets directly (no subprocess shell-outs for
 read-only status). Use these tools instead of one-off tail/pgrep/curl
 loops in agent chats.
 
-### 18.2 Throughput verdict (Frank's formula)
+### 18.2 Throughput verdict
 Decode is bandwidth-limited: a dense model reads all weights per token, a
 MoE only the active experts.
 

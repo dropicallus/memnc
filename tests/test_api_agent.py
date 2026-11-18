@@ -111,7 +111,7 @@ async def test_ask_surfaces_api_error(monkeypatch):
         monkeypatch,
         json.dumps({"verb": "task.detail", "args": {"task_id": "missing"}}),
     )
-    out = await agent.ask("Wo ist task missing?")
+    out = await agent.ask("where is the task list?")
     assert "error calling task.detail" in out
 
 

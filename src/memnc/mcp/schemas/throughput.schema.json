@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://memnc.local/schemas/throughput.schema.json",
   "title": "memnc throughput config",
-  "description": "Optional config for the inference_status throughput verdict (Frank-Formel). Lives OUTSIDE the repo (default ~/.config/memnc/throughput.json, path overridable via MEMNC_THROUGHPUT_CONFIG) because it describes specific hardware. All keys are case-insensitive substrings matched against lspci product names / GGUF filenames.",
+  "description": "Optional config for the inference_status throughput verdict (throughput formula). Lives OUTSIDE the repo (default ~/.config/memnc/throughput.json, path overridable via MEMNC_THROUGHPUT_CONFIG) because it describes specific hardware. All keys are case-insensitive substrings matched against lspci product names / GGUF filenames.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

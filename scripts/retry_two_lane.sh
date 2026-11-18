@@ -1,6 +1,6 @@
 #!/bin/bash
 # Two-lane bench-D retry: lane 1 = ollama :11434 (card1), lane 2 = llauncher/llama-server :8098 (openai backend).
-cd /home/frank/memnc
+cd "$(cd "$(dirname "$0")/.." && pwd)"
 unset NATS_TOKEN
 L1_PID=0
 (

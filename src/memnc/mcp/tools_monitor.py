@@ -219,8 +219,8 @@ def inference_status() -> dict[str, object]:
 
     llama_server carries a throughput verdict: cumulative tok/s from the
     server's own metrics (tokens_predicted / tokens_predicted_seconds).
-    Warning below 30 tok/s — unter 30 t/s ist eine Lane für Rollouts zu
-    langsam (Frank-Regel, 2026-11-18).
+    Warning below 30 tok/s — a lane that decodes slower is unsuited for
+    rollout work (user-set threshold).
     """
     ollama_models = _http_json("http://127.0.0.1:11434/api/ps")
     llama = _http_json("http://127.0.0.1:8098/health")
@@ -235,7 +235,7 @@ def inference_status() -> dict[str, object]:
         warn = tok_s < TOK_S_WARN_BELOW
 
     # Throughput model: expected best-case from GPU bandwidth vs. model weight
-    # bytes-per-token; efficiency <0.5 => setup unfit (Frank-Formel, 2026-11-18).
+    # bytes-per-token; efficiency <0.5 => setup unfit.
     # All hardware numbers come from the config file — repo stays generic.
     tc = _throughput_config()
     gpus = _gpu_bandwidths(tc.get("gpu_bandwidth", {}))
