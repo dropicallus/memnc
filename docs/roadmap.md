@@ -2,6 +2,13 @@
 
 ## Built
 
+- **2026-11-18 — Drafted-submit flow (14.11 item 11)**: `/submit` with no
+  argument starts a guided prompt (Bot API question mode / ForceReply); the
+  next plain chat message becomes the task via the same `task.submit` API
+  write path, any other `/command` aborts the draft, and plain chat text
+  without an armed draft stays non-commands. Bonus fix: `/submit <text>` no
+  longer truncates multi-word task text. Tests in
+  `tests/test_telegram_draft.py`.
 - **2026-11-16 — Worker-side strategy honor (14.15.10 selection consumption)**:
   the worker-driven pipeline now HONORS a non-default routing edge. When the
   orchestrator selected the self-reflect edge (`routing_edge == "B"`), the
@@ -769,9 +776,14 @@ data model.
     cards into the console page (and back-buttons into chat). Zero new
     state; pure URL construction once 
 §14.10 lands.
-11. **Drafted-submit flow**: `/submit` with no argument starts a guided
-    prompt (Bot API question mode); plain chat text stays non-commands
-    (no accidental task creation). Fix: new-user error surface.
+11. **Drafted-submit flow — BUILT**: `/submit` with no argument arms a
+    guided draft for the chat and asks for the task text via the Bot API
+    question mode (ForceReply); the next plain message from that chat becomes
+    the task (through the same `task.submit` API write path), any other
+    `/command` aborts the draft, and plain chat text stays non-commands when
+    no draft is armed (no accidental task creation). Also fixed on the way:
+    `/submit <text>` now keeps the full multi-word task text (it previously
+    submitted only the first word). Tests: `tests/test_telegram_draft.py`.
 
 ### Non-goals / guardrails
 

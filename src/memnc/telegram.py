@@ -478,6 +478,7 @@ class TelegramObserver:
         self._announced: set[tuple[str, str, str]] = set()
         self._seen_nodes: set[str] = set()
         self._seen_requests: set[str] = set()
+        self._pending_submit: set[str] = set()
 
     # -- outbound ----------------------------------------------------------
     async def _push_pending_requests(self) -> None:
@@ -620,7 +621,25 @@ class TelegramObserver:
 
     # -- inbound: commands --------------------------------------------------
     async def handle_command(self, chat: str, text: str) -> None:
-        parts = text.strip().split(maxsplit=2)
+        stripped = text.strip()
+        # 14.11 item 11 (drafted submit): armed-draft state lives per chat.
+        # getattr keeps __new__-built fakes in older tests working.
+        pending = getattr(self, "_pending_submit", None)
+        if pending is None:
+            pending = set()
+            self._pending_submit = pending
+        if not stripped.startswith("/"):
+            # Plain chat text is not a command. Only when a guided /submit is
+            # armed for this chat does the next plain message become the task
+            # text; otherwise it is ignored (no accidental task creation).
+            if pending is not None and chat in pending and stripped:
+                pending.discard(chat)
+                await self._control(chat, "submit", stripped)
+            return
+        if pending is not None:
+            # any explicit command aborts an armed draft (see guided submit)
+            pending.discard(chat)
+        parts = stripped.split(maxsplit=2)
         if not parts:
             return
         cmd = parts[0].lstrip("/").lower()
@@ -719,7 +738,25 @@ class TelegramObserver:
             if tid:
                 await self._control(chat, "decide", f"{tid} {parts[1]}")
         elif cmd in ("submit", "cancel", "retry"):
-            argument = parts[1] if len(parts) >= 2 else ""
+            if cmd == "submit" and len(parts) < 2:
+                # 14.11 item 11 (drafted submit): /submit with no argument
+                # arms the guided flow and asks for the task text via the
+                # Bot API question mode (ForceReply). The next plain message
+                # from this chat is taken as the task text.
+                self._pending_submit.add(chat)
+                await self.bot.send_message(
+                    chat,
+                    "Send the task text in your next message (any /command"
+                    " aborts the draft).",
+                    markup={"force_reply": True, "selective": True},
+                )
+                return
+            self._pending_submit.discard(chat)
+            if cmd == "submit":
+                # task text may contain multiple words -- keep them all
+                argument = " ".join(parts[1:]) if len(parts) >= 2 else ""
+            else:
+                argument = parts[1] if len(parts) >= 2 else ""
             if cmd == "retry" and len(parts) >= 3:
                 # Retry flags ride in the third split part ("--model <name>").
                 argument = f"{argument} {parts[2]}"
