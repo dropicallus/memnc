@@ -275,3 +275,33 @@ def test_evolve_uses_crossover_when_frontier_splits() -> None:
     assert CROSSOVER_SYSTEM_PROMPT in calls  # gen 2 used the crossover
     prompts = {c.prompt for c in pool}
     assert "MERGED" in prompts
+
+
+class TestLoadSeedPrompt:
+    def test_picks_highest_wins_for_role(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "frontier.jsonl"
+            path.write_text(
+                json.dumps({"role": "CODER", "wins": 1, "scores": {"t1": False}, "prompt": "weak"})
+                + "\n"
+                + json.dumps({"role": "CRITIC", "wins": 3, "scores": {"t1": True}, "prompt": "critic-p"})
+                + "\n"
+                + json.dumps({"role": "CODER", "wins": 4, "scores": {"t1": True, "t2": True}, "prompt": "strong"})
+                + "\n",
+                encoding="utf-8",
+            )
+            from memnc.bench.gepa_run import load_seed_prompt
+
+            assert load_seed_prompt(path, "CODER") == "strong"
+            assert load_seed_prompt(path, "CRITIC") == "critic-p"
+
+    def test_missing_role_exits(self):
+        import pytest as _pytest
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "frontier.jsonl"
+            path.write_text(json.dumps({"role": "CODER", "wins": 0, "prompt": "p"}) + "\n", encoding="utf-8")
+            from memnc.bench.gepa_run import load_seed_prompt
+
+            with _pytest.raises(SystemExit):
+                load_seed_prompt(path, "CRITIC")

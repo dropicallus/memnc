@@ -24,6 +24,30 @@ from memnc.roles import Role
 log = logging.getLogger(__name__)
 
 
+def load_seed_prompt(path: Path, role_name: str) -> str:
+    """Return the highest-wins candidate prompt for ``role_name`` from a frontier JSONL."""
+    best: dict | None = None
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            cand = json.loads(line)
+            if cand.get("role") == role_name and (
+                best is None or cand.get("wins", 0) > best.get("wins", 0)
+            ):
+                best = cand
+    if best is None:
+        raise SystemExit(f"no {role_name} candidate in {path}")
+    log.info(
+        "seeding from %s (wins %s/%s)",
+        path,
+        best.get("wins"),
+        len(best.get("scores", [])),
+    )
+    return str(best["prompt"])
+
+
 async def run_evolution(
     arm: str,
     role_name: str,
@@ -33,6 +57,7 @@ async def run_evolution(
     generations: int = 3,
     engine: BenchEngine | None = None,
     ckpt_path: Path | None = None,
+    seed_from: Path | None = None,
 ) -> list[dict[str, object]]:
     """Run one evolution and persist the Pareto frontier. Returns candidates."""
     failures = load_failures(jsonl, arm)
@@ -57,7 +82,10 @@ async def run_evolution(
     base_prompt = None
     from memnc.roles import SYSTEM_PROMPTS
 
-    base_prompt = SYSTEM_PROMPTS[Role(role_name)]
+    if seed_from is not None:
+        base_prompt = load_seed_prompt(seed_from, role_name)
+    if base_prompt is None:
+        base_prompt = SYSTEM_PROMPTS[Role(role_name)]
     frontier = await evolve(
         engine,
         reflect_chat,
@@ -114,6 +142,11 @@ def main(argv: list[str] | None = None) -> int:
         help="incremental checkpoint JSONL (default: <out>.ckpt.jsonl); "
         "existing records are resumed, not recomputed",
     )
+    parser.add_argument(
+        "--seed-from",
+        default=None,
+        help="frontier JSONL from a previous run; its best candidate seeds generation 0",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     frontier = asyncio.run(
@@ -125,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.out),
             generations=args.generations,
             ckpt_path=Path(args.ckpt) if args.ckpt else Path(args.out + ".ckpt.jsonl"),
+            seed_from=Path(args.seed_from) if args.seed_from else None,
         )
     )
     for cand in frontier:
