@@ -34,6 +34,7 @@ def test_note_failure_appends_entry_on_retry():
     entry = snap.attempt_journal[0]
     assert entry["attempt"] == snap.attempt
     assert entry["stage"] == "coder"
+    assert entry["kind"] == "unknown"
     assert entry["error"] == "syntax error in parser.py"
     assert entry["files"] == ["parser.py"]
     assert entry["summary"] == "wrote parser"
@@ -65,6 +66,21 @@ def test_note_failure_caps_entries_and_field_length():
     assert all(len(e["error"]) <= journal.MAX_ERROR_CHARS for e in snap.attempt_journal)
 
 
+def test_note_failure_classifies_the_error():
+    snap = _coding_snapshot()
+    journal.note_failure(
+        snap, Event("result", ok=False, reason="ReadTimeout after 180 s"), _Result(), Role.CODER
+    )
+    journal.note_failure(
+        snap, Event("result", ok=False, reason="500 Internal Server Error"), _Result(), Role.CODER
+    )
+    journal.note_failure(
+        snap, Event("result", ok=False, reason="no JSON object found in output"), _Result(), Role.CODER
+    )
+    kinds = [e["kind"] for e in snap.attempt_journal]
+    assert kinds == ["timeout", "server", "invalid_output"]
+
+
 def test_render_empty_and_full():
     assert journal.render(None) == ""
     assert journal.render([]) == ""
@@ -82,6 +98,15 @@ def test_render_empty_and_full():
     assert block.startswith("PROGRESS FROM PRIOR ATTEMPTS:")
     assert "attempt 1 failed at coder" in block
     assert "boom" in block and "a.py, b.py" in block and "half done" in block
+
+
+def test_render_includes_failure_class_when_classified():
+    assert "error (timeout): boom" in journal.render(
+        [{"attempt": 1, "stage": "coder", "kind": "timeout", "error": "boom"}]
+    )
+    # unclassified failures add no label
+    block = journal.render([{"attempt": 1, "stage": "coder", "error": "boom"}])
+    assert "error: boom" in block and "(unknown)" not in block
 
 
 def test_build_user_prompt_renders_journal_block():

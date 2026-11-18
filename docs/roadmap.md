@@ -2002,7 +2002,8 @@ workspace-continuity slices still open):
   binaries and artifacts a prior attempt left instead of re-deriving
   state. Tests: `tests/test_harnesses.py` (listing cases + prompt
   rendering).
-- **Checkpoint/restart (BUILT 2026-11-17, attempt-journal slice):** every
+- **Checkpoint/restart (BUILT 2026-11-17, attempt-journal slice; entries
+  carry a failclass label since 2026-11-18):** every
   failed attempt that schedules a retry appends one bounded entry to
   `TaskSnapshot.attempt_journal` (`src/memnc/journal.py`,
   `note_failure()`): the failed attempt number, the stage (role), the
@@ -2035,6 +2036,11 @@ workspace-continuity slices still open):
 Open question: how error classification maps onto the existing trace
 entries (the journal stores the raw reason text; failclass labels could be
 added per entry later).
+RESOLVED (2026-11-18): each journal entry now carries `kind` =
+`classify_failure(event.reason)` (timeout/server/invalid_output/unknown),
+and the rendered PROGRESS block labels classified errors
+("error (timeout): ..."; unknown stays unlabeled). Tests:
+`tests/test_journal.py`.
 
 Finding — fabrication passed the DONE gate (2026-11-15, mesh autonomy test):
 task 1a1e00c15dc0077966c7064 (KugelAudio TTS) finished DONE with critic

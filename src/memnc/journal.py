@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .failclass import UNKNOWN, classify_failure
+
 MAX_ENTRIES = 8
 MAX_ERROR_CHARS = 400
 MAX_SUMMARY_CHARS = 200
@@ -47,6 +49,7 @@ def note_failure(
     entry = {
         "attempt": snapshot.attempt,
         "stage": getattr(role, "value", "") or "",
+        "kind": classify_failure(event.reason),
         "error": (event.reason or "")[:MAX_ERROR_CHARS],
         "files": files,
         "summary": summary,
@@ -65,7 +68,9 @@ def render(entries: list[dict[str, Any]] | None) -> str:
         parts = [f"attempt {entry.get('attempt', '?')} failed at {stage}"]
         error = entry.get("error") or ""
         if error:
-            parts.append(f"error: {error}")
+            kind = entry.get("kind") or ""
+            label = f" ({kind})" if kind and kind != UNKNOWN else ""
+            parts.append(f"error{label}: {error}")
         summary = entry.get("summary") or ""
         if summary:
             parts.append(f"implementation so far: {summary}")
