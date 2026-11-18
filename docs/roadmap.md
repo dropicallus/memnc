@@ -742,8 +742,12 @@ design first; optional proposal digest for human sign-off.
 
 **Step 6 design (written 2026-11-18, build pending — human sign-off = enable
 the flag).** The dreaming job is a scheduled, deterministic, offline walk over
-the durable knowledge stores. STATUS: DESIGN — no code yet; nothing below may
-ship without the operator enabling `dreaming_enabled`.
+the durable knowledge stores. STATUS: DESIGN approved as written; build step 1 (pure-logic core
+`src/memnc/dreaming.py` + tests: clustering, pattern/supersession/ranking
+bullets, `dream_bullets()`) committed, dormant — nothing runs without the
+operator enabling `dreaming_enabled`. Next: step 2 job wrapper
+(`python -m memnc.dreaming --dry-run/--apply`), step 3 systemd unit+timer,
+step 4 `meshctl dream` verb.
 
 - **Stores walked (all already shipped):** `mesh_observations` KV (TaskObservation
   deposits), the file-backed experience store (experience_store.py bullets),
