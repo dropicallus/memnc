@@ -54,6 +54,15 @@ def _single_backend(
         from .ollama import OllamaBackend
 
         return OllamaBackend(base_url, timeout=timeout, max_retries=max_retries)
+    if provider == "llauncher":
+        from .llauncher import LlauncherBackend
+
+        return LlauncherBackend(
+            base_url,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
     from .openai import OpenAIBackend
 
     return OpenAIBackend(
