@@ -686,20 +686,17 @@ today.
    accepts unambiguous prefixes (≥6 chars, exact full ids always win) for
    `state`, `trace`, `cancel`, `retry`, `gate`; ambiguity lists the candidate
    prefixes, short/unknown prefixes say why. Fixes: ID copy/paste round trips.
-3. **`/status` one-shot digest.** One command answering "is everything
-   fine?": tasks by state (count + the interesting ones), nodes with
-   heartbeat age and current claim, pending model requests, models near
-   retirement. Replaces composing `/tasks` + `/roster` + `/mreqs` +
-   `/mrep`. The console's roster data model is the source; the digest is
-   a formatter, not a new data path.
-4. **Failure-first notifications with the cause.** Today a failed task
-   arrives as one event line among many; the reason ("invalid coder
-   output") hides in the trace. When a task reaches a terminal state,
-   push a short verdict card: what failed, which role/model ran it, the
-   last critic objection, and *what to do* (`/retry <id>` or, if the
-   route shows the weak model, a one-tap "pull a stronger coder" button
-   that files the ModelRequest). Fixes: silent failure discovery,
-   model-mismatch invisible → remediation one tap away.
+3. **~~`/status` one-shot digest.~~ DONE 2026-11-17** — `format_status()` +
+   the `status` command answer "is everything fine?" in one card: tasks by
+   state, nodes with heartbeat age and claims, pending model requests,
+   recent failed observations. Data rides the standard API-client path;
+   the digest is a formatter, not a new data path.
+4. **~~Failure-first notifications with the cause.~~ DONE 2026-11-17** —
+   a terminal failure broadcasts a verdict card: title, `cause:` detail
+   from the snapshot, the P2 model-suggestion line ("next try: role:
+   model"), `retry: /retry <id>` and `[Retry][Cancel]` inline buttons
+   (`task_buttons`). Fixes: silent failure discovery, remediation one tap
+   away.
 
 ### P1 — smoother daily loop
 
@@ -1821,8 +1818,12 @@ outcomes on the SELF_REFLECT_EDGE ("B" - its REVISE loop is arm-B behaviour,
 mirroring the orchestrator's LIVE_EDGE deposit), and an unsure marker in the
 error or critique summary folds as a weak "unsure" deposit on the
 self-reflect edge instead of a success/failure on the acting edge, so
-repeated unsure behaviour converges routing toward B. Still open: an arm P
-full-run measurement.
+repeated unsure behaviour converges routing toward B. The arm P full-run
+measurement (reps 5, hard tier, same lane as the 2026-11-17 arm D run) is
+queued behind the in-flight GEPA lane2 run via
+`scripts/run_arm_p_after_gepa.sh` (waits for the GEPA process, then runs
+`--arms P --reps 5 --tiers hard` -> `workspace/bench-p-hard.jsonl/.md`);
+process the JSONL into the 15.3 bench report when done.
 
 ## 15.4 OpenCode harness (BUILT 2026-11-15, commit 7765404)
 
