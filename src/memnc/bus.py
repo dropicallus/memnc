@@ -881,6 +881,59 @@ class Bus:
             pass
         return snapshot
 
+    async def release_claim(
+        self, task_id: str, reason: str, role: Role | None = None
+    ) -> TaskSnapshot | None:
+        """P5.1: release a dead claim and make the task claimable again.
+
+        CAS on the KV revision: if the snapshot changed under us (a live
+        worker advanced it, or another reaper won) the update is rejected and
+        None is returned instead of clobbering fresh state.
+
+        The task goes back to the state the reaped role was serving, with
+        ``next_role`` set so the claim gate accepts it. ``reaps`` counts the
+        release; ``attempt`` is untouched (an infra death is not a model
+        failure and must not consume the weak->strong budget).
+        """
+        assert self.kv is not None
+        from .fsm import ROLE_STATE, role_for_state
+
+        for _attempt in range(3):
+            try:
+                entry = await self.kv.get(f"task.{task_id}")
+            except (KeyError, NotFoundError):
+                return None
+            snapshot = TaskSnapshot.model_validate_json(entry.value)
+            if not snapshot.claimed_by or snapshot.state in TERMINAL_STATES:
+                return None
+            # The claim may have been released and re-taken between our read
+            # of the task list and this CAS (the loop stops on revision swap).
+            target = role or role_for_state(snapshot.state)
+            if target is None and snapshot.claimed_by:
+                _node, _sep, role_name = snapshot.claimed_by.partition(":")
+                target = Role(role_name) if role_name in Role._value2member_map_ else None
+            snapshot.claimed_by = ""
+            snapshot.claimed_at_epoch = 0.0
+            snapshot.reaps += 1
+            if target is not None:
+                snapshot.state = ROLE_STATE[target]
+                snapshot.next_role = target.value
+                snapshot.claimable = True
+            else:
+                snapshot.claimable = True
+            snapshot.record("claim.reaped", reason)
+            try:
+                await self.kv.update(
+                    f"task.{task_id}",
+                    snapshot.model_dump_json().encode(),
+                    last=entry.revision,
+                )
+            except Exception:  # noqa: BLE001 - CAS conflict, re-read and retry
+                continue
+            return snapshot
+        log.warning("release_claim gave up after CAS contention", extra={"task_id": task_id})
+        return None
+
     async def list_tasks(self) -> list[TaskSnapshot]:
         assert self.kv is not None
         try:

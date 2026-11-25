@@ -216,6 +216,9 @@ async def unload_model(base_url: str, model: str) -> bool:
 
 
 HEARTBEAT_INTERVAL_S = 5
+# P5.1: must match pull_commands(max_deliver=...) — the last delivery is the
+# one that dead-letters instead of nak'ing into a silent drop.
+MAX_DELIVER = 3
 
 
 # M11: mesh_submit — the agent-facing tool that throws a task back into the
@@ -605,6 +608,30 @@ class Worker:
             await asyncio.sleep(HEARTBEAT_INTERVAL_S)
 
     # -- command handling --------------------------------------------------
+    async def _retry_or_dead_letter(
+        self, message, envelope: Envelope, reason: str, delay: float = 2.0
+    ) -> None:
+        """P5.1: explicit DLQ instead of silent redelivery exhaustion.
+
+        A command we refuse to run (wrong node, stale code, alloc elsewhere)
+        is naked back onto the stream so a matching worker can take it. After
+        ``MAX_DELIVER`` attempts JetStream stops redelivering anyway — so the
+        last attempt dead-letters the envelope (mesh.dlq) and acks it, making
+        the drop visible instead of silent.
+        """
+        delivered = 0
+        metadata = getattr(message, "metadata", None)
+        if metadata is not None:
+            delivered = getattr(metadata, "num_delivered", 0) or 0
+        if delivered >= MAX_DELIVER:
+            await self.bus.dead_letter(envelope, f"{reason} (max_deliver {MAX_DELIVER} exhausted)")
+            await message.ack()
+            return
+        try:
+            await message.nak(delay=delay)
+        except Exception:  # noqa: BLE001
+            await message.nak()
+
     async def _handle(self, message) -> None:
         envelope = Envelope.model_validate_json(message.data)
         # Weak->strong routing: a command with prefer_node set is for that
@@ -613,10 +640,9 @@ class Worker:
         # node-a-coder, ...) while prefer_node names the host (node-a).
         prefer = envelope.payload.get("prefer_node", "")
         if prefer and not self.settings.node_name.startswith(prefer):
-            try:
-                await message.nak(delay=2.0)
-            except Exception:  # noqa: BLE001
-                await message.nak()
+            await self._retry_or_dead_letter(
+                message, envelope, f"prefer_node {prefer} is another host"
+            )
             return
         # P4 slice 2: refuse commands from a mesh running different code.
         # The orchestrator stamps mesh_version into every dispatch; a stale
@@ -633,10 +659,9 @@ class Worker:
                     "running": code_version(),
                 },
             )
-            try:
-                await message.nak(delay=2.0)
-            except Exception:  # noqa: BLE001
-                await message.nak()
+            await self._retry_or_dead_letter(
+                message, envelope, f"code version {code_version()} != mesh {expected}"
+            )
             return
         snapshot = await self.bus.get_snapshot(envelope.task_id)
         if snapshot is None:
@@ -651,10 +676,9 @@ class Worker:
         ):
             model = envelope.payload.get("model_override") or snapshot.needs.model
             if not (model and model in self._loaded_models):
-                try:
-                    await message.nak(delay=2.0)
-                except Exception:  # noqa: BLE001
-                    await message.nak()
+                await self._retry_or_dead_letter(
+                    message, envelope, f"alloc belongs to node {alloc['node']}"
+                )
                 return
 
         self._busy = True

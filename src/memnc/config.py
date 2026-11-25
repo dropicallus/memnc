@@ -163,6 +163,10 @@ class Settings(BaseSettings):
     # must comfortably exceed the longest legitimate step
     # (critic_timeout_s + orchestrator_grace_s).
     claim_ttl_s: float = 900
+    # P5.1 lease by liveness: a claim whose node has been silent this long is
+    # released immediately instead of waiting for claim_ttl_s. Workers beat
+    # every 20 s, so 90 s = three missed beats.
+    heartbeat_stale_s: float = 90.0
     apply_artifacts: bool = True
     max_artifact_bytes: int = 200_000
 

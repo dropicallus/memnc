@@ -27,6 +27,7 @@ from .schema import (
     SUBJECT_HEALTH_ALL,
     SUBJECT_HEARTBEAT,
     SUBJECT_LEDGER,
+    SUBJECT_REQUEUE,
     SUBJECT_SUBMIT_NODE,
     TERMINAL_STATES,
     AllocResult,
@@ -105,9 +106,7 @@ class Allocator:
             if now - self._seen_at.get(node, 0.0) > self.twin_stale_s:
                 continue
             try:  # announced ts must also be recent (staleness kills a node)
-                age = now - datetime.fromisoformat(
-                    h.ts.replace("Z", "+00:00")
-                ).timestamp()
+                age = now - datetime.fromisoformat(h.ts.replace("Z", "+00:00")).timestamp()
                 if age > self.twin_stale_s:
                     continue
             except ValueError:
@@ -115,9 +114,7 @@ class Allocator:
             fresh[node] = h
         return fresh
 
-    def select(
-        self, model: str, task_id: str, size_mb: float = 0.0
-    ) -> AllocResult:
+    def select(self, model: str, task_id: str, size_mb: float = 0.0) -> AllocResult:
         if task_id and task_id in self._claims:
             node = self._claims[task_id]
             return AllocResult(ok=True, model=model, node=node)
@@ -132,8 +129,7 @@ class Allocator:
         ):
             entry = health.models.get(model)
             if entry is not None and entry.loaded:
-                return self._claim(AllocResult(ok=True, model=model, node=node),
-                                   task_id, 0.0)
+                return self._claim(AllocResult(ok=True, model=model, node=node), task_id, 0.0)
 
         # (2) most free VRAM (minus reservations) that fits the size.
         candidates = []
@@ -145,13 +141,9 @@ class Allocator:
             return AllocResult(ok=False, model=model, reason="no_node")
         candidates.sort(reverse=True)
         free, node = candidates[0]
-        return self._claim(
-            AllocResult(ok=True, model=model, node=node), task_id, size_mb
-        )
+        return self._claim(AllocResult(ok=True, model=model, node=node), task_id, size_mb)
 
-    def _claim(
-        self, result: AllocResult, task_id: str, size_mb: float
-    ) -> AllocResult:
+    def _claim(self, result: AllocResult, task_id: str, size_mb: float) -> AllocResult:
         if task_id:
             self._claims[task_id] = result.node or ""
         node = result.node or ""
@@ -176,6 +168,10 @@ class Orchestrator:
         self._results = None
         self._submit_sub = None
         self._heartbeat_sub = None
+        # P5.1 lease by liveness: heartbeat time per worker identity
+        # (node_name, e.g. "node-a-coder"), which is exactly the part of
+        # `claimed_by` before the colon.
+        self._last_seen: dict[str, float] = {}
 
     async def start(self) -> None:
         await self.bus.connect()
@@ -197,15 +193,9 @@ class Orchestrator:
         # from approved channels — grant-checked, then ledger-recorded.
         self._control_sub = await self.bus.nc.subscribe(SUBJECT_CONTROL, cb=self._on_control)
         # T5: model-management twin + planner allocation server.
-        self._allocator = Allocator(
-            twin_stale_s=self.settings.twin_stale_s
-        )
-        self._health_sub = await self.bus.nc.subscribe(
-            SUBJECT_HEALTH_ALL, cb=self._on_health
-        )
-        self._alloc_sub = await self.bus.nc.subscribe(
-            SUBJECT_ALLOC, cb=self._on_alloc
-        )
+        self._allocator = Allocator(twin_stale_s=self.settings.twin_stale_s)
+        self._health_sub = await self.bus.nc.subscribe(SUBJECT_HEALTH_ALL, cb=self._on_health)
+        self._alloc_sub = await self.bus.nc.subscribe(SUBJECT_ALLOC, cb=self._on_alloc)
         self._results = await self.bus.pull_results(
             durable=f"orchestrator-results-{self.settings.node_name}"
         )
@@ -214,9 +204,7 @@ class Orchestrator:
         await self._api.start()
         await self._recover()
         log.info("orchestrator ready", extra={"node": self.settings.node_name})
-        await asyncio.gather(
-            self._result_loop(), self._timeout_loop(), self._pheromone_loop()
-        )
+        await asyncio.gather(self._result_loop(), self._timeout_loop(), self._pheromone_loop())
 
     async def _pheromone_loop(self) -> None:
         """14.15.10: periodic pheromone evaporation (no-op when disabled)."""
@@ -346,9 +334,7 @@ class Orchestrator:
             request = AllocRequest.model_validate_json(message.data)
         except Exception:  # noqa: BLE001
             await message.respond(
-                json.dumps(
-                    {"ok": False, "model": "", "reason": "bad_request"}
-                ).encode()
+                json.dumps({"ok": False, "model": "", "reason": "bad_request"}).encode()
             )
             return
         result = self._allocator.select(request.model, request.task_id)
@@ -563,6 +549,20 @@ class Orchestrator:
                 pass
 
     # -- M9 grant bootstrap --------------------------------------------------
+    def _agent_silence(self, claimed_by: str, now: float) -> float | None:
+        """Seconds since the claiming worker's last heartbeat (None = unseen).
+
+        ``claimed_by`` is ``<node_name>:<role>`` and workers beat under
+        ``node_name``, so the part before the colon is the liveness key. A
+        worker we have never seen beat returns None: the caller falls back to
+        the conservative claim TTL rather than declaring a live worker dead.
+        """
+        node = claimed_by.partition(":")[0]
+        last = self._last_seen.get(node)
+        if last is None:
+            return None
+        return max(0.0, now - last)
+
     async def _on_heartbeat(self, message) -> None:
         """Issue CHAIN grants for agents of allowed joining nodes.
 
@@ -573,6 +573,13 @@ class Orchestrator:
         """
         try:
             payload = Envelope.model_validate_json(message.data).payload or {}
+            # P5.1: liveness bookkeeping happens before the grant bootstrap so
+            # a heartbeat counts even when no grant pattern matches.
+            node = payload.get("node") or ""
+            if not node:
+                node = str(message.subject).split(".")[2] if message.subject else ""
+            if node:
+                self._last_seen[node] = time.time()
             patterns = [p for p in self.settings.grant_nodes.split(",") if p.strip()]
             for agent_id in acl.auto_grant_agents(payload, patterns):
                 if await self.bus.grant_read(agent_id) is not None:
@@ -680,13 +687,14 @@ class Orchestrator:
                 if sizes[p_] >= 0 and lines.get(p_, 0) < self.settings.verify_min_lines
             ]
             too_few = (
-                self.settings.verify_min_files > 0
-                and len(sizes) < self.settings.verify_min_files
+                self.settings.verify_min_files > 0 and len(sizes) < self.settings.verify_min_files
             )
             if missing or thin or too_few:
                 reasons = []
                 if missing:
-                    reasons.append("claimed artifacts missing from workspace: " + ", ".join(missing))
+                    reasons.append(
+                        "claimed artifacts missing from workspace: " + ", ".join(missing)
+                    )
                 if thin:
                     reasons.append("deliverables below verify_min_lines: " + ", ".join(thin))
                 if too_few:
@@ -869,13 +877,9 @@ class Orchestrator:
                     continue
                 candidates.append(model)
         if not candidates:
-            snapshot.record(
-                "model.suggest", f"{role}: none (was {failed or 'unknown'}, {kind})"
-            )
+            snapshot.record("model.suggest", f"{role}: none (was {failed or 'unknown'}, {kind})")
             return
-        candidates.sort(
-            key=lambda m: rep[m].approvals if m in rep else 0, reverse=True
-        )
+        candidates.sort(key=lambda m: rep[m].approvals if m in rep else 0, reverse=True)
         pick = candidates[0]
         snapshot.record("model.suggest", f"{role}: {pick} ({kind})")
         log.info(
@@ -981,7 +985,9 @@ class Orchestrator:
             # snapshot BEFORE it is stored, so the failure card carries it.
             await self._suggest_model(
                 snapshot,
-                event.role.value if event.role else (list(snapshot.route or {})[-1] if snapshot.route else ""),
+                event.role.value
+                if event.role
+                else (list(snapshot.route or {})[-1] if snapshot.route else ""),
                 event.reason,
             )
 
@@ -1125,11 +1131,10 @@ class Orchestrator:
             if unsure_signal(getattr(snapshot, "error", None), critique_summary):
                 outcome = "unsure"
                 edge = SELF_REFLECT_EDGE
-            await self.bus.deposit_pheromone(
-                task_type_from_prompt(snapshot.task), edge, outcome
-            )
+            await self.bus.deposit_pheromone(task_type_from_prompt(snapshot.task), edge, outcome)
         except Exception:  # noqa: BLE001 - side channel, never fail the task
             log.debug("pheromone deposit failed for %s", snapshot.task_id)
+
     async def _deposit_observation(self, snapshot: TaskSnapshot) -> None:
         """14.13 step 1: write the terminal snapshot into mesh.observations.
 
@@ -1393,43 +1398,71 @@ class Orchestrator:
                 )
 
     async def _reap_stale_claims(self) -> None:
-        """15.4.5: free CAS claims whose worker died mid-step (claim TTL).
+        """P5.1 lease by liveness: free CAS claims whose worker is gone.
 
-        Without this, restarting a worker (or a crash between claim and
-        release) orphans a non-terminal task forever: try_claim refuses to
-        re-claim and `_recover()` only handles RECEIVED/REVISE. A claim older
-        than settings.claim_ttl_s is cleared so the role can claim again.
-        Legacy claims (claimed_at_epoch == 0, written before this field
-        existed) fall back to snapshot.updated_at staleness.
+        Two triggers:
+        * liveness — the claiming node has been silent for
+          ``heartbeat_stale_s`` (three missed beats): released at once, so a
+          ``kill -9`` recovers in ~90 s instead of 15 min;
+        * conservative fallback — the claim is older than ``claim_ttl_s``
+          (a live but stuck worker).
+
+        A node we have never seen beating falls back to the TTL path: no
+        evidence of death, only of an old claim.
         """
-        limit = self.settings.claim_ttl_s
+        now = time.time()
         for snapshot in await self.bus.list_tasks():
             if not self._owns(snapshot):
                 continue
             if snapshot.state in TERMINAL_STATES or not snapshot.claimed_by:
                 continue
             if snapshot.claimed_at_epoch > 0:
-                age = time.time() - snapshot.claimed_at_epoch
+                age = now - snapshot.claimed_at_epoch
             else:
-                age = now_iso_age_s(snapshot.updated_at, time.time())
-            if age <= limit:
+                age = now_iso_age_s(snapshot.updated_at, now)
+            silence = self._agent_silence(snapshot.claimed_by, now)
+            dead = silence is not None and silence > self.settings.heartbeat_stale_s
+            if not dead and age <= self.settings.claim_ttl_s:
+                continue
+            reason = (
+                f"{snapshot.claimed_by} silent for {int(silence or 0)}s"
+                if dead
+                else f"claim from {snapshot.claimed_by} older than {int(age)}s"
+            )
+            reaped = await self.bus.release_claim(snapshot.task_id, reason)
+            if reaped is None:
                 continue
             log.warning(
                 "stale claim reaped",
                 extra={
-                    "task_id": snapshot.task_id,
+                    "task_id": reaped.task_id,
                     "claimed_by": snapshot.claimed_by,
                     "age_s": int(age),
+                    "silence_s": None if silence is None else int(silence),
+                    "reaps": reaped.reaps,
+                    "reason": reason,
                 },
             )
-            await self._apply(
-                snapshot,
-                Event(
-                    "claim.expired",
-                    ok=True,
-                    reason=f"claim from {snapshot.claimed_by} reaped after {int(age)}s",
+            # One requeue announcement for anyone tailing the ledger, plus the
+            # event stream entry the FSM-side consumers already read.
+            await self.bus.publish_envelope(
+                SUBJECT_REQUEUE.format(task_id=reaped.task_id),
+                Envelope(
+                    task_id=reaped.task_id,
+                    trace_id=reaped.trace_id,
+                    kind=Kind.EVENT,
+                    node=self.settings.node_name,
+                    state=reaped.state,
+                    attempt=reaped.attempt,
+                    payload={
+                        "reason": reason,
+                        "role": reaped.next_role,
+                        "reaps": reaped.reaps,
+                        "reaped_from": snapshot.claimed_by,
+                    },
                 ),
             )
+            await self.bus.emit_event(reaped, "claim.reaped", reason)
 
     async def _dispatch_claimed(self) -> None:
         """M11 referee: dispatch claimable tasks that have been CAS-claimed.

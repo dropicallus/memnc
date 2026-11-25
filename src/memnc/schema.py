@@ -55,6 +55,9 @@ SUBJECT_SUBMIT = "mesh.task.submit"
 # addressed to its own node, so two symmetric orchestrators never double-handle.
 SUBJECT_SUBMIT_NODE = "mesh.task.submit.{node}"
 SUBJECT_EVENTS = "mesh.task.{task_id}.events"
+# P5.1: a reaped claim announces itself on its own subject so any worker (and
+# the ledger tail) sees the requeue without replaying the event stream.
+SUBJECT_REQUEUE = "mesh.task.{task_id}.requeue"
 SUBJECT_CMD = "mesh.agent.{role}.cmd"
 SUBJECT_RESULT = "mesh.agent.{role}.result"
 SUBJECT_ASSIGN = "mesh.agent.{worker}.cmd"
@@ -705,6 +708,10 @@ class TaskSnapshot(BaseModel):
     # Drives the orchestrator's stale-claim reaper: a claim whose worker died
     # (restart, crash) must not orphan the task forever.
     claimed_at_epoch: float = 0.0
+    # P5.1: number of times a dead claim was released and the task requeued.
+    # Separate from `attempt` on purpose: an infra death must not burn the
+    # model's attempt budget (weak->strong routing keys off attempt).
+    reaps: int = 0
     # M14: when set, the task pipeline is worker-driven — only this role may
     # claim it and the finishing worker advances the snapshot itself.
     next_role: str = ""

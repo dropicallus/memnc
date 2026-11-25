@@ -23,6 +23,20 @@ EventType = Literal[
 ]
 ActionType = Literal["dispatch", "finish", "escalate", "cancel", "schedule", "park", "ask"]
 
+# P5.1: the state each role serves. A reaped claim returns the task to the
+# state its dead role was working on, so the same role can claim it again.
+ROLE_STATE: dict[Role, TaskState] = {
+    Role.PLANNER: TaskState.PLANNING,
+    Role.CODER: TaskState.CODING,
+    Role.CRITIC: TaskState.CRITIQUE,
+}
+STATE_ROLE: dict[TaskState, Role] = {state: role for role, state in ROLE_STATE.items()}
+
+
+def role_for_state(state: TaskState) -> Role | None:
+    """Role that serves ``state`` (None for states no single role owns)."""
+    return STATE_ROLE.get(state)
+
 
 @dataclass(frozen=True)
 class Event:
