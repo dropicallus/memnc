@@ -46,6 +46,15 @@ def test_role_requirement():
     assert not satisfies(needs, _node(), "coder")
 
 
+def test_role_requirement_does_not_block_infrastructure_roles():
+    """A coder-constrained task must still be plannable and criticable."""
+    needs = TaskNeeds(roles=["coder"])
+    assert satisfies(needs, _node(), "planner")
+    assert satisfies(needs, _node(), "critic")
+    assert satisfies(needs, _node(), "coder")
+    assert not satisfies(TaskNeeds(roles=["critic"]), _node(), "coder")
+
+
 def test_empty_needs_object_is_unconstrained():
     assert satisfies(TaskNeeds(), _node(), "planner")
     # fail-closed still applies: a needs object with no constraints but set

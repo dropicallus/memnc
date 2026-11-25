@@ -222,12 +222,13 @@ def satisfies(needs: TaskNeeds | None, node: NodeInfo | None, role: str) -> bool
         return True
     if node is None:
         return False
+    if role != "coder":
+        # VRAM/model/role constraints target the executing claim;
+        # infrastructure roles (planner/critic) run fixed per-node models and
+        # must still be able to claim a coder-constrained task for PLANNING.
+        return True
     if needs.roles and role not in needs.roles:
         return False
-    if role != "coder":
-        # VRAM/model constraints target the executing claim; infrastructure
-        # roles (planner/critic) run fixed per-node models.
-        return True
     if needs.model and needs.model not in node.models:
         return False
     if needs.vram_gb and node.vram_gb < needs.vram_gb:
