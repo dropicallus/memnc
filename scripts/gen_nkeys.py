@@ -116,6 +116,10 @@ def _node_pubs(node: str) -> list[str]:
         "mesh.agent.*.result",  # role results (role is payload, not transport)
         "mesh.agent.work",  # SUBJECT_AGENT_WORK: adapter work loop egress
         "mesh.bid.*.*",  # SUBJECT_BID = mesh.bid.{task_id}.{step_id}
+        # P5.1: the worker dead-letters a command it refused to run. Without
+        # this the DLQ publish is denied, the message redelivers to exhaustion
+        # and a poisoned task blocks the whole role.
+        "mesh.dlq",
         "mesh.ledger",  # M11 claim CAS
         "mesh.registry.register",
         "mesh.registry.withdraw",

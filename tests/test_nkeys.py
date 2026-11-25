@@ -82,6 +82,7 @@ class TestGenerator:
             "mesh.task.submit.>",
             "mesh.agent.*.result",
             "mesh.bid.*.*",
+            "mesh.dlq",
             "mesh.ledger",
         ):
             assert needed in pubs
