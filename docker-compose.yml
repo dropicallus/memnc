@@ -197,6 +197,27 @@ services:
       NODE_NAME: ${NODE_NAME:-node-a}-coder
       NATS_NKEYS_SEED: /secrets/${NODE_NAME:-node-a}-coder.nk
       MODEL_CODER: ${MODEL_CODER:-qwen2.5-coder:7b}
+      HARNESS_CODER: ${HARNESS_CODER:-inproc}
+    depends_on:
+      nats:
+        condition: service_healthy
+    mem_limit: 2g
+    cpus: 4.0
+    pids_limit: 512
+
+  # Second coding lane: one model per GPU card. Both coders share the role
+  # subject/durable (mesh.agent.coder.cmd), so tasks load-balance across the
+  # two models instead of queueing behind one slow card.
+  worker-coder-swift:
+    <<: *mesh-service
+    command: ["python", "-m", "memnc.worker"]
+    environment:
+      <<: *mesh-env
+      ROLE: coder
+      NODE_NAME: ${NODE_NAME:-node-a}-coder-swift
+      NATS_NKEYS_SEED: /secrets/${NODE_NAME:-node-a}-coder-swift.nk
+      MODEL_CODER: ${MODEL_CODER_SWIFT:-swift/swift-1.5}
+      HARNESS_CODER: ${HARNESS_CODER:-inproc}
     depends_on:
       nats:
         condition: service_healthy

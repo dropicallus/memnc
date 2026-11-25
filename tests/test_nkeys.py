@@ -77,7 +77,13 @@ class TestGenerator:
         assert "mesh.node.node-b.>" in pubs
         assert "mesh.node.node-c.>" not in pubs
         # worker egress per schema.py
-        for needed in ("mesh.task.*.events", "mesh.agent.*.result", "mesh.bid.*.*", "mesh.ledger"):
+        for needed in (
+            "mesh.task.*.events",
+            "mesh.task.submit.>",
+            "mesh.agent.*.result",
+            "mesh.bid.*.*",
+            "mesh.ledger",
+        ):
             assert needed in pubs
         # worker ingress: tasks/cmds/auction fan-out
         for needed in ("mesh.task.>", "mesh.agent.*.cmd", "mesh.auction.*.*"):

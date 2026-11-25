@@ -109,6 +109,10 @@ def _node_pubs(node: str) -> list[str]:
         f"mesh.node.{node}.>",  # own heartbeat + node telemetry
         f"mesh.node.health.{node}",  # T3: HealthPublisher (SUBJECT_HEALTH)
         "mesh.task.*.events",  # append to task event streams
+        # M16: a worker that plans locally fans its sub-steps out through the
+        # submit subject. Without this the worker's fanout dies on an ACL
+        # violation and the step silently retries forever.
+        "mesh.task.submit.>",
         "mesh.agent.*.result",  # role results (role is payload, not transport)
         "mesh.agent.work",  # SUBJECT_AGENT_WORK: adapter work loop egress
         "mesh.bid.*.*",  # SUBJECT_BID = mesh.bid.{task_id}.{step_id}
