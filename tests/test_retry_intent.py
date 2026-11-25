@@ -72,8 +72,14 @@ def test_dispatch_payload_carries_override():
     assert any(env.payload.get("model_override") == "big:32b" for env in envelopes)
 
 
-def test_worker_uses_model_override_in_run_impl():
-    settings = Settings(role="coder", node_name="node-a", model_coder="default-m")
+def test_worker_uses_model_override_in_run_impl(tmp_path):
+    settings = Settings(
+        role="coder",
+        node_name="node-a",
+        model_coder="default-m",
+        harness_coder="inproc",
+        workspace_root=str(tmp_path / "ws"),
+    )
     worker = Worker(settings, bus=FakeBus(), backend=object())  # type: ignore[arg-type]
     snapshot = TaskSnapshot(
         task_id="ovr-1", trace_id="t1", task="do it", state=TaskState.PLANNING
@@ -98,8 +104,14 @@ def test_worker_uses_model_override_in_run_impl():
     assert seen["model"] == "override-m"
 
 
-def test_worker_without_override_keeps_role_default():
-    settings = Settings(role="coder", node_name="node-a", model_coder="default-m")
+def test_worker_without_override_keeps_role_default(tmp_path):
+    settings = Settings(
+        role="coder",
+        node_name="node-a",
+        model_coder="default-m",
+        harness_coder="inproc",
+        workspace_root=str(tmp_path / "ws"),
+    )
     worker = Worker(settings, bus=FakeBus(), backend=object())  # type: ignore[arg-type]
     snapshot = TaskSnapshot(
         task_id="ovr-2", trace_id="t2", task="do it", state=TaskState.PLANNING

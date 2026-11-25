@@ -915,7 +915,9 @@ class Worker:
                 error=result.error or f"harness {harness_name} failed",
                 tool_steps=result.tool_events,
             )
-        changed = await changed_file_contents(workspace, max_bytes=self.settings.max_artifact_bytes)
+        changed = result.files if result.files is not None else await changed_file_contents(
+            workspace, max_bytes=self.settings.max_artifact_bytes
+        )
         errors = python_syntax_errors(changed)
         if errors:
             return ResultPayload(

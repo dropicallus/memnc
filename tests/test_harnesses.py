@@ -606,6 +606,38 @@ def test_opencode_qualify_model():
     assert OpenCodeHarness(model="x", opencode_bin="false").model == "ollama/x"
 
 
+def test_opencode_qualify_model_keeps_configured_provider(tmp_path, monkeypatch):
+    """A provider that exists only in the node's opencode.json counts as qualified.
+
+    Regression: `inkling/inkling-2-mini` was rewritten to
+    `ollama/inkling/inkling-2-mini`, which opencode rejects with a 500.
+    """
+    import json as _json
+
+    from memnc.harnesses import opencode
+
+    (tmp_path / "opencode.json").write_text(
+        _json.dumps({"provider": {"inkling": {"models": {}}}})
+    )
+    monkeypatch.setenv("OPENCODE_CONFIG_SOURCE", str(tmp_path))
+    monkeypatch.setattr(opencode, "_PROVIDER_CACHE", None)
+    assert opencode.qualify_model("inkling/inkling-2-mini") == "inkling/inkling-2-mini"
+    # unknown providers still get the ollama prefix
+    assert opencode.qualify_model("nope/model") == "ollama/nope/model"
+
+
+def test_opencode_stderr_error_lines_only():
+    """Tool output on stderr is normal; only real error lines count."""
+    from memnc.harnesses.opencode import _stderr_error
+
+    assert _stderr_error("\x1b[0m") is None
+    assert _stderr_error("hello\n") is None
+    assert (
+        _stderr_error('Error: {"name":"UnknownError","data":{"message":"x"}}')
+        is not None
+    )
+
+
 def test_opencode_harness_reports_nonzero_exit(tmp_path):
     from memnc.harnesses.opencode import OpenCodeHarness
 
@@ -619,11 +651,50 @@ def test_opencode_harness_reports_nonzero_exit(tmp_path):
 def test_opencode_harness_stderr_only_is_error(tmp_path):
     from memnc.harnesses.opencode import OpenCodeHarness
 
-    oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\necho boom >&2\nexit 0\n")
+    oc_bin = _write_fake_opencode(
+        tmp_path, "#!/bin/sh\necho 'Error: boom' >&2\nexit 1\n"
+    )
     harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
     result = asyncio.run(harness.run("do it", tmp_path))
     assert result.ok is False
-    assert result.error == "boom"
+    assert result.error == "Error: boom"
+
+
+def test_opencode_harness_ignores_tool_output_on_stderr(tmp_path):
+    """A successful run whose tool printed to stderr must stay ok."""
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\necho hello >&2\nexit 0\n")
+    harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
+    result = asyncio.run(harness.run("do it", tmp_path))
+    assert result.ok is True
+    assert result.error is None
+
+
+def test_opencode_harness_collects_files_without_git(tmp_path):
+    """Artifacts come from a filesystem snapshot, not git (absent in the image)."""
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    oc_bin = _write_fake_opencode(
+        tmp_path, "#!/bin/sh\nprintf \"print('hi')\\n\" > hello.py\necho done\n"
+    )
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
+    result = asyncio.run(harness.run("do it", ws))
+    assert result.ok is True
+    assert result.files == {"hello.py": "print('hi')\n"}
+
+
+def test_snapshot_tree_ignores_model_blobs(tmp_path):
+    from memnc.harnesses.workspace import compare_trees, snapshot_tree
+
+    (tmp_path / "ai_models").mkdir()
+    (tmp_path / "ai_models" / "big.gguf").write_text("blob")
+    before = snapshot_tree(tmp_path)
+    assert before == {}
+    (tmp_path / "out.py").write_text("x = 1\n")
+    assert compare_trees(tmp_path, before) == {"out.py": "x = 1\n"}
 
 
 def test_opencode_harness_timeout_kills_whole_tree(tmp_path):

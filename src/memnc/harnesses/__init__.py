@@ -27,6 +27,10 @@ class HarnessResult:
     exit_code: int | None = None
     error: str | None = None
     transcript_path: str | None = None
+    # Text files the run created or modified (path -> content). Harnesses that
+    # can observe the filesystem fill this; the worker prefers it over a
+    # post-hoc workspace scan, which needs git (absent in the container).
+    files: dict[str, str] | None = None
 
 
 @dataclass

@@ -8,6 +8,7 @@ for the ResultPayload contract.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 _GIT_TIMEOUT_S = 30
@@ -95,3 +96,71 @@ async def workspace_diff(workspace: Path) -> str:
         return await _git("diff", cwd=workspace)
     except (TimeoutError, FileNotFoundError, OSError):
         return ""
+
+
+# --- filesystem snapshots -------------------------------------------------
+# Git is not available (and usually not correct) inside the worker containers:
+# the image ships no git, and /workspace often sits INSIDE a larger repo, so a
+# git diff there would report the repo's source edits, not the coder's work.
+# Harnesses therefore take a plain path -> (size, mtime) snapshot before the
+# run and treat any new or touched file as the product of that run.
+
+IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "ai_models",
+}
+
+
+def snapshot_tree(root: Path, limit: int = 50_000) -> dict[str, tuple[int, int]]:
+    """Map every regular file under ``root`` to (size, mtime_ns).
+
+    Directories in IGNORED_DIRS are pruned (model blobs and VCS internals are
+    never coder artifacts and would dominate the walk). Capped at ``limit``
+    entries so a pathological workspace cannot stall a run.
+    """
+    snap: dict[str, tuple[int, int]] = {}
+    if not root.is_dir():
+        return snap
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for name in filenames:
+            path = Path(dirpath) / name
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            snap[str(path.relative_to(root))] = (st.st_size, st.st_mtime_ns)
+            if len(snap) >= limit:
+                return snap
+    return snap
+
+
+def compare_trees(
+    root: Path, before: dict[str, tuple[int, int]], max_bytes: int = 1_000_000
+) -> dict[str, str]:
+    """Read every file that is new or changed relative to ``before``.
+
+    Binary files (NUL byte in the first 8 KiB) and files above ``max_bytes``
+    are skipped: FileArtifact carries text. Deletions cannot be expressed and
+    are ignored.
+    """
+    after = snapshot_tree(root)
+    changed: dict[str, str] = {}
+    for rel, (size, mtime) in after.items():
+        if before.get(rel) == (size, mtime):
+            continue
+        path = root / rel
+        try:
+            data = path.read_bytes()[: max_bytes + 1]
+        except OSError:
+            continue
+        if len(data) > max_bytes or b"\x00" in data[:8192]:
+            continue
+        changed[rel] = data.decode(errors="replace")
+    return changed
