@@ -1444,25 +1444,34 @@ class Orchestrator:
                 },
             )
             # One requeue announcement for anyone tailing the ledger, plus the
-            # event stream entry the FSM-side consumers already read.
-            await self.bus.publish_envelope(
-                SUBJECT_REQUEUE.format(task_id=reaped.task_id),
-                Envelope(
-                    task_id=reaped.task_id,
-                    trace_id=reaped.trace_id,
-                    kind=Kind.EVENT,
-                    node=self.settings.node_name,
-                    state=reaped.state,
-                    attempt=reaped.attempt,
-                    payload={
-                        "reason": reason,
-                        "role": reaped.next_role,
-                        "reaps": reaped.reaps,
-                        "reaped_from": snapshot.claimed_by,
-                    },
-                ),
-            )
-            await self.bus.emit_event(reaped, "claim.reaped", reason)
+            # event stream entry the FSM-side consumers already read. Both are
+            # notifications: if the stream does not cover the subject (older
+            # deployment, stream not migrated yet) the release must still
+            # stand and the other tasks in this pass must still be reaped.
+            try:
+                await self.bus.publish_envelope(
+                    SUBJECT_REQUEUE.format(task_id=reaped.task_id),
+                    Envelope(
+                        task_id=reaped.task_id,
+                        trace_id=reaped.trace_id,
+                        kind=Kind.EVENT,
+                        node=self.settings.node_name,
+                        state=reaped.state,
+                        attempt=reaped.attempt,
+                        payload={
+                            "reason": reason,
+                            "role": reaped.next_role,
+                            "reaps": reaped.reaps,
+                            "reaped_from": snapshot.claimed_by,
+                        },
+                    ),
+                )
+                await self.bus.emit_event(reaped, "claim.reaped", reason)
+            except Exception as exc:  # noqa: BLE001 - notification only
+                log.warning(
+                    "requeue announcement failed",
+                    extra={"task_id": reaped.task_id, "error": str(exc)[:200]},
+                )
 
     async def _dispatch_claimed(self) -> None:
         """M11 referee: dispatch claimable tasks that have been CAS-claimed.

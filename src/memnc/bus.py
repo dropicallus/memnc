@@ -152,42 +152,60 @@ class Bus:
         if self.nc is not None and not self.nc.is_closed:
             await self.nc.drain()
 
+    #: Subjects that must be covered by the MESH stream. Kept as a module
+    #: constant so ``ensure_stream`` can migrate an existing stream instead of
+    #: silently leaving it on an older subject set.
+    STREAM_SUBJECTS = (
+        "mesh.agent.>",
+        "mesh.auction.>",
+        "mesh.bid.>",
+        "mesh.task.*.events",
+        "mesh.task.*.requeue",
+        "mesh.dlq",
+        "mesh.node.>",
+        "mesh.model.>",
+    )
+
     async def ensure_stream(self) -> None:
         assert self.js is not None
-        try:
-            await self.js.stream_info(self.settings.stream_name)
-            return
-        except NotFoundError:
-            pass
-        await self.js.add_stream(
-            StreamConfig(
-                name=self.settings.stream_name,
-                # NOTE: `mesh.task.submit` is intentionally NOT covered here.
-                # It is a synchronous request/reply channel; if it were part of
-                # the JetStream stream, NATS would answer `nc.request()` with the
-                # JS publish-ack ({stream, seq}) instead of the handler's
-                # `message.respond()` result. Everything that actually flows to
-                # the stream (commands, results, auction/bids, task events, dlq)
-                # stays covered.
-                subjects=[
-                    "mesh.agent.>",
-                    "mesh.auction.>",
-                    "mesh.bid.>",
-                    "mesh.task.*.events",
-                    "mesh.dlq",
-                    "mesh.node.>",
-                    "mesh.model.>",
-                ],
-                retention=RetentionPolicy.LIMITS,
-                # nats-py 2.x: max_age / duplicate_window are SECONDS;
-                # the py lib converts to nanoseconds for the server.
-                max_age=7 * 24 * 3600,
-                max_msgs=1_000_000,
-                duplicate_window=120,
-                storage="file",
-            )
+        cfg = StreamConfig(
+            name=self.settings.stream_name,
+            # NOTE: `mesh.task.submit` is intentionally NOT covered here.
+            # It is a synchronous request/reply channel; if it were part of
+            # the JetStream stream, NATS would answer `nc.request()` with the
+            # JS publish-ack ({stream, seq}) instead of the handler's
+            # `message.respond()` result. Everything that actually flows to
+            # the stream (commands, results, auction/bids, task events, dlq)
+            # stays covered.
+            subjects=list(self.STREAM_SUBJECTS),
+            retention=RetentionPolicy.LIMITS,
+            # nats-py 2.x: max_age / duplicate_window are SECONDS;
+            # the py lib converts to nanoseconds for the server.
+            max_age=7 * 24 * 3600,
+            max_msgs=1_000_000,
+            duplicate_window=120,
+            storage="file",
         )
-        log.info("created stream %s", self.settings.stream_name)
+        try:
+            info = await self.js.stream_info(self.settings.stream_name)
+        except NotFoundError:
+            await self.js.add_stream(cfg)
+            log.info("created stream %s", self.settings.stream_name)
+            return
+        missing = sorted(set(cfg.subjects) - set(info.config.subjects))
+        if not missing:
+            return
+        # A deployment that existed before a subject was introduced (P5.1's
+        # requeue) keeps its old stream config otherwise; the publish then
+        # fails with NoStreamResponseError and the notification is lost.
+        migrated = info.config
+        migrated.subjects = sorted(set(migrated.subjects) | set(missing))
+        await self.js.update_stream(migrated)
+        log.info(
+            "migrated stream %s subjects: %s",
+            self.settings.stream_name,
+            ", ".join(missing),
+        )
 
     async def ensure_kv(self) -> None:
         assert self.js is not None

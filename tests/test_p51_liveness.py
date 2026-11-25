@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 
+from nats.js.api import StreamConfig
+
 from memnc.bus import Bus
 from memnc.config import Settings
 from memnc.orchestrator import Orchestrator
@@ -214,3 +216,90 @@ def test_reaper_falls_back_to_ttl_for_a_never_seen_worker():
 
     assert len(bus.released) == 1
     assert "older than" in bus.released[0][1]
+
+
+# -- stream coverage for the requeue subject ---------------------------------
+def test_stream_subjects_cover_the_requeue_subject():
+    """A requeue publish must land in the stream, not bounce (P5.1)."""
+    assert "mesh.task.*.requeue" in Bus.STREAM_SUBJECTS
+    # the submit channel stays a plain request/reply subject
+    assert not any(s.startswith("mesh.task.submit") for s in Bus.STREAM_SUBJECTS)
+
+
+def test_ensure_stream_migrates_an_existing_stream():
+    """Deployments that predate the subject keep working after an upgrade."""
+
+    class FakeJS:
+        def __init__(self):
+            self.updated = None
+            self.info = type(
+                "Info",
+                (),
+                {"config": StreamConfig(name="MESH", subjects=["mesh.agent.>"])},
+            )()
+
+        async def stream_info(self, name):
+            return self.info
+
+        async def update_stream(self, config):
+            self.updated = config
+
+        async def add_stream(self, config):  # pragma: no cover - not expected
+            raise AssertionError("must migrate, not recreate")
+
+    bus = Bus(Settings())
+    bus.js = FakeJS()  # type: ignore[assignment]
+    asyncio.run(bus.ensure_stream())
+
+    assert bus.js.updated is not None
+    subjects = bus.js.updated.subjects
+    assert "mesh.task.*.requeue" in subjects
+    assert "mesh.agent.>" in subjects  # pre-existing subject kept
+
+
+def test_ensure_stream_is_a_noop_when_already_current():
+    class FakeJS:
+        def __init__(self):
+            self.info = type(
+                "Info",
+                (),
+                {"config": StreamConfig(name="MESH", subjects=list(Bus.STREAM_SUBJECTS))},
+            )()
+
+        async def stream_info(self, name):
+            return self.info
+
+        async def update_stream(self, config):  # pragma: no cover - not expected
+            raise AssertionError("nothing to migrate")
+
+    bus = Bus(Settings())
+    bus.js = FakeJS()  # type: ignore[assignment]
+    asyncio.run(bus.ensure_stream())
+
+
+# -- notification failures must not stop the pass ----------------------------
+def test_reaper_survives_a_failed_requeue_publish():
+    class FlakyBus(ReapBus):
+        async def publish_envelope(self, subject, envelope):
+            raise RuntimeError("nats: no response from stream")
+
+    first = _snapshot(
+        "f1",
+        state=TaskState.CODING,
+        claimed_by="node-dead-coder:coder",
+        claimed_at_epoch=time.time() - 10,
+    )
+    second = _snapshot(
+        "f2",
+        state=TaskState.CODING,
+        claimed_by="node-dead-coder:coder",
+        claimed_at_epoch=time.time() - 10,
+    )
+    bus = FlakyBus([first, second])
+    orch = _orchestrator(bus)
+    orch._last_seen["node-dead-coder"] = time.time() - 300
+
+    asyncio.run(orch._reap_stale_claims())
+
+    assert [task_id for task_id, _ in bus.released] == ["f1", "f2"]
+    assert bus.events == []  # emit_event never reached, still no crash
