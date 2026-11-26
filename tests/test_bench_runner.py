@@ -204,7 +204,7 @@ def test_write_report_has_arm_rows(tmp_path: Path) -> None:
     assert "single-shot" in text and "mesh" in text
     assert "95% CI" in text
 
-# -- arm D: adversarial critic (docs/design-arm-c2d.md D1) -------------------
+# -- arm D: adversarial critic (docs/roadmap.md D1) -------------------
 
 
 def test_arms_include_d() -> None:

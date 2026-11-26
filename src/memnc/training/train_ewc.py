@@ -50,7 +50,7 @@ def load_fisher(path):
     """Load a previous Fisher diagonal plus the matching old LoRA weights."""
     if not os.path.exists(path):
         return None, None
-    d = torch.load(path, map_location="cpu", weights_only=False)
+    d = torch.load(path, map_location="cpu", weights_only=True)
     return d.get("fisher"), d.get("theta_old")
 
 
@@ -100,7 +100,9 @@ def main():
     if os.path.exists(adapter_path):
         from peft import set_peft_model_state_dict
         try:
-            sd_loaded = torch.load(adapter_path, map_location="cpu", weights_only=False)
+            import safetensors.torch as st
+
+            sd_loaded = st.load_file(adapter_path)
             if "state_dict" in sd_loaded:
                 sd_loaded = sd_loaded["state_dict"]
             imported, _ = set_peft_model_state_dict(model, sd_loaded, adapter_name="default")

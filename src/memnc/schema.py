@@ -109,7 +109,7 @@ REPUTATION_KEY = "model_rep.{model}"
 
 def background_key(task_id: str) -> str:
     """workflow_state companion key for a task's persistent Background
-    (docs/design-message-tuple.md)."""
+    (docs/roadmap.md)."""
     return f"background.{task_id}"
 
 
@@ -574,7 +574,7 @@ ROLE_OUTPUT: dict[Role, type[BaseModel]] = {
 }
 
 
-# Structured communication tuple (TalkHier-derived, docs/design-message-tuple.md):
+# Structured communication tuple (TalkHier-derived, docs/roadmap.md):
 # every debate hop carries (message, background, intermediate_output) instead of
 # re-derived prose. The background is persistent per task; the intermediate
 # output lives only inside the current hop's envelope payload.
@@ -643,17 +643,25 @@ class ConsultAnswer(BaseModel):
         return self
 
 
+# Bounds on submitted input. Submissions arrive from any publisher on the bus,
+# so size and range are enforced by the model, not by the caller.
+MAX_TASK_CHARS = 20_000
+MAX_CONTEXT_CHARS = 50_000
+MAX_REVISIONS_CEILING = 10
+MAX_SUBMIT_DEPTH_CEILING = 16
+
+
 class TaskSubmission(BaseModel):
-    task: str
-    context: str = ""
-    max_revisions: int | None = None
+    task: str = Field(max_length=MAX_TASK_CHARS)
+    context: str = Field(default="", max_length=MAX_CONTEXT_CHARS)
+    max_revisions: int | None = Field(default=None, ge=0, le=MAX_REVISIONS_CEILING)
     # M10 fan-out: the orchestrator decomposes the planner's multi-step plan
     # into independent subtasks on mesh.task.submit and returns immediately.
     fanout: bool = False
     # M11: agents-as-submitters recursion depth. depth 0 = human/meshctl top
     # task; an agent re-submitting from inside a task passes depth+1, and the
     # orchestrator rejects anything at or above Settings.max_submit_depth.
-    depth: int = 0
+    depth: int = Field(default=0, ge=0, le=MAX_SUBMIT_DEPTH_CEILING)
     # M11 ledger-based self-claiming: claimable tasks are NOT dispatched by
     # the orchestrator. They sit in RECEIVED until an agent CAS-claims them
     # (bus.try_claim); the orchestrator only referees the claim.
@@ -794,7 +802,7 @@ class TaskSnapshot(BaseModel):
         self.updated_at = now_iso()
 
 
-# --- digital twin + model management (plan 2026-11-16, T1) -------------------
+# --- digital twin + model management (T1) ------------------------------------
 
 
 class GpuCardHealth(BaseModel):
@@ -809,7 +817,7 @@ class GpuHealth(BaseModel):
     """Live GPU numbers as measured (never from a registry JSON).
 
     Headline vram_free_mb/vram_total_mb is the WORST card on the node, not a
-    sum — summing across cards masks a full GPU (Frank, 2026-11-17). The
+    sum — summing across cards masks a full GPU. The
     per-card truth is in `cards`.
     """
 
@@ -870,3 +878,24 @@ class ModelIntent(BaseModel):
     op: ModelIntentOp
     model: str = ""
     node: str = ""
+
+
+MIN_REQUEST_PREFIX = 6
+
+
+def resolve_request_id(prefix: str, request_ids: list[str]) -> tuple[str, list[str]]:
+    """Resolve a model-request id or unique prefix; ("", candidates) when refused.
+
+    An exact id wins. Otherwise the prefix must be at least MIN_REQUEST_PREFIX
+    characters and match exactly one id, so an empty or one-character prefix
+    can never approve the first request in the list.
+    """
+    prefix = prefix.lstrip("#").strip()
+    if prefix in request_ids:
+        return prefix, []
+    if len(prefix) < MIN_REQUEST_PREFIX:
+        return "", []
+    matches = sorted({i for i in request_ids if i.startswith(prefix)})
+    if len(matches) == 1:
+        return matches[0], []
+    return "", matches

@@ -83,6 +83,14 @@ function fill(id, rows) {
   const el = document.getElementById(id);
   if (rows) el.innerHTML = rows;
 }
+document.addEventListener("click", e => {
+  const b = e.target.closest("button[data-action]");
+  if (!b) return;
+  const payload = {action: b.dataset.action};
+  if (b.dataset.node) payload.node = b.dataset.node;
+  if (b.dataset.task) payload.task_id = b.dataset.task;
+  control(payload, b);
+});
 async function poll() {
   const t0 = performance.now();
   try {
@@ -101,7 +109,7 @@ async function poll() {
         `<td>${esc(n.vram_gb)} GB ${esc(n.gpu)}</td>` +
         `<td class="${n.paused ? "bad" : "ok"}">${n.paused ? "PAUSED" : "live"}</td>` +
         `<td>${esc(n.updated_at)}</td>` +
-        `<td><button onclick="control({action:'${n.paused ? "resume_node" : "pause_node"}',node:'${esc(n.node_id)}'},this)">` +
+        `<td><button data-action="${n.paused ? "resume_node" : "pause_node"}" data-node="${esc(n.node_id)}">` +
         `${n.paused ? "resume" : "pause"}</button></td></tr>`).join(""));
     fill("tasks",
       "<tr><th>task</th><th>state</th><th>rev</th><th>created</th><th>task text</th><th></th></tr>" +
@@ -111,8 +119,8 @@ async function poll() {
         `<td>${t.revisions}</td><td>${esc(t.created_at)}</td>` +
         `<td>${esc(t.task)}</td>` +
         `<td>${t.terminal ? "" :
-          `<button onclick="control({action:'cancel',task_id:'${esc(t.task_id)}'},this)">cancel</button> ` +
-          `<button onclick="control({action:'retry',task_id:'${esc(t.task_id)}'},this)">retry</button>`}</td></tr>`).join(""));
+          `<button data-action="cancel" data-task="${esc(t.task_id)}">cancel</button> ` +
+          `<button data-action="retry" data-task="${esc(t.task_id)}">retry</button>`}</td></tr>`).join(""));
     fill("caps",
       "<tr><th>agent</th><th>skill</th><th>node</th><th>load</th><th>model</th></tr>" +
       d.caps.map(c =>
@@ -328,11 +336,32 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         resp = await api_request(bus, "task.detail", task_id=task_id)
         return resp["data"]
 
+    def _same_origin(self) -> bool:
+        """Refuse cross-site and DNS-rebound requests (CSRF, rebinding).
+
+        A browser form cannot send application/json, and a cross-site fetch
+        that does is blocked by CORS (this server answers no preflight). The
+        Host and Origin checks close the remaining gaps.
+        """
+        bound = self.server.server_address[0]
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        if host not in {"127.0.0.1", "localhost", bound}:
+            return False
+        origin = self.headers.get("Origin")
+        return origin is None or urlparse(origin).hostname == host
+
     def do_POST(self) -> None:
         """T4: forward a human control command through the API write path."""
         path = urlparse(self.path).path
         if path != "/api/control":
             self._send(404, b"not found", "text/plain")
+            return
+        if not self._same_origin():
+            self._send(403, b'{"error": "cross-origin request refused"}', "application/json")
+            return
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            self._send(415, b'{"error": "Content-Type must be application/json"}', "application/json")
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))

@@ -8,7 +8,9 @@ from memnc.config import Settings
 from memnc.schema import TaskSnapshot
 from memnc.telegram import (
     MIN_TASK_PREFIX,
+    NOT_AUTHORIZED,
     TelegramObserver,
+    is_write_text,
     mreq_buttons,
     parse_callback,
     resolve_task_id,
@@ -58,6 +60,7 @@ def _observer(bus) -> TelegramObserver:
     obs.bus = bus
     obs.bot = _FakeBot()
     obs.chats = {"42"}
+    obs.users = {"7"}
     obs.settings = type("S", (), {"telegram_verbose": False})()
     obs._last_state = {}
     obs._announced = set()
@@ -293,12 +296,70 @@ def test_run_callback_authorized_press_end_to_end():
     cq = {
         "id": "cq2",
         "data": f"tk:{SNAP_A}:cancel",
+        "from": {"id": 7},
         "message": {"message_id": 9, "chat": {"id": 42}},
     }
     asyncio.run(obs._run_callback(cq))  # type: ignore[arg-type]
     assert obs.bot.answered == ["cq2"]
     assert calls == [("42", "cancel", SNAP_A)]
     assert obs.bot.edited == [("42", 9, f"tk:{SNAP_A}:cancel -> sent")]
+
+
+def test_run_callback_sender_not_allow_listed_is_denied():
+    obs = _observer(_FakeBus([]))
+    calls: list[tuple] = []
+
+    async def fake_control(chat, action, argument, model_override: str = ""):
+        calls.append((chat, action, argument))
+
+    obs._control = fake_control  # type: ignore[method-assign]
+    cq = {
+        "id": "cq3",
+        "data": f"tk:{SNAP_A}:cancel",
+        "from": {"id": 8},
+        "message": {"message_id": 9, "chat": {"id": 42}},
+    }
+    asyncio.run(obs._run_callback(cq))  # type: ignore[arg-type]
+    assert calls == []
+    assert obs.bot.answered == ["cq3"]
+    assert obs.bot.edited == []
+
+
+def test_run_callback_without_sender_is_denied():
+    obs = _observer(_FakeBus([]))
+    calls: list[tuple] = []
+
+    async def fake_control(chat, action, argument, model_override: str = ""):
+        calls.append((chat, action, argument))
+
+    obs._control = fake_control  # type: ignore[method-assign]
+    cq = {
+        "id": "cq4",
+        "data": f"tk:{SNAP_A}:cancel",
+        "message": {"message_id": 9, "chat": {"id": 42}},
+    }
+    asyncio.run(obs._run_callback(cq))  # type: ignore[arg-type]
+    assert calls == []
+
+
+def test_is_write_text_classifies_verbs():
+    assert is_write_text("/submit fix the parser", armed=False)
+    assert is_write_text("/cancel abc123", armed=False)
+    assert is_write_text("/approve #abc123", armed=False)
+    assert is_write_text("/stop worker node-b", armed=False)
+    assert is_write_text("/gate approve abc123", armed=False)
+    assert not is_write_text("/status", armed=False)
+    assert not is_write_text("/tasks", armed=False)
+    assert not is_write_text("/", armed=False)
+
+
+def test_is_write_text_plain_text_is_write_only_when_armed():
+    assert is_write_text("fix the parser", armed=True)
+    assert not is_write_text("fix the parser", armed=False)
+
+
+def test_not_authorized_text_is_user_facing():
+    assert "allow-listed" in NOT_AUTHORIZED
 
 
 # -- broadcast carries markup ------------------------------------------------

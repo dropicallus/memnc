@@ -58,3 +58,14 @@ async def test_fetch_unknown_manifest_raises(tmp_path: Path) -> None:
         assert await mt.ensure_local(f"does-not-exist-{uuid.uuid4().hex}.gguf") is None
     finally:
         await nc.close()
+
+
+def test_model_name_must_be_one_safe_component(tmp_path):
+    import pytest
+
+    from memnc.model_transport import _model_path
+
+    assert _model_path(tmp_path, "qwen2.5-coder:7b") == tmp_path / "qwen2.5-coder:7b"
+    for bad in ("../escape", "a/b", "/etc/passwd", ".hidden", "", "x\\y"):
+        with pytest.raises(ValueError):
+            _model_path(tmp_path, bad)

@@ -1,4 +1,4 @@
-"""Structured communication tuple models (docs/design-message-tuple.md)."""
+"""Structured communication tuple models (docs/roadmap.md)."""
 
 import asyncio
 import json

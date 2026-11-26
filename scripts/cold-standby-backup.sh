@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cold-standby backup (Duo topology): dump durable KV buckets and prune
 # old dumps. Run from cron on the active NATS host. See
-# docs/operations.md "Cold-standby backup".
+# docs/plan.md "Cold-standby backup".
 set -euo pipefail
 
 # Since the NKey migration the server rejects legacy tokens ("Authorization

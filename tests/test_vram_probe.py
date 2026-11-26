@@ -223,7 +223,7 @@ def test_probe_order_sysfs_wins_over_amdgpu_top(tmp_path, monkeypatch):
     assert probe_vram() == (100, 200)
 
 
-# --- per-GPU probe (Frank, 2026-11-17): summing masks a full card -----------
+# --- per-GPU probe: summing masks a full card -------------------------------
 
 
 def test_probe_gpus_lists_each_card(tmp_path, monkeypatch):

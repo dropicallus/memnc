@@ -1,6 +1,6 @@
 """Learned verifier V1: a linear scorer over deterministic solution features.
 
-Design: docs/design-learned-verifier.md. V1 is a pure-stdlib logistic
+Design: docs/roadmap.md. V1 is a pure-stdlib logistic
 regression trained on DPO pairs (see bench.dpo.build_pairs). Its scope is
 deliberately narrow: it learns to separate checker-passing solutions from
 checker-failing ones by SHAPE (empty files, placeholder stubs, syntax

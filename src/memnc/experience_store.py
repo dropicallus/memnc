@@ -1,12 +1,12 @@
 """ACE-style automated experience store (roadmap 15.3 item 5).
 
-DESIGN (before code, per repo rule): docs/design-ace-experience.md.
+DESIGN (before code, per repo rule): docs/roadmap.md.
 Evidence: ACE (ICLR 2026) — context as an append-only, itemized bullet
 store with a deterministic merge; the two guarded failure modes are
 brevity bias (over-compression in one step) and context collapse
 (duplicate bullets accumulating).
 
-This module is the programmatic counterpart of docs/experience.md: a
+This module is the programmatic counterpart of docs/roadmap.md: a
 file-backed, NATS-free store of per-topic experience bullets with a
 deterministic merge that enforces both ACE guards. Producers (bench runs
 now, observation deposits later) append bullets; nothing here calls an
@@ -16,11 +16,15 @@ attention over observation deposits — read-only ranking, not storage.)
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .fsutil import atomic_write
 from .observations import TaskObservation
 
 # One merge may retire at most this fraction of a topic's existing bullets
@@ -84,10 +88,9 @@ class ExperienceStore:
     def save(self) -> None:
         if not self.path:
             raise ValueError("store has no backing file")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        atomic_write(
+            self.path,
             json.dumps([b.to_dict() for b in self.bullets], indent=2) + "\n",
-            encoding="utf-8",
         )
 
     # -- reads -------------------------------------------------------------
@@ -265,3 +268,32 @@ def record_bench_run(jsonl_path: str | Path, store: ExperienceStore) -> dict[str
             )
         reports[topic] = store.merge(topic, bullets, source="bench")
     return reports
+
+
+@contextmanager
+def exclusive(path: str | Path) -> Iterator[None]:
+    """Hold an advisory lock across one load-modify-save cycle on ``path``.
+
+    The worker, the orchestrator and the dreaming job all write the same store.
+    Without the lock two cycles interleave and one update is lost. The lock is
+    advisory and per host: it protects the store on one machine's filesystem.
+    """
+    path = Path(path)
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def record_observation_locked(path: str | Path, observation: TaskObservation) -> bool:
+    """Record one observation under the store lock; True when it was added."""
+    with exclusive(path):
+        store = ExperienceStore(path).load()
+        added = record_observation(store, observation)
+        if added:
+            store.save()
+    return bool(added)

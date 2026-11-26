@@ -66,7 +66,7 @@ def create_server(
     @server.tool()
     def run_status(pattern: str, log: str = "", ckpt: str = "") -> dict:
         """Long-running job status: process liveness + checkpoint progress + log tail."""
-        return _run_status(pattern, log=log or None, ckpt=ckpt or None)
+        return _run_status(pattern, log=log or None, ckpt=ckpt or None, root=workspace)
 
     @server.tool()
     def daemon_status(units: str = "memnc-backlog-driver") -> dict:

@@ -5,7 +5,7 @@ solution to the task as text, one critique round sharpens the comparison, a
 judge picks a winner, and the winner is executed by the in-proc tool loop so
 the harness contract (workspace diff + summary) stays unchanged.
 
-Design note: docs/design-discuss-harness.md. Cost caveat: 2K+1 extra inference
+Design note: docs/roadmap.md. Cost caveat: 2K+1 extra inference
 calls vs one for inproc -- this is for hard tasks, not a default.
 """
 

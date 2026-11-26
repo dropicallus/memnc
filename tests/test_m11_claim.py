@@ -131,3 +131,7 @@ def test_now_iso_age_s_unparseable_is_zero_not_stale():
 
     assert now_iso_age_s("", 1_800_000_000.0) == 0.0
     assert now_iso_age_s("not-a-date", 1_800_000_000.0) == 0.0
+
+
+# Stale-claim reaping moved to lease-by-liveness in P5.1; the TTL-only
+# expectation that used to live here is covered by tests/test_p51_liveness.py.

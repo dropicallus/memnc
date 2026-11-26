@@ -41,6 +41,51 @@ def _run(checker_name: str, workdir: Path) -> list[str]:
     return list(failures)
 
 
+def run_isolated(checker_name: str, workdir: Path, *, timeout_s: int = 60) -> list[str]:
+    """Run ``_run`` in a child interpreter (opt-in, see Settings.bench_isolate).
+
+    The child gets the same allow-listed environment as the shell tool, runs
+    with the workspace as cwd, and is killed after ``timeout_s``. A checker
+    that exits the process or hangs is a failure instead of taking the bench
+    down with it.
+    """
+    import json
+    import subprocess
+    import sys
+    import tempfile
+
+    import memnc
+
+    from ..mcp.tools_shell import minimal_env
+
+    env = minimal_env()
+    env["PYTHONPATH"] = str(Path(memnc.__file__).resolve().parents[1])
+    with tempfile.TemporaryDirectory(prefix="memnc-bench-") as tmp:
+        out = Path(tmp) / "result.json"
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "memnc.bench.checkers", checker_name, str(workdir), str(out)],
+                cwd=str(workdir),
+                env=env,
+                capture_output=True,
+                timeout=timeout_s,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return [f"checker timeout after {timeout_s}s"]
+        if not out.is_file():
+            return ["checker produced no result (exited or crashed)"]
+        return list(json.loads(out.read_text(encoding="utf-8")))
+
+
+if __name__ == "__main__":
+    import json as _json
+    import sys as _sys
+
+    _name, _workdir, _out = _sys.argv[1], _sys.argv[2], _sys.argv[3]
+    Path(_out).write_text(_json.dumps(_run(_name, Path(_workdir))), encoding="utf-8")
+
+
 # ---------------------------------------------------------------- sync ----
 # Sync-tier checkers verify the AMENDED spec only (the environment update
 # delivered after the first coder pass). A solution that implements the

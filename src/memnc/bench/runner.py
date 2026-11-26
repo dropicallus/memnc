@@ -8,7 +8,7 @@ Arms (per benchmark design, committed in roadmap 14.15.9):
                     mirroring the production FSM role set.
   D) adversarial  — planner -> coder -> adversarial critic (max 2 revisions);
                     the critic may only approve after a concrete counterexample
-                    attempt (design: docs/design-arm-c2d.md, D1).
+                    attempt (design: docs/roadmap.md, D1).
   P) pheromone-routed — per attempt route_strategy() picks the edge over the
                     seeded pheromone field, runs that edge's arm path, and
                     folds the per-attempt checker verdict back into the field;
@@ -360,7 +360,7 @@ class BenchEngine:
         """Arm P: pheromone-routed strategy selection over the rescue chain.
 
         Each attempt asks route_strategy() over the seeded field (SEED_RUN,
-        the 2026-11-15 hard-tier full run), runs the chosen edge's arm path,
+        the hard-tier full run), runs the chosen edge's arm path,
         and folds the per-attempt verdict back into the field. The checker
         verdicts gate ONLY arm escalation (the A -> B -> C rescue floor),
         never the inner revision loops — same leakage boundary as the other

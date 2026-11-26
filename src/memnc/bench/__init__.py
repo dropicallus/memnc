@@ -16,7 +16,10 @@ __all__ = ["BenchTask", "get_task", "load_tasks", "verify_task", "write_referenc
 def verify_task(task: BenchTask, workdir: str | Path) -> list[str]:
     """Run the deterministic checker for a task; empty list = pass."""
     from memnc.bench import checkers
+    from memnc.config import get_settings
 
+    if get_settings().bench_isolate:
+        return checkers.run_isolated(task.checker, Path(workdir))
     return checkers._run(task.checker, Path(workdir))
 
 

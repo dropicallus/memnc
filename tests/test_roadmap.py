@@ -37,6 +37,7 @@ def test_prompt_carries_epic_and_evidence():
     assert "E2 Harness layer" in prompt
     assert "Foreign-harness approval routing" in prompt
     assert "§19.2" in prompt
+    assert "Context from the roadmap" in prompt
     assert row.backlog_title().startswith("[T2.6] ")
 
 

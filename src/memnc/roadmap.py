@@ -48,10 +48,10 @@ class RoadmapTask:
     def backlog_prompt(self) -> str:
         parts = [f"Roadmap {self.epic}: {self.title}"]
         if self.evidence:
-            parts.append(f"Kontext laut Roadmap: {self.evidence}")
+            parts.append(f"Context from the roadmap: {self.evidence}")
         parts.append(
-            "Lies zuerst docs/roadmap.md fuer den Abschnitt dieser Task und "
-            "setze sie um. Aendere nur, was fuer diese Task noetig ist."
+            "Read docs/roadmap.md first for this task's section and implement it. "
+            "Change only what this task requires."
         )
         return "\n".join(parts)
 

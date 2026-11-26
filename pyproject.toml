@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "memnc"
 version = "0.1.0"
 description = "Lightweight distributed multi-agent mesh over NATS"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "nats-py>=2.9",
@@ -24,9 +26,21 @@ dev = [
   "ruff>=0.8",
   "pytest-asyncio>=0.24",
 ]
+# Standalone LoRA-EWC training (src/memnc/training). Not used by the mesh.
+# Unpinned: CUDA and Unsloth builds depend on the host.
+train = [
+  "datasets",
+  "numpy",
+  "peft",
+  "safetensors",
+  "torch",
+  "trl",
+  "unsloth",
+]
 
 [project.scripts]
 meshctl = "memnc.cli:main"
+memnc-board = "memnc.mcp.board_server:main"
 memnc-telegram = "memnc.telegram:main"
 discuss-agent = "memnc.discuss.agent:main"
 discuss-driver = "memnc.discuss.driver:main"

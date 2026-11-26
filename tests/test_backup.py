@@ -1,4 +1,4 @@
-"""Cold-standby backup/restore (docs/operations.md Duo topology)."""
+"""Cold-standby backup/restore (docs/plan.md Duo topology)."""
 
 from unittest.mock import AsyncMock
 

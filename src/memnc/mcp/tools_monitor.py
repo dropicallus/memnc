@@ -15,6 +15,8 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
+from ..fsutil import PathEscapeError, read_text_limited, safe_path
+
 log = logging.getLogger(__name__)
 
 
@@ -286,7 +288,9 @@ def inference_status() -> dict[str, object]:
     }
 
 
-def run_status(pattern: str, log: str | None = None, ckpt: str | None = None) -> dict[str, object]:
+def run_status(
+    pattern: str, log: str | None = None, ckpt: str | None = None, *, root: Path
+) -> dict[str, object]:
     """Status of a long-running job by process pattern.
 
     Reads progress from the checkpoint JSONL (kinds: eval/proposal) and the
@@ -308,15 +312,20 @@ def run_status(pattern: str, log: str | None = None, ckpt: str | None = None) ->
 
     result: dict[str, object] = {"running": running, "pids": pids}
     if ckpt:
-        ck_path = Path(ckpt)
-        if ck_path.exists():
+        ck_path = _confined_file(root, ckpt)
+        if ck_path is None:
+            result["ckpt"] = {"rejected": "path outside workspace or not a file"}
+        else:
             counts = {"eval": 0, "proposal": 0, "evals_ok": 0}
-            for line in ck_path.read_text(encoding="utf-8").splitlines():
+            text, _truncated = read_text_limited(ck_path, _MAX_STATUS_BYTES)
+            for line in text.splitlines():
                 if not line.strip():
                     continue
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
                     continue
                 kind = rec.get("kind")
                 if kind in counts and isinstance(counts[kind], int):
@@ -324,16 +333,37 @@ def run_status(pattern: str, log: str | None = None, ckpt: str | None = None) ->
                 if kind == "eval" and rec.get("success"):
                     counts["evals_ok"] += 1
             result["ckpt"] = counts
-        else:
-            result["ckpt"] = None
     if log:
-        log_path = Path(log)
-        if log_path.exists():
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            result["log_tail"] = lines[-8:]
+        log_path = _confined_file(root, log)
+        if log_path is None:
+            result["log_tail"] = {"rejected": "path outside workspace or not a file"}
         else:
-            result["log_tail"] = None
+            result["log_tail"] = _tail_lines(log_path, _MAX_STATUS_BYTES, 8)
     return result
+
+
+_MAX_STATUS_BYTES = 1_000_000
+
+
+def _confined_file(root: Path, value: str) -> Path | None:
+    """Resolve a status path under the workspace; None if it escapes or is not a file."""
+    try:
+        path = safe_path(root, value)
+    except PathEscapeError:
+        return None
+    return path if path.is_file() else None
+
+
+def _tail_lines(path: Path, max_bytes: int, count: int) -> list[str]:
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > max_bytes:
+            handle.seek(size - max_bytes)
+        text = handle.read().decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if size > max_bytes:
+        lines = lines[1:]  # the first line may start mid-record
+    return lines[-count:]
 
 
 def daemon_status(units: str = "memnc-backlog-driver") -> dict[str, object]:

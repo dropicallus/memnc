@@ -152,7 +152,7 @@ VERDICT="$(snapshot_field "$SNAPSHOT" "(d.get('critique') or {}).get('summary','
 # --- T9 evidence: model-management trail --------------------------------------
 # After DONE, scan the orchestrator (and, if running, model_manager) logs for
 # the T3-T8 trail: health announces, alloc claim, intent load/drain timing.
-# Failure criteria per plan (2026-11-16 T9): planner timeout, already_empty,
+# Failure criteria per plan (T9): planner timeout, already_empty,
 # VRAM timeout - any of these in the logs during the run = evidence FAIL.
 # Best-effort: missing logs only warn, never flip a verified DONE to FAIL.
 if [ "${E2E_SKIP_T9:-0}" != "1" ]; then

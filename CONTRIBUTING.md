@@ -6,7 +6,7 @@ orchestration mesh for LLM agents. This document covers the basics.
 ## Getting started
 
 ```bash
-git clone https://github.com/dropicallus/memnc.git
+git clone <repository-url>
 cd memnc
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
@@ -19,9 +19,10 @@ docker compose up -d          # NATS + workers
 1. Create a feature branch from `main`
    (`git checkout -b feat/my-change`).
 2. Make your change.
-3. Run the test suite:
+3. Run the lint and the test suite (CI runs the same two commands):
 
    ```bash
+   ruff check src tests
    pytest tests/ -q
    ```
 
@@ -42,7 +43,7 @@ docker compose up -d          # NATS + workers
   (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), e.g.
   `feat(t6): resource-aware claim gate`.
 - **Plan changes**: substantial design decisions belong in
-  `docs/memnc-mesh-plan.md` (staged plan §14) before or with the code.
+  `docs/plan.md` (staged plan §14) before or with the code.
 - **Python style**: keep it standard-library-plus-pydantic; no new heavy
   dependencies without discussion.
 

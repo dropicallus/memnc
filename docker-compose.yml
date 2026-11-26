@@ -78,9 +78,8 @@ x-mesh-service: &mesh-service
     # T0 quick-win: experience store lives under /app/data (relative
     # EXPERIENCE_STORE_PATH) — bind rw, containers are read_only otherwise.
     - ./data:/app/data
-    # H4: per-node NKey seeds live here (secrets/<node>.nk, mode 0600,
-    # never committed). Point NATS_NKEYS_SEED at /secrets/<node>.nk.
-    - ./secrets:/secrets:ro
+    # H4: per-node NKey seeds (secrets/<node>.nk, mode 0600, never committed).
+    # Each service mounts only its own seed, see the service blocks below.
     # 15.4.1: per-node opencode provider config. Read-only on purpose, and
     # NOT mounted at the path opencode uses: 1.19 writes a .gitignore next to
     # its config on startup, so a read-only config dir aborts every run. The
@@ -108,6 +107,12 @@ services:
     command:
       - "-c"
       - |
+        # Fail closed before any branch: every start needs NKey or token auth,
+        # including cluster members (their route block adds no client auth).
+        if [ -z "$$NATS_CONF" ] && [ -z "$$NATS_TOKEN" ]; then
+          echo "FATAL: neither NATS_CONF (NKey mode) nor NATS_TOKEN (token mode) is set" >&2
+          exit 1
+        fi
         # Topology template: NATS_CLUSTER_ROUTES (comma-separated list of
         # "nats://host:6222" route URLs, own address included) turns this
         # server into a Raft cluster member. Solo deployments leave it
@@ -131,10 +136,6 @@ services:
         fi
         if [ -n "$$NATS_CONF" ]; then
           exec nats-server -js -sd /data --http_port 8222 --config /cfg/nats.conf
-        fi
-        if [ -z "$$NATS_TOKEN" ]; then
-          echo "FATAL: neither NATS_CONF (NKey mode) nor NATS_TOKEN (token mode) is set" >&2
-          exit 1
         fi
         exec nats-server -js -sd /data --http_port 8222 --auth "$$NATS_TOKEN"
     environment:
@@ -165,6 +166,13 @@ services:
       <<: *mesh-env
       NODE_NAME: orchestrator
       NATS_NKEYS_SEED: /secrets/orchestrator.nk
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/app/data
+      - ${HOME:-/root}/.config/opencode:/opt/opencode-config:ro
+      - ${HOME:-/root}/.ssh:/tmp/.ssh:ro
+      - ${HOME:-/root}/ai_models:/workspace/ai_models:ro
+      - ./secrets/orchestrator.nk:/secrets/orchestrator.nk:ro
     depends_on:
       nats:
         condition: service_healthy
@@ -181,6 +189,13 @@ services:
       NODE_NAME: ${NODE_NAME:-node-a}-planner
       NATS_NKEYS_SEED: /secrets/${NODE_NAME:-node-a}-planner.nk
       MODEL_PLANNER: ${MODEL_PLANNER:-qwen2.5:7b}
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/app/data
+      - ${HOME:-/root}/.config/opencode:/opt/opencode-config:ro
+      - ${HOME:-/root}/.ssh:/tmp/.ssh:ro
+      - ${HOME:-/root}/ai_models:/workspace/ai_models:ro
+      - ./secrets/${NODE_NAME:-node-a}-planner.nk:/secrets/${NODE_NAME:-node-a}-planner.nk:ro
     depends_on:
       nats:
         condition: service_healthy
@@ -198,6 +213,13 @@ services:
       NATS_NKEYS_SEED: /secrets/${NODE_NAME:-node-a}-coder.nk
       MODEL_CODER: ${MODEL_CODER:-qwen2.5-coder:7b}
       HARNESS_CODER: ${HARNESS_CODER:-inproc}
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/app/data
+      - ${HOME:-/root}/.config/opencode:/opt/opencode-config:ro
+      - ${HOME:-/root}/.ssh:/tmp/.ssh:ro
+      - ${HOME:-/root}/ai_models:/workspace/ai_models:ro
+      - ./secrets/${NODE_NAME:-node-a}-coder.nk:/secrets/${NODE_NAME:-node-a}-coder.nk:ro
     depends_on:
       nats:
         condition: service_healthy
@@ -218,6 +240,13 @@ services:
       NATS_NKEYS_SEED: /secrets/${NODE_NAME:-node-a}-coder-swift.nk
       MODEL_CODER: ${MODEL_CODER_SWIFT:-swift/swift-1.5}
       HARNESS_CODER: ${HARNESS_CODER:-inproc}
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/app/data
+      - ${HOME:-/root}/.config/opencode:/opt/opencode-config:ro
+      - ${HOME:-/root}/.ssh:/tmp/.ssh:ro
+      - ${HOME:-/root}/ai_models:/workspace/ai_models:ro
+      - ./secrets/${NODE_NAME:-node-a}-coder-swift.nk:/secrets/${NODE_NAME:-node-a}-coder-swift.nk:ro
     depends_on:
       nats:
         condition: service_healthy
@@ -240,6 +269,13 @@ services:
       INFERENCE_PROVIDER: ${CRITIC_INFERENCE_PROVIDER:-openai}
       INFERENCE_BASE_URL: ${CRITIC_INFERENCE_BASE_URL:-http://host.docker.internal:8098}
       MODEL_CRITIC: ${CRITIC_MODEL:-gemma4-31b}
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/app/data
+      - ${HOME:-/root}/.config/opencode:/opt/opencode-config:ro
+      - ${HOME:-/root}/.ssh:/tmp/.ssh:ro
+      - ${HOME:-/root}/ai_models:/workspace/ai_models:ro
+      - ./secrets/${NODE_NAME:-node-a}-critic.nk:/secrets/${NODE_NAME:-node-a}-critic.nk:ro
     depends_on:
       nats:
         condition: service_healthy
@@ -256,11 +292,14 @@ services:
       NATS_NKEYS_SEED: /secrets/${NODE_NAME:-node-a}-telegram.nk
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_ALLOW: ${TELEGRAM_ALLOW:-}
+      # Telegram user ids allowed to write (/submit, /cancel, /approve, buttons).
+      # Empty = read-only bot.
+      TELEGRAM_ALLOW_USERS: ${TELEGRAM_ALLOW_USERS:-}
       TELEGRAM_POLL_S: ${TELEGRAM_POLL_S:-25}
     volumes:
-      # Read-only mirror: no workspace/data access, but the NKey seed
-      # (NATS_NKEYS_SEED=/secrets/<node>-telegram.nk) must stay mounted.
-      - ./secrets:/secrets:ro
+      # Read-only mirror: no workspace/data access, only its own NKey seed
+      # (NATS_NKEYS_SEED=/secrets/<node>-telegram.nk).
+      - ./secrets/${NODE_NAME:-node-a}-telegram.nk:/secrets/${NODE_NAME:-node-a}-telegram.nk:ro
     depends_on:
       nats:
         condition: service_healthy

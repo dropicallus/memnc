@@ -13,7 +13,7 @@ class Settings:
 
     def __init__(self) -> None:
         self.nats_url = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
-        self.nats_token = os.environ.get("NATS_TOKEN", "dev-token")
+        self.nats_token = os.environ.get("NATS_TOKEN", "")
         self.subject_fmt = os.environ.get("DISCUSS_SUBJECT_FMT", "discuss.{node}")
         self.roster_bucket = os.environ.get("DISCUSS_ROSTER_BUCKET", "roster")
         self.roster_prefix = os.environ.get("DISCUSS_ROSTER_PREFIX", "roster.")

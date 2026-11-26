@@ -283,7 +283,7 @@ class BacklogStore:
         A dep is satisfied when it is a done backlog entry, or when the
         optional ``dep_checker`` accepts it (used by the driver to resolve
         deps that reference mesh task ids; see
-        docs/design-backlog-dep-resolution.md).
+        docs/roadmap.md).
         """
         tasks = await self.list()
         done_ids = {t.id for t in tasks if t.status == BACKLOG_DONE}

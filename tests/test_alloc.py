@@ -91,3 +91,26 @@ def test_no_health_at_all():
     result = alloc.select("m", "t8")
     assert result.ok is False
     assert result.reason == "no_node"
+
+
+def test_release_frees_the_reservation_for_the_next_claim():
+    from memnc.orchestrator import Allocator
+    from memnc.schema import AllocResult
+
+    alloc = Allocator()
+    alloc._claim(AllocResult(ok=True, model="m", node="n1"), "t1", 4000.0)
+    assert alloc._reserved_mb["n1"] == 4000.0
+    alloc.release("t1")
+    assert "n1" not in alloc._reserved_mb
+    assert "t1" not in alloc._claims
+
+
+def test_release_is_idempotent():
+    from memnc.orchestrator import Allocator
+    from memnc.schema import AllocResult
+
+    alloc = Allocator()
+    alloc._claim(AllocResult(ok=True, model="m", node="n1"), "t1", 1000.0)
+    alloc.release("t1")
+    alloc.release("t1")
+    assert alloc._reserved_mb == {}

@@ -816,7 +816,7 @@ class Bus:
         assert self.kv is not None
         await self.kv.put(f"task.{snapshot.task_id}", snapshot.model_dump_json().encode())
 
-    # -- persistent background (docs/design-message-tuple.md) ---------------
+    # -- persistent background (docs/roadmap.md) ---------------
     async def save_background(self, task_id: str, background: Background) -> None:
         """Persist the task's shared Background as a workflow_state companion
         key. Snapshots stay backward-compatible; the background is the durable
@@ -888,13 +888,17 @@ class Bus:
         # M8: submitter-signed attribution into the trust ledger — written at
         # the moment the CAS claim wins, because the orchestrator referee loop
         # ticks every 5s and loses the race against a fast worker otherwise.
+        # Only ids that hold a grant earn trust on claim. A self-asserted name
+        # would otherwise build trust by choosing a name.
         try:
             await self.ensure_trust()
-            await self.trust_credit(
-                worker_id,
-                "claim",
-                attribution=[signed_attribution(snapshot)],
-            )
+            await self.ensure_grants()
+            if await self.grant_read(worker_id) is not None:
+                await self.trust_credit(
+                    worker_id,
+                    "claim",
+                    attribution=[signed_attribution(snapshot)],
+                )
         except Exception:  # noqa: BLE001 - the ledger is best-effort
             pass
         return snapshot

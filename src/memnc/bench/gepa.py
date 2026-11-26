@@ -3,8 +3,8 @@
 DESIGN (before code, per repo rule). Evidence: GEPA / Genetic-Pareto
 (Agrawal et al., ICLR 2026) — reflective prompt mutation from ~10% of
 rollouts beats RL with up to 78x fewer rollouts; Pareto-based candidate
-selection escapes local optima. memnc reading (docs/experience.md
-2026-11-14): arm B's self-reflection used as an OFFLINE optimizer over a
+selection escapes local optima. memnc reading (docs/roadmap.md):
+arm B's self-reflection used as an OFFLINE optimizer over a
 bench history. All ingredients exist: bench JSONL traces, deterministic
 checkers as the feedback function, modular SYSTEM_PROMPTS in roles.py.
 

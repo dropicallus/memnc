@@ -1,6 +1,6 @@
 """OpenCode harness: runs `opencode run` headlessly against a workspace.
 
-Proven workflow (2026-11-15, node-c/node-c against local ollama):
+Proven workflow (against local ollama):
 - opencode 1.19.5 + `mannix/qwen3.6-27b-a3b-coder:CD-IQ4_K_M` emits native
   tool_calls via the ollama /v1 template and completes a full create-file +
   run + confirm loop (~3-4 min incl. model load).
@@ -25,6 +25,7 @@ import shutil
 import signal
 from pathlib import Path
 
+from ..mcp.tools_shell import harness_env
 from . import HarnessCaps, HarnessResult, register
 from .workspace import compare_trees, snapshot_tree, workspace_diff
 
@@ -229,7 +230,7 @@ class OpenCodeHarness:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(workspace),
-                env=os.environ | env_overlay,
+                env=harness_env("OPENCODE_ENV_PASS") | env_overlay,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,

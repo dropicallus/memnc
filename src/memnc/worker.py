@@ -18,10 +18,17 @@ from .backends import make_backend
 from .bus import Bus, emit_debate
 from .config import Settings, get_settings
 from .fsm import Event, done_block_reason, transition
-from .fsutil import apply_artifacts, artifact_line_counts, verify_artifacts
+from .fsutil import (
+    PathEscapeError,
+    apply_artifacts,
+    artifact_line_counts,
+    safe_path,
+    verify_artifacts,
+)
 from .harnesses import get_harness
 from .harnesses.workspace import changed_file_contents
 from .mcp.client import MCPClient
+from .mcp.tools_shell import minimal_env
 from .observations import TaskObservation
 from .pheromone import SELF_REFLECT_EDGE
 from .roles import (
@@ -668,6 +675,15 @@ class Worker:
             await self.bus.dead_letter(envelope, "unknown task")
             await message.ack()
             return
+        if snapshot.state in TERMINAL_STATES:
+            # A command that outlived its task (redelivery after a finish or
+            # cancel) must not run again: its side effects are already decided.
+            log.info(
+                "skipping command for a finished task",
+                extra={"task_id": envelope.task_id, "command_id": envelope.id},
+            )
+            await message.ack()
+            return
         # T7: planner allocation gate — a command with an alloc claim is for
         # the claimed node only, unless the claimed model is loaded here.
         alloc = envelope.payload.get("alloc") or None
@@ -1052,7 +1068,9 @@ class Worker:
             timeout=10,
         )
         data = json.loads(response.data) or {}
-        return json.dumps({"ok": True, "task_id": data.get("task_id"), "depth": depth})
+        if data.get("error") or not data.get("task_id"):
+            return json.dumps({"ok": False, "error": data.get("error") or "no task_id in reply"})
+        return json.dumps({"ok": True, "task_id": data["task_id"], "depth": depth})
 
     # -- M11: ledger-based self-claiming -------------------------------------
     async def _propose_retirement(self, model: str, rep) -> None:
@@ -1454,11 +1472,9 @@ class Worker:
                 )
 
     def _record_experience(self, observation: TaskObservation) -> None:
-        from .experience_store import ExperienceStore, record_observation
+        from .experience_store import record_observation_locked
 
-        store = ExperienceStore(self.settings.experience_store_path).load()
-        if record_observation(store, observation):
-            store.save()
+        record_observation_locked(self.settings.experience_store_path, observation)
 
     async def _acceptance_gate(self, snapshot: TaskSnapshot) -> None:
         """15.4.5 gap 2: deterministic acceptance checks from plan criteria.
@@ -1518,7 +1534,12 @@ class Worker:
         evidence: list[str] = []
         passed = True
         for f in py_files:
-            path = root / f.path
+            try:
+                path = safe_path(root, f.path)
+            except PathEscapeError:
+                evidence.append(f"py_compile {f.path}: REJECTED (outside workspace)")
+                passed = False
+                continue
             if not path.is_file():
                 evidence.append(f"py_compile {f.path}: MISSING FILE")
                 passed = False
@@ -1530,11 +1551,13 @@ class Worker:
                 str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=minimal_env(),
             )
             try:
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
             except TimeoutError:
                 proc.kill()
+                await proc.wait()
                 evidence.append(f"py_compile {f.path}: TIMEOUT")
                 passed = False
                 continue
@@ -1545,17 +1568,19 @@ class Worker:
             if proc.returncode != 0:
                 passed = False
         if passed and len(py_files) == 1:
-            path = root / py_files[0].path
+            path = safe_path(root, py_files[0].path)
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=minimal_env(),
             )
             try:
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
             except TimeoutError:
                 proc.kill()
+                await proc.wait()
                 evidence.append(f"run {py_files[0].path}: TIMEOUT")
                 passed = False
             else:

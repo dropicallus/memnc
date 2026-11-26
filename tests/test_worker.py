@@ -111,3 +111,92 @@ async def test_tool_results_from_previous_command_are_reexecuted(tmp_path):
         Envelope(id="cmd2", task_id="t1", trace_id="tr1", kind="command"), "t", {}
     )
     assert len(worker.tools.calls) == 2
+
+
+def test_verify_gate_rejects_paths_outside_workspace(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    from memnc.worker import Worker
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("print('x')\n")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    worker = Worker.__new__(Worker)
+    worker.settings = SimpleNamespace(workspace_root=str(ws))
+    critique = SimpleNamespace(approved=False, summary="", issues=[])
+    snap = SimpleNamespace(
+        critique=critique,
+        code=SimpleNamespace(files=[SimpleNamespace(path=str(outside))]),
+    )
+    asyncio.run(worker._verify_gate(snap))
+    assert critique.approved is False
+    assert "REJECTED" in critique.issues[0].issue
+
+
+def test_mesh_submit_reports_orchestrator_rejection_as_failure():
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from memnc.worker import Worker
+
+    class _NC:
+        async def request(self, subject, payload, timeout):
+            reply = {"error": "max_submit_depth 3 reached"}
+            return SimpleNamespace(data=json.dumps(reply).encode())
+
+    class _Bus:
+        nc = _NC()
+
+        async def get_snapshot(self, task_id):
+            return None
+
+    worker = Worker.__new__(Worker)
+    worker.bus = _Bus()
+    worker.settings = SimpleNamespace(max_submit_depth=3, node_name="node-a", mesh_claim=False)
+    out = json.loads(
+        asyncio.run(worker._mesh_submit(SimpleNamespace(task_id="t1"), {"task": "do it"}))
+    )
+    assert out["ok"] is False
+    assert "max_submit_depth" in out["error"]
+    from types import SimpleNamespace
+
+    from memnc.worker import Worker
+
+
+def test_command_for_finished_task_is_acked_without_running():
+    import asyncio
+    from types import SimpleNamespace
+
+    from memnc.schema import Envelope, TaskSnapshot, TaskState
+    from memnc.worker import Worker
+
+    class _Bus:
+        async def get_snapshot(self, task_id):
+            return TaskSnapshot(task_id=task_id, trace_id="tr", task="x", state=TaskState.FAILED)
+
+        async def dead_letter(self, *args, **kwargs):
+            raise AssertionError("unexpected dead letter")
+
+    acked: list[bool] = []
+
+    class _Msg:
+        data = Envelope(id="cmd1", task_id="t1", trace_id="tr", kind="command").model_dump_json()
+
+        async def ack(self):
+            acked.append(True)
+
+        async def nak(self, delay=None):
+            raise AssertionError("unexpected nak")
+
+    async def _run(*args, **kwargs):
+        raise AssertionError("command ran for a finished task")
+
+    worker = Worker.__new__(Worker)
+    worker.bus = _Bus()
+    worker.settings = SimpleNamespace(prefer_node="", node_name="node-a-coder", enforce_node_version=False)
+    worker._run = _run  # type: ignore[method-assign]
+    asyncio.run(worker._handle(_Msg()))
+    assert acked == [True]

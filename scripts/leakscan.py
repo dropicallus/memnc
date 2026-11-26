@@ -20,23 +20,34 @@ that is a known false positive. Rules are data below — extend, don't fork.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 # (class, regex). All anchored with word/lookaround where possible to keep
 # false positives low. Keep each pattern one line, documented by the class.
 # Machine-specific rules (hostnames, usernames, hardware, LAN IPs, local
 # dir names) live in a LOCAL file only: scripts/leakscan_rules.local.py
 # (gitignored). The repo never carries them.
-try:
-    from leakscan_rules_local import RULES  # type: ignore[assignment]  # noqa: F401
-except ImportError:
-    RULES: list[tuple[str, str]] = [
-        ("secret", r"\b(sk|pk)-[A-Za-z0-9_-]{20,}\b"),
-        ("secret", r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
-        ("secret", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    ]
+def _local_rules() -> list[tuple[str, str]] | None:
+    local = Path(__file__).with_name("leakscan_rules.local.py")
+    if not local.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("leakscan_rules_local", local)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.RULES
+
+
+RULES: list[tuple[str, str]] = _local_rules() or [
+    ("secret", r"\b(sk|pk)-[A-Za-z0-9_-]{20,}\b"),
+    ("secret", r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
+    ("secret", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+]
 
 
 # German prose detection: a scored word-frequency approach instead of a

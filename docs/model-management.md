@@ -1,245 +1,233 @@
-# Konzept: Model-Management-Schicht + Node-Digital-Twin
+# Concept: Model-Management Layer + Node Digital Twin
 
-Stand: 2026-11-16 · Status: Entwurf (Feedback von Frank einarbeiten)
+Status: Draft (incorporate feedback)
 
 ## Problem
 
-- Mesh-Tasks scheitern, weil der Orchestrator blind routet: Er kennt weder VRAM-Auslastung,
-  noch welche Modelle gerade geladen sind, noch Ladezeiten.
-- Konkreter Fall: 31B-Critic saß im VRAM, Planner (7B) musste neu laden → Timeout.
-- Ollama lädt on-demand und vergisst nach ~5 min (`keep_alive`) — beides unkoordiniert.
-- Es gibt keine Schicht, die Modelle pro Node verwaltet und dynamisch lädt/entlädt.
+- Mesh tasks fail because the orchestrator routes blindly: it knows neither VRAM utilization,
+  nor which models are currently loaded, nor load times.
+- Concrete case: the 31B critic occupied VRAM, the planner (7B) had to reload → timeout.
+- Ollama loads on demand and forgets after ~5 min (`keep_alive`) — both uncoordinated.
+- There is no layer that manages models per node and loads/unloads them dynamically.
 
-## Recherche-Ergebnisse (Prior Art)
+## Research Findings (Prior Art)
 
-### llama-swap (mostlygeek/llama-swap, aktiv, Golang, Single-Binary)
-- Transparenter Proxy vor beliebigen OpenAI-kompatiblen Servern (llama.cpp, vLLM, tabbyAPI).
-- **On-demand model switching**: Request mit `model=X` → lädt X, swapped den falschen
-  Upstream raus. Genau das, was wir brauchen — ohne eigenes Daemon-Management.
-- **`/running`** — Liste aktuell geladener Modelle → **Digital-Twin-Quelle**.
-- **`/unload`** — manuelles Entladen (per Modell-ID oder alle).
-- **`ttl`** — automatisches Entladen nach Timeout (pro Modell konfigurierbar).
-- **`groups`** — mehrere Modelle gleichzeitig; `swap`/`exclusive`/`persistent`:
-  - `swap: true` → nur ein Modell der Gruppe im VRAM
-  - `exclusive: true` → entlädt andere Gruppen beim Start
-  - `persistent: true` → bleibt immer geladen (z.B. Planner klein halten)
-- **`aliases`**, `env`, `cmdStop` (Docker/Podman), `${PORT}` dynamische Ports,
-  `healthCheckTimeout`, `hooks` (Preload beim Start).
-- Konfiguration: eine einzige `config.yaml`.
-- **⚠ Entwertet durch Praxistest (Frank): in der eigenen Nutzung nicht
-  zuverlässig gewesen → NICHT als Serving-Schicht wählen.** Bleibt hier nur
-  als konzeptionelle Referenz (groups/ttl/swap-Semantik).
+### llama-swap (mostlygeek/llama-swap, active, Golang, single binary)
+- Transparent proxy in front of arbitrary OpenAI-compatible servers (llama.cpp, vLLM, tabbyAPI).
+- **On-demand model switching**: a request with `model=X` loads X and swaps out the wrong
+  upstream. Exactly what we need — without our own daemon management.
+- **`/running`** — list of currently loaded models → **digital twin source**.
+- **`/unload`** — manual unloading (by model ID or all).
+- **`ttl`** — automatic unloading after a timeout (configurable per model).
+- **`groups`** — several models at the same time; `swap`/`exclusive`/`persistent`:
+  - `swap: true` → only one model of the group in VRAM
+  - `exclusive: true` → unloads other groups on start
+  - `persistent: true` → always stays loaded (e.g. keep the planner small)
+- **`aliases`**, `env`, `cmdStop` (Docker/Podman), `${PORT}` dynamic ports,
+  `healthCheckTimeout`, `hooks` (preload on start).
+- Configuration: a single `config.yaml`.
+- **⚠ Invalidated by practical testing (owner): in the owner's own use it was not reliable →
+  do NOT choose it as serving layer.** Kept here only as a conceptual reference
+  (groups/ttl/swap semantics).
 
-### llauncher (Frank's eigene Infrastruktur — PRIMÄR-Option)
-- **MCP-Konzept ist agent-nativ** (Frank: „Das coole an llauncher ist das
-  MCP-Konzept") — Registry-Truth als MCP-Resource, Agenten fragen Zustand ab,
-  statt self-loading in Ollama. Genau der Fix fürs „Agent lädt blind selbst".
-- Vollständige Kontroll-Ebene als MCP-Tools: `start_server`, `stop_server`,
+### llauncher (separate project, PRIMARY option)
+- **The MCP concept is agent-native** (owner: "The cool thing about llauncher is the
+  MCP concept") — registry truth as MCP resource; agents query state instead of
+  self-loading into Ollama. Exactly the fix for "agent loads blindly on its own".
+- Full control layer as MCP tools: `start_server`, `stop_server`,
   `swap_server`, `cancel_server`, `server_status`, `server_slots`,
   `server_metrics`, `get/set_model_config`, `list_backends`/`list_models`,
-  `validate_models` (Weights-Prüfung), `backend_status` (systemd + Port +
-  Health), `get_server_logs`, `read_audit` (ADR-8 Audit-Log).
-- llama.cpp-basiert (`llama-server`), systemd-User-Units, Port-Management,
-  Slots inkl. Prompt-Text, Live-Inferenz-Telemetrie.
-- **Was fehlt (MM-Aufgabe):** NATS-Brücke — Health-Announce + `load/unload/
-  drain`-Intents von NATS auf MCP-Aufrufe mappen. Dann ist llauncher der
-  Model-Manager selbst, kein extra Daemon nötig.
-- **Bewertung ehrlich nachgeholt (Korrektur):** vorher unzureichend behandelt —
-  Agent lud stattdessen selbst Modelle in Ollama. llauncher deckt Lifecycle
-  (start/stop/swap), Observability (status/slots/metrics/logs/audit) und
-  Validierung ab — mehr als llama-swap, und erprobt auf Frank's Rig
-  (RX 7600 XT / 780M / RX 6800 XT).
+  `validate_models` (weights check), `backend_status` (systemd + port +
+  health), `get_server_logs`, `read_audit` (ADR-8 audit log).
+- llama.cpp-based (`llama-server`), systemd user units, port management,
+  slots including prompt text, live inference telemetry.
+- **What is missing (MM task):** NATS bridge — map health announce and `load/unload/
+  drain` intents from NATS to MCP calls. Then llauncher is the model manager itself,
+  no extra daemon needed.
+- **Assessment, honestly corrected:** previously insufficiently covered — the agent
+  instead loaded models into Ollama itself. llauncher covers lifecycle (start/stop/swap),
+  observability (status/slots/metrics/logs/audit) and validation — more than llama-swap,
+  and tested on a mixed AMD fleet (discrete and integrated GPUs).
 
-### vLLM (Referenz fürs Pool-Management)
-- `--gpu-memory-utilization` = "claim max X% des VRAM" — zentrales Pool-Prinzip.
-- Für große Modelle auf geteilten Karten: utilisation dynamisch anhand tatsächlich
-  freiem VRAM berechnen (NVIDIA-Forum-Pattern mit nvidia-smi-Query beim Start).
+### vLLM (reference for pool management)
+- `--gpu-memory-utilization` = "claim at most X% of VRAM" — the central pool principle.
+- For large models on shared cards: compute the utilization dynamically from the actually
+  free VRAM (NVIDIA forum pattern with an nvidia-smi query at startup).
 
 ### Latency-Aware Orchestration (arXiv 2609.03335)
-- Prediction-guided Runtime für parallele Agent-Workflows auf heterogenen GPUs:
-  Predictor schätzt Aktivierungs-/Ladekosten pro Modell × Device; Scheduler wählt
-  Fusion/Lifecycle/Binding unter Live-Pool-State und replant aus Feedback.
-- → Langfristige Richtung: statt hartem Routing ein Kostenmodell (Ladezeit + VRAM-Fit)
-  pro Node/Modell-Paar, gelernt aus gemessenen Ladezeiten.
+- Prediction-guided runtime for parallel agent workflows on heterogeneous GPUs:
+  a predictor estimates activation/loading costs per model × device; the scheduler
+  chooses fusion/lifecycle/binding under live pool state and replans from feedback.
+- → Long-term direction: instead of hard routing, a cost model (load time + VRAM fit)
+  per node/model pair, learned from measured load times.
 
-### „Kubernetes für Modelle" (DeepSeek-Recherche, 2026-11-16) — Vergleich
+### "Kubernetes for Models" (DeepSeek research) — Comparison
 
-De-facto-Steuerungsebenen für KI-Workloads, sortiert nach Ansatz:
-- **KServe** — K8s-Standard für Modell-Serving (Operator, vLLM/SGLang/Triton).
-- **AIBrix** (ByteDance) — LLM-Inferenz-Steuerungsebene: routet nach Live-Zustand
-  der Engines, Autoscaling nach Inferenz-Metriken, verwaltet Modelle + LoRA
-  über OpenAI-API. Konzeptionell am nächsten an unserem Zielbild.
-- **Kthena** — K8s-nativ, Prefill/Decode-Disaggregation, Zero-Downtime-Updates.
-- **llm-d** — verteilter Inferenz-Stack; Routing-Intelligenz (KV-Cache-bewusst)
-  kann inzwischen auch **ohne Kubernetes** laufen — einziger Kandidat mit
-  standalone-Modus, aber schwerer Stack.
-- **Atlas** — engine-agnostische Steuerungsebene + Router: Spezifikation →
-  GPU-Kapazitätsprüfung → Routing auf einen OpenAI-Endpoint. Gut als Blaupause
-  für unsere `mesh.alloc.request`-Semantik.
-- **LLMKube** — Operator für heterogene Hardware (NVIDIA/AMD/Apple Silicon).
-- **Taho / Slurm** — K8s-Alternative bzw. HPC-Batch-Klassiker; für uns irrelevant.
+De-facto control planes for AI workloads, sorted by approach:
+- **KServe** — K8s standard for model serving (operator, vLLM/SGLang/Triton).
+- **AIBrix** (ByteDance) — LLM inference control plane: routes by the live state of the
+  engines, autoscaling by inference metrics, manages models + LoRA via the OpenAI API.
+  Conceptually closest to our target picture.
+- **Kthena** — K8s-native, prefill/decode disaggregation, zero-downtime updates.
+- **llm-d** — distributed inference stack; its routing intelligence (KV-cache aware) can
+  now also run **without Kubernetes** — the only candidate with a standalone mode, but a
+  heavier stack.
+- **Atlas** — engine-agnostic control plane + router: specification → GPU capacity check →
+  routing to an OpenAI endpoint. Good as a blueprint for our `mesh.alloc.request` semantics.
+- **LLMKube** — operator for heterogeneous hardware (NVIDIA/AMD/Apple Silicon).
+- **Taho / Slurm** — a K8s alternative and the classic HPC batch system, respectively;
+  irrelevant for us.
 
-**Bewertung für memnc:** Alle K8s-nativen Setups setzen einen Cluster voraus —
-wir haben 2–3 Homelab-Nodes mit NATS + Docker Compose; ein k3s-Cluster wäre
-Infrastruktur-Overkill und Frank will explizit **kein Kubernetes bauen**. Aber
-die Konzepte übernehmen wir direkt:
-1. **AIBrix „Route by live engine state"** = unser Planner-Allokationsziel
-   (Entscheidung aus Live-Twin statt statischem Roster).
-2. **Atlas-Semantik** (Spec einreichen → Kapazität prüfen → routen) = Ablauf
-   unseres `mesh.alloc.request`.
-3. **AIBrix LoRA-Verwaltung** = später relevant fürs parametrische Memory
-   (LoRA pro Wissensbereich laden/entladen statt Basemodelle zu swapen).
-Unser Weg bleibt: schlanker eigener Twin auf NATS (MM1–MM5), keine K8s-Abhängigkeit.
+**Assessment for memnc:** All K8s-native setups assume a cluster — we have 2–3 homelab
+nodes with NATS + Docker Compose; a k3s cluster would be infrastructure overkill, and the
+owner explicitly does **not** want to build Kubernetes. But we adopt the concepts directly:
+1. **AIBrix "Route by live engine state"** = our planner allocation target (decision based
+   on the live twin instead of a static roster).
+2. **Atlas semantics** (submit spec → check capacity → route) = the flow of our
+   `mesh.alloc.request`.
+3. **AIBrix LoRA management** = later relevant for parametric memory (load/unload LoRA per
+   knowledge domain instead of swapping base models).
+Our path remains: a lean own twin on NATS (MM1–MM5), no K8s dependency.
 
-### Multi-Host-Swarms & MCP-Orchestrierung (Recherche 2, 2026-11-16)
+### Multi-Host Swarms & MCP Orchestration (research 2)
 
-**Swarms/Clusters (Bottom-Up):**
-- **mycoSwarm** — mDNS-Auto-Discovery, Capability-Austausch, Routing nach
-  Hardware-Fähigkeit. Takeaway: **mDNS als Discovery-Erweiterung** für uns
-  (Nodes melden sich selbst statt hardcoded Roster).
-- **Mesh-LLM** — siehe eigene Sektion unten (Primär-Referenz).
-- **Exo** — Apple-Silicon-Fokus, MLX-Backend; für maco/180 (780M) nur
-  bedingt, aber Discovery-Muster gleich.
+**Swarms/clusters (bottom-up):**
+- **mycoSwarm** — mDNS auto-discovery, capability exchange, routing by hardware capability.
+  Takeaway: **mDNS as a discovery extension** for us (nodes announce themselves instead of
+  a hardcoded roster).
+- **Mesh-LLM** — see its own section below (primary reference).
+- **Exo** — Apple Silicon focus, MLX backend; only conditionally useful for the iGPU-only host,
+  but the discovery pattern is the same.
 
-**llama.cpp-Cluster-Manager:**
-- **Tightwad** — poolt CUDA+ROCm via llama.cpp RPC über Maschinen hinweg;
-  Killer-Feature: **Speculative Decoding über Netzwerk** (kleines Modell
-  draftet auf schwacher Maschine, großes verifiziert auf starker → 2-3×).
-  Spannend für node-a (6800 XT) + Hermes-Host (7600 XT) Kombination, aber
-  komplex; Idee merken, nicht jetzt.
-- **RPC Manager** — Web-UI + mDNS-Discovery + **Live-Telemetrie (VRAM,
-  Temperatur) pro Node**. Bestätigt: Telemetrie als First-Class-Twin-Daten.
-- **BareMetalRT** — TensorRT-nativ, NVIDIA-only; irrelevant (AMD).
+**llama.cpp cluster managers:**
+- **Tightwad** — pools CUDA+ROCm via llama.cpp RPC across machines; killer feature:
+  **speculative decoding over the network** (a small model drafts on the weak machine, a
+  large one verifies on the strong one → 2–3×). Interesting for the node-a (discrete GPU) +
+  supervisor host combination, but complex; note the idea, not now.
+- **RPC Manager** — web UI + mDNS discovery + **live telemetry (VRAM, temperature) per
+  node**. Confirms: telemetry as first-class twin data.
+- **BareMetalRT** — TensorRT-native, NVIDIA-only; irrelevant (AMD).
 
-**MCP als Steuerungsebene (validiert unseren llauncher-Weg):**
-- **apra-fleet** — „was K8s für Container war, für AI-Agenten": Maschinen per
-  SSH als Fleet-Member, Routing nach Kosten+Fähigkeiten, Observability.
-  Beweist: **MCP-kontrollierte Multi-Host-Orchestrierung ohne K8s ist
-  productionfähig gedacht** — gleiche Architekturrichtung wie llauncher-MCP
-  + NATS-Twin bei uns.
-- **Myrmex Hive** — dezentrales Agent-Orchestrierungs-Framework auf MCP-Basis,
-  **Zero-Inbound-Ports** (nur ausgehende Verbindungen). Exakt unser
-  NATS-Subscriber-Pattern — Nodes verbinden sich zum Mesh heraus, keine
-  offenen Ports.
-- **Argus MCP** — Gateway, das mehrere MCP-Server hinter einem Endpoint
-  aggregiert. Relevant, wenn der Planner auf llauncher-MCP mehrerer Nodes
-  gleichzeitig zugreifen soll.
+**MCP as control plane (validates the llauncher path):**
+- **apra-fleet** — "what K8s was for containers, for AI agents": machines as fleet members
+  via SSH, routing by cost + capabilities, observability. Proves that **MCP-controlled
+  multi-host orchestration without K8s is conceived as production-capable** — the same
+  architecture direction as llauncher MCP + NATS twin for us.
+- **Myrmex Hive** — decentralized agent orchestration framework on an MCP basis,
+  **zero inbound ports** (outbound connections only). Exactly our NATS subscriber pattern —
+  nodes connect outward to the mesh, no open ports.
+- **Argus MCP** — gateway that aggregates several MCP servers behind one endpoint.
+  Relevant if the planner should access the llauncher MCP of several nodes at the same time.
 
-**Fazit:** Bestätigt unsere Architektur (MCP-Kontrolle + dezentraler Twin,
-kein K8s). Neue Takeaways: (1) mDNS-Discovery statt hardcoded Roster, (2)
-Telemetrie als First-Class-Twin-Felder, (3) Tightwad-SpecDec als Zukunftsoption.
+**Conclusion:** Confirms our architecture (MCP control + decentralized twin, no K8s). New
+takeaways: (1) mDNS discovery instead of a hardcoded roster, (2) telemetry as first-class
+twin fields, (3) Tightwad SpecDec as a future option.
 
-### Mesh-LLM (Skippy + Mesh, 2026, Rust/QUIC — Referenz-Architektur)
-Mesh-LLM zeigt, wie das Ganze produktiv aussieht, und liefert konkrete
-Bausteine für unseren Planner-as-Allocator-Ansatz:
+### Mesh-LLM (Skippy + Mesh, 2026, Rust/QUIC — reference architecture)
+Mesh-LLM shows what this looks like in production and provides concrete building blocks for
+our planner-as-allocator approach:
 
-- **Zwei Ebenen getrennt**: Skippy (Model-Management, native Inference, OpenAI
-  Serving) + Mesh (Discovery, Routing, Gossip). → Bei uns: Model-Manager
-  (Node-Layer) + Orchestrator (Routing-Layer), NATS statt QUIC.
-- **Runtime-Lifecycle-Intents** (exakt die Verben, die wir brauchen):
-  `load-model` (one-shot), `ensure-model` (maintained present, mit Retry —
-  survives Transient-Failures), `unload-model`, `drain-model` (in-flight work
-  fertig, dann entladen). **drain-model ist der saubere Ersatz für unsere
-  VRAM-Blockade-Kette**: schon laufende Requests nicht abwürgen.
-- **`scan-refresh` / Inventory**: getNode-Zustand (config + geladene Modelle)
-  als sortierte Inventory-Liste → unser Digital-Twin-Pendant. Owner-Control
-  läuft über einen separaten Kontroll-Kanal (bei uns: NATS-Subject mit
-  NKey-gescopeten Permissions — H4-Mechanik passt genau).
-- **Dynamisches Capability-Wissen**: Nodes teilen sich per Gossip mit, welche
-  Modelle sie gerade serve können; Routing entscheidet per `model`-Feld. Bei
-  uns: `mesh.node.health` + Capability-Matrix (Modell × Node × Engine).
-- **`benchmark tune`** misst Ladezeiten/Throughput pro Modell×Node×Settings und
-  schreibt Empfehlungen zurück → Prior Art für unser MM5-Kostenmodell
-  (Ladezeit-Budget statt nur VRAM-Fit).
-- **Nachteil für uns**: Mesh-LLM ist ein komplettes Produkt (QUIC, Nostr-Discovery,
-  eigenes Splits-Protokoll) — Migration würde unsere NATS/Mesh-Infrastruktur
-  ersetzen. Wir übernehmen Konzepte (Intents, drain, Inventory, Benchmark),
-  nicht das Produkt.
+- **Two layers separated**: Skippy (model management, native inference, OpenAI serving) +
+  Mesh (discovery, routing, gossip). → For us: model manager (node layer) + orchestrator
+  (routing layer), NATS instead of QUIC.
+- **Runtime lifecycle intents** (exactly the verbs we need): `load-model` (one-shot),
+  `ensure-model` (kept present, with retry — survives transient failures), `unload-model`,
+  `drain-model` (in-flight work finishes, then unload). **drain-model is the clean
+  replacement for our VRAM blockade chain**: do not cut off requests that are already running.
+- **`scan-refresh` / inventory**: the getNode state (config + loaded models) as a sorted
+  inventory list → our digital twin counterpart. Owner control runs over a separate control
+  channel (for us: a NATS subject with NKey-scoped permissions — the H4 mechanism fits exactly).
+- **Dynamic capability knowledge**: nodes share via gossip which models they can currently
+  serve; routing decides by the `model` field. For us: `mesh.node.health` + capability
+  matrix (model × node × engine).
+- **`benchmark tune`** measures load times/throughput per model × node × settings and writes
+  recommendations back → prior art for our MM5 cost model (load-time budget instead of
+  VRAM fit alone).
+- **Disadvantage for us**: Mesh-LLM is a complete product (QUIC, Nostr discovery, its own
+  splits protocol) — migrating would replace our NATS/mesh infrastructure. We adopt the
+  concepts (intents, drain, inventory, benchmark), not the product.
 
-## Architektur-Entwurf
+## Architecture Draft
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Orchestrator (Routing)                                  │
-│  - Roster: welche Node kann welche Rolle/Modelle        │
-│  - Digital Twin: pro Node {geladen, VRAM-frei, Queue}   │
-│  - Routing-Regel: laden < schwelle? → Node mit Modell   │
-│    geladen bevorzugen; sonst Node mit freiem VRAM       │
+│  - Roster: which node can handle which role/models      │
+│  - Digital Twin: per node {loaded, VRAM-free, queue}    │
+│  - Routing rule: loading < threshold? → prefer node     │
+│    with the model loaded; otherwise node with free VRAM │
 └──────────────┬──────────────────────────────────────────┘
-               │ mesh.node.health (KV/NATS, periodisch)
+               │ mesh.node.health (KV/NATS, periodic)
 ┌──────────────▼──────────────────────────────────────────┐
-│ Model-Manager (ein Container pro Node, neben Ollama)    │
-│  - quellt llama-swap /running + nvidia-smi (VRAM)       │
-│  - publiziert Health-Announce alle N Sekunden:          │
+│ Model manager (one container per node, next to Ollama)  │
+│  - sources llama-swap /running + nvidia-smi (VRAM)      │
+│  - publishes a health announce every N seconds:         │
 │    {node, models_loaded[], vram_free_mb, vram_total_mb, │
 │     queue_depth, load_times{model:sec}}                 │
-│  - nimmt Befehle entgegen: preload/unload/evict         │
+│  - accepts commands: preload/unload/evict               │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Komponenten
+### Components
 
-1. **llama-swap als Serving-Schicht pro Node** (ersetzt Ollama-Raw-Access):
-   - `config.yaml` pro Node: alle Mesh-Modelle mit `cmd` (llama-server oder
-     vLLM), `ttl`, `groups`.
-   - Group-Strategie auf 16-GB-Karte: `persistent` nur für das kleinste
-     Planner-Modell; Coder/Critic in einer `swap: true`-Gruppe.
-   - Vorteil: kein eigener Daemon-Code fürs Laden/Entladen — das macht
-     llama-swap erprobt; wir bauen nur die Kontroll-Ebene.
+1. **llama-swap as the serving layer per node** (replaces raw Ollama access):
+   - `config.yaml` per node: all mesh models with `cmd` (llama-server or vLLM), `ttl`, `groups`.
+   - Group strategy on a 16 GB card: `persistent` only for the smallest planner model;
+     coder/critic in a `swap: true` group.
+   - Advantage: no own daemon code for loading/unloading — llama-swap already does this and
+     is proven; we only build the control layer.
 
-2. **Model-Manager-Agent** (neu, `src/memnc/model_manager.py`):
-   - Pollt `llama-swap /running` + `nvidia-smi` (VRAM free/total).
-   - Publiziert `mesh.node.health` auf NATS (oder KV-Bucket `node.health`).
-   - Endpunkte: `preload <model>` (Request an llama-swap, um den Upstream zu
-     starten ohne Inference), `unload <model>`, `evict` (größtes Modell raus).
-   - Misst Ladezeiten und schreibt sie in den Health-Announce → Basis für
-     Routing-Kostenmodell.
+2. **Model manager agent** (new, `src/memnc/model_manager.py`):
+   - Polls `llama-swap /running` + `nvidia-smi` (VRAM free/total).
+   - Publishes `mesh.node.health` on NATS (or KV bucket `node.health`).
+   - Endpoints: `preload <model>` (request to llama-swap to start the upstream without
+     inference), `unload <model>`, `evict` (largest model out).
+   - Measures load times and writes them into the health announce → basis for the routing
+     cost model.
 
-3. **Digital Twin im Orchestrator**:
-   - In-Memory-State pro Node: `{node, models_loaded, vram_free, vram_total,
+3. **Digital twin in the orchestrator**:
+   - In-memory state per node: `{node, models_loaded, vram_free, vram_total,
      queue_depth, load_times, last_seen}`.
-   - Aktualisierung: Health-Announces (push) + fehlen >30 s → Node als
-     „verstorben" markieren.
-   - Routing-Regel (v1, deterministisch):
-     a) Node, auf dem das Zielmodell **schon geladen** ist → bevorzugen.
-     b) Sonst Node mit **genug freiem VRAM** (Ladezeit inkl. Reserve).
-     c) Sonst: `evict`-Befehl an die Node mit dem größten Residenten-Modell,
-        dann (b).
-   - Kein hartes Timeout mehr als Workaround — Ladezeiten fließen ins Budget.
+   - Update: health announces (push) + a node is marked "dead" if it is absent for >30 s.
+   - Routing rule (v1, deterministic):
+     a) Node where the target model is **already loaded** → prefer.
+     b) Otherwise a node with **enough free VRAM** (load time incl. reserve).
+     c) Otherwise: `evict` command to the node with the largest resident model,
+        then (b).
+   - No hard timeout as a workaround anymore — load times flow into the budget.
 
-4. **Ollama-Spezialfall (Übergang)**:
-   - Ollama hat kein `/running`-API im llama-swap-Sinn, aber `/api/ps`
-     (geladene Modelle + `size_vram`) und `/api/generate` mit `keep_alive: 0`
-     zum Entladen. Model-Manager kann Ollama im interim-Modus quellen,
-     bis llama-swap steht.
+4. **Ollama special case (transition)**:
+   - Ollama has no `/running` API in the llama-swap sense, but `/api/ps` (loaded models +
+     `size_vram`) and `/api/generate` with `keep_alive: 0` for unloading. The model manager
+     can source Ollama in interim mode until llama-swap is in place.
 
-### Reihenfolge der Umsetzung (Milestones)
+### Implementation Order (Milestones)
 
-- **MM1** — Model-Manager liest `/api/ps` + VRAM, publiziert Health-Announce.
-  (Digital Twin sichtbar, noch kein Routing-Verhalten.)
-- **MM2** — Orchestrator sammelt Twin-State, loggt Routing-Entscheidungen mit
-  Begründung („node-a: coder geladen, VRAM frei 9 GB → gewählt").
-- **MM3** — Routing-Regel v1 aktiv (geladen > freier VRAM > evict).
-- **MM4** — llama-swap als Serving-Schicht auf node-a, Ollama-Migration
-  (config.yaml, groups, ttl); Model-Manager quellt dann `/running`.
-- **MM5** — Kostenmodell: gemessene Ladezeiten pro Modell×Node → Routing
-  berücksichtigt Ladezeit-Budget statt nur VRAM-Fit.
+- **MM1** — Model manager reads `/api/ps` + VRAM, publishes the health announce.
+  (Digital twin visible, still no routing behavior.)
+- **MM2** — Orchestrator collects twin state, logs routing decisions with a rationale
+  ("node-a: coder loaded, VRAM free 9 GB → chosen").
+- **MM3** — Routing rule v1 active (loaded > free VRAM > evict).
+- **MM4** — llama-swap as serving layer on node-a, Ollama migration (config.yaml, groups,
+  ttl); the model manager then sources `/running`.
+- **MM5** — Cost model: measured load times per model × node → routing takes the
+  load-time budget into account instead of VRAM fit alone.
 
-## Planner als Allocator (Zielbild, Frank-Vorgabe)
+## Planner as Allocator (target picture, owner requirement)
 
-Der Planner bekommt **direkten Zugriff auf das Mesh** und allokiert pro Aufgabe
-selbst — der Orchestrator wird zum puren Executor (Route + ausführen), die
-Entscheidung „welches Modell auf welcher Node" trifft der Planner.
+The planner gets **direct access to the mesh** and allocates per task itself — the
+orchestrator becomes a pure executor (route + execute), and the decision "which model on
+which node" is made by the planner.
 
-### Warum das geht
-- Der Planner (7B) braucht als Output nur eine **strukturierte Allokation**:
-  `{"model": "...", "node": "...", "reason": "...", "fallback": "..."}` —
-  das ist ein Tool-Call, kein zusätzliches Wissensproblem.
-- Das **dynamische Fähigkeits-Wissen** kommt aus dem Health-Announce-Stream:
-  der Planner liest den Digital-Twin (Capability-Matrix + VRAM) als Teil seines
-  Prompt-Kontexts — kompakt, pro Node eine Zeile.
+### Why This Works
+- The planner (7B) only needs a **structured allocation** as output:
+  `{"model": "...", "node": "...", "reason": "...", "fallback": "..."}` — that is a tool
+  call, not an additional knowledge problem.
+- The **dynamic capability knowledge** comes from the health announce stream: the planner
+  reads the digital twin (capability matrix + VRAM) as part of its prompt context — compact,
+  one line per node.
 
-### Datenmodell: Capability-Matrix (von den Nodes gemeldet, stetig aktuell)
+### Data Model: Capability Matrix (reported by the nodes, continuously up to date)
 ```json
 {
   "node": "node-a",
@@ -250,90 +238,87 @@ Entscheidung „welches Modell auf welcher Node" trifft der Planner.
     "gemma-31b":        {"loaded": false, "vram_mb": 14400, "load_s": 40.0, "tok_s": 5.0, "roles": ["critic"]}
   },
   "queue_depth": 0,
-  "last_seen": "2026-11-16T17:32:00Z"
+  "last_seen": "<ISO-8601 timestamp>"
 }
 ```
-- `loaded`/`vram_free` ändern sich **stetig** → Health-Announce alle 5–10 s.
-- `load_s`/`tok_s` werden beim Laden gemessen (Mesh-LLM-`benchmark tune`-Idee)
-  → Kostenmodell wächst mit der Nutzung, kein manueller Pflegeaufwand.
+- `loaded`/`vram_free` change **continuously** → health announce every 5–10 s.
+- `load_s`/`tok_s` are measured during loading (Mesh-LLM `benchmark tune` idea) → the cost
+  model grows with usage, with no manual maintenance effort.
 
-### Ablauf pro Task (K8s-Scheduler-Pattern, pod-Infos als Vorbild)
-1. **Task anfragen**: Planner bekommt Task + Task-Typ (plan/coding/critique).
-2. **Twin lesen**: Planner ruft `mesh.resources.view` (Request/Reply auf NATS)
-   auf → bekommt die aktuelle Capability-Matrix (K8s: `kubectl get pods -o wide`).
-3. **Allokieren**: Planner wählt `model × node` nach Regel:
-   - Modell passt in freien VRAM?
-   - Schon geladen (Ladezeit 0) schlägt schnelleres aber zu ladendes Modell?
-   - Ladezeit + Inferenzzeit vs. Task-Deadline?
-   - Alternativen als `fallback` mitliefern, falls die Node stirbt.
-4. **Reservieren**: Planner sendet `mesh.alloc.request` → Orchestrator bucht
-   die Node (In-Memory-Claim, analog K8s-`nodeName` im Pod-Spec) und startet
-   den Worker. Konfliktfall (zwei Planner gleichzeitig): erster Claim gewinnt,
-   zweiter bekommt `409` und reallokiert.
-5. **Ausführen + Feedback**: Nach dem Task meldet die Node die gemessenen
-   `load_s`/`tok_s` zurück → Matrix aktualisiert sich (Self-Improving).
+### Flow per Task (K8s scheduler pattern, using pod info as the model)
+1. **Request task**: the planner gets the task + task type (plan/coding/critique).
+2. **Read twin**: the planner calls `mesh.resources.view` (request/reply on NATS) → gets the
+   current capability matrix (K8s: `kubectl get pods -o wide`).
+3. **Allocate**: the planner chooses `model × node` by these rules:
+   - Does the model fit into free VRAM?
+   - Does an already loaded model (load time 0) beat a faster model that still has to be loaded?
+   - Load time + inference time vs. task deadline?
+   - Supply alternatives as a `fallback` in case the node dies.
+4. **Reserve**: the planner sends `mesh.alloc.request` → the orchestrator books the node
+   (in-memory claim, analogous to K8s `nodeName` in the pod spec) and starts the worker.
+   Conflict case (two planners at the same time): the first claim wins, the second gets
+   `409` and reallocates.
+5. **Execute + feedback**: after the task the node reports the measured `load_s`/`tok_s`
+   back → the matrix updates (self-improving).
 
-### Rollen-Shift
-- **Orchestrator**: verwaltet Claims, führt aus, broadcastet Twin-State —
-  kein Routing-Wissen mehr nötig.
-- **Planner**: einziges Bauteil, das über Ressourcen entscheidet.
-- **Model-Manager**: führt `load/unload/drain`-Intents aus (Mesh-LLM-Verben).
+### Role Shift
+- **Orchestrator**: manages claims, executes, broadcasts twin state — no routing knowledge
+  needed anymore.
+- **Planner**: the only component that decides about resources.
+- **Model manager**: executes `load/unload/drain` intents (Mesh-LLM verbs).
 
-### Milestones (angepasst)
-- **MM1** — Model-Manager: Health-Announce mit Capability-Matrix (obige Felder).
-- **MM2** — Orchestrator: Twin-State sammeln, `mesh.resources.view`-Endpoint
-  (Request/Reply), Twin-State sichtbar loggen.
-- **MM3** — Planner: Mesh-Zugriff (NATS-User mit `mesh.resources.view`-Perm),
-  Allokation als strukturierten Output, Orchestrator führt aus.
-- **MM4** — llauncher als Serving/Kontroll-Ebene (NATS↔MCP-Brücke) +
-  `drain`-Intents: VRAM-Blockade-Kette endgültig lösen.
-- **MM5** — Kostenmodell aus gemessenen Ladezeiten (Feedback-Loop).
+### Milestones (adjusted)
+- **MM1** — Model manager: health announce with the capability matrix (fields above).
+- **MM2** — Orchestrator: collect twin state, `mesh.resources.view` endpoint
+  (request/reply), log twin state visibly.
+- **MM3** — Planner: mesh access (NATS user with `mesh.resources.view` permission),
+  allocation as structured output, orchestrator executes.
+- **MM4** — llauncher as serving/control layer (NATS↔MCP bridge) + `drain` intents:
+  finally resolve the VRAM blockade chain.
+- **MM5** — Cost model from measured load times (feedback loop).
 
-## Umgesetzt (2026-11-24): `memnc.control` + `meshctl backend`
+## `memnc.control` + `meshctl backend`
 
-Die Abstraktion liegt in memnc, nicht im Backend. llauncher und Ollama sind
-Adapter; ein weiteres Backend ist ein weiteres Modul, ohne Kernänderung.
+The abstraction lives in memnc, not in the backend. llauncher and Ollama are adapters;
+another backend is another module, without a core change.
 
 ```
 src/memnc/control/
-  base.py        Service, ActionResult, State/Health-Vokabular, BackendControl-Protocol
-  llauncher.py   LlauncherControl — shellt auf die llauncher-CLI (eine Implementierung
-                 für "wie stoppe ich eine Unit" im Stack), mappt JSON-Snapshots
-  docker.py      DockerControl — Container als Backend-Instanzen; Qualifikation über
-                 memnc.backend-Label, docker_backends-Setting oder Inference-Image
-  llamacpp.py    LlamaCppControl — native llama-server-Prozesse direkt vom Host:
-                 /proc/<pid>/cmdline + cgroup→systemd-Unit, ohne llauncher
-  ollama.py      OllamaControl — Modelle über HTTP (/api/tags, /api/ps);
-                 Prozess-Seite delegiert an einen anderen Adapter, sonst systemctl
+  base.py        Service, ActionResult, State/health vocabulary, BackendControl protocol
+  llauncher.py   LlauncherControl — shells out to the llauncher CLI (one implementation for
+                 "how to stop a unit" in the stack), maps JSON snapshots
+  docker.py      DockerControl — containers as backend instances; qualification via the
+                 memnc.backend label, docker_backends setting, or inference image
+  llamacpp.py    LlamaCppControl — native llama-server processes directly from the host:
+                 /proc/<pid>/cmdline + cgroup→systemd unit, without llauncher
+  ollama.py      OllamaControl — models via HTTP (/api/tags, /api/ps); the process side
+                 delegates to another adapter, otherwise systemctl
   __init__.py    controls() / find_control() / collect()
 ```
 
-Design-Regeln:
+Design rules:
 
-- **Ein Vokabular, kein Backend-Jargon.** Adapter übersetzen nach
-  `running|stopped|failed|cloud|unknown` und `ok|down|open|bad|cloud`.
-  Aufrufer (CLI, später Planner) schalten nur auf diese Werte.
-- **Ein Besitzer pro Service.** `collect()` dedupliziert über Host:Port
-  (`http://127.0.0.1:11434` == `127.0.0.1:11434`) und merged die Zeile:
-  Prozess-Owner liefert Lifecycle, andere Adapter reichern Modell-Inventar an.
-  Deshalb gibt es genau eine ollama-Zeile, obwohl zwei Adapter sie kennen.
-- **Delegation statt Duplikat.** `OllamaControl(delegates=[...])` steuert den
-  Prozess nicht selbst, sondern fragt die Adapterliste nach dem Endpoint
-  (`/api/tags`-Host:Port) und nimmt den ersten, der ihn bedient — egal ob das
-  llauncher, docker oder ein native `llama-server` ist. Fällt der Delegate weg,
-  greift `systemctl` auf die konfigurierte Unit. `controls()` baut die Liste
-  entsprechend der Autorität: llauncher → docker → llamacpp.
-- **Host-Truth statt Registry-Truth.** Der llamacpp-Adapter liest, was wirklich
-  läuft (`/proc/<pid>/cmdline`, `--port`, `-m`), und löst die besitzende
-  systemd-User-Unit über die Prozess-cgroup auf. Handgestartete Server sind
-  damit sichtbar und **stoppbar**; neu **starten** geht nur über eine Unit —
-  memnc erfindet keine Serving-Flags.
-- **Container nur, wenn sie Backends sind.** Label `memnc.backend=…` ist
-  opt-in; danach `docker_backends`-Setting (kommagetrennte Namen); zuletzt
-  bekannte Inference-Images. Mesh-Infrastruktur (nats, workers) und
-  Fremddienste (searxng, open-webui) bleiben draußen.
-- **Kein NATS.** Das ist die Notfall-Ebene: wenn das Mesh liegt, muss
-  `meshctl backend list` trotzdem funktionieren.
+- **One vocabulary, no backend jargon.** Adapters translate to
+  `running|stopped|failed|cloud|unknown` and `ok|down|open|bad|cloud`. Callers (CLI, later
+  the planner) only switch on these values.
+- **One owner per service.** `collect()` deduplicates via host:port
+  (`http://127.0.0.1:11434` == `127.0.0.1:11434`) and merges the row: the process owner
+  supplies the lifecycle, other adapters enrich the model inventory. That is why there is
+  exactly one ollama row, even though two adapters know it.
+- **Delegation instead of duplication.** `OllamaControl(delegates=[...])` does not control
+  the process itself; it asks the adapter list for the endpoint (`/api/tags` host:port) and
+  takes the first one that serves it — whether that is llauncher, docker or a native
+  `llama-server`. If the delegate disappears, `systemctl` takes over the configured unit.
+  `controls()` builds the list according to authority: llauncher → docker → llamacpp.
+- **Host truth instead of registry truth.** The llamacpp adapter reads what is actually
+  running (`/proc/<pid>/cmdline`, `--port`, `-m`) and resolves the owning systemd user unit
+  via the process cgroup. Hand-started servers are thus visible and **stoppable**; a
+  **restart** only works via a unit — memnc does not invent serving flags.
+- **Containers only if they are backends.** The label `memnc.backend=…` is opt-in; after
+  that the `docker_backends` setting (comma-separated names); finally known inference images.
+  Mesh infrastructure (nats, workers) and third-party services (searxng, open-webui) stay out.
+- **No NATS.** This is the emergency layer: when the mesh is down, `meshctl backend list`
+  must still work.
 
 CLI:
 
@@ -344,24 +329,25 @@ meshctl backend start|stop|restart <name>
 meshctl backend logs <name> [-n 60]
 ```
 
-Verifikation: 17 Unit-Tests in `tests/test_backend_control.py` (Mapping, Dedupe,
-Merge, Delegate-Fehlen, Ollama ohne Daemon, Docker-Qualifikation/Endpoint/Labels,
-llama-server-cmdline + cgroup→Unit), volle Suite 883 passed / 4 skipped.
-Live: `list` zeigt `swift` :8097, `ollama` :11434 (compose `ollama_power`),
-`hf-cheapest` (cloud, unmanaged). `start swift` ist idempotent
+Verification: 17 unit tests in `tests/test_backend_control.py` (mapping, dedupe, merge,
+missing delegate, Ollama without daemon, Docker qualification/endpoint/labels,
+llama-server cmdline + cgroup→unit), full suite 883 passed / 4 skipped.
+Live: `list` shows `swift` :8097, `ollama` :11434 (compose `ollama_power`),
+`hf-cheapest` (cloud, unmanaged). `start swift` is idempotent
 (`ok — already_running swift`).
 
-Offen: `backend logs` für compose-Backends geht über den Docker-Adapter
-(`docker logs`); ein unmanaged `llama-server` liefert nur so viel, wie journald
-bzw. die Unit hergibt — Prozess-stdout außerhalb von systemd ist nicht abgreifbar.
-`memnc.backend`-Labels an den echten Compose-Services fehlen noch (deshalb
-erscheint `ollama_power` derzeit nicht über den Docker-Adapter, sondern nur
-über llauncher).
+Open: `backend logs` for compose backends goes via the Docker adapter (`docker logs`); an
+unmanaged `llama-server` only yields as much as journald or the unit provides — process
+stdout outside systemd cannot be captured. `memnc.backend` labels on the real compose
+services are still missing (that is why `ollama_power` currently does not appear via the
+Docker adapter, only via llauncher).
 
-## Offene Fragen (für Frank)
+## Open Questions (for the owner)
 
-- Sollen alle Nodes llama-swap bekommen, oder nur die mit GPU (node-a: RX 6800 XT)?
-- Ollama behalten als Backend hinter llama-swap, oder direkt llama-server?
-- Persistent-Strategie: Welches Modell soll „immer geladen" bleiben? (Vorschlag:
-  kleinster Planner, ~5 GB — dann bleibt der Mesh-Task immer startfähig.)
-- Priorität: erst MM1+MM2 (Observability) oder direkt MM3 (Routing-Verhalten)?
+Tracked in roadmap E9 (T9.7–T9.11); answers go into the roadmap log.
+
+- Should all nodes get llama-swap, or only the ones with a GPU (node-a: discrete GPU)?
+- Keep Ollama as a backend behind llama-swap, or go directly to llama-server?
+- Persistence strategy: which model should stay "always loaded"? (Suggestion: the smallest
+  planner, ~5 GB — then the mesh task always remains startable.)
+- Priority: first MM1+MM2 (observability), or directly MM3 (routing behavior)?

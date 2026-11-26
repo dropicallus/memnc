@@ -2,7 +2,7 @@
 
 Design origin: eclipse-score/mcp-servers `libs/score-context`
 (ContextDelta + Provenance) and `packages/context-discipline`
-(OutcomeRecord). Plan reference: docs/memnc-mesh-plan.md section 14.12.
+(OutcomeRecord). Plan reference: docs/plan.md section 14.12.
 
 This slice defines the *schema* only — what a worker/orchestrator can
 deposit about a finished task. Persisting observations into a graph

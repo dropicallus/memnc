@@ -1,6 +1,6 @@
 """Pi harness: runs `pi -p --mode json` headlessly against a workspace.
 
-Proven workflow (2026-11-14, weak->strong loop on the memnc repo):
+Proven workflow (weak->strong loop on the memnc repo):
 - pi edits files directly in the workspace (git worktree recommended); the
   product is the workspace diff, not structured patches.
 - 7b-class models emit native tool_calls (6+ tool executions per run); the
@@ -19,6 +19,7 @@ import shutil
 import signal
 from pathlib import Path
 
+from ..mcp.tools_shell import harness_env
 from . import HarnessCaps, HarnessResult, register
 from .workspace import workspace_diff
 
@@ -124,6 +125,7 @@ class PiHarness:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(workspace),
+                env=harness_env("PI_ENV_PASS"),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,

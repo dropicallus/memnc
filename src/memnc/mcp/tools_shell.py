@@ -14,6 +14,24 @@ from ..fsutil import PathEscapeError, safe_path
 
 log = logging.getLogger(__name__)
 
+_ENV_KEYS = ("PATH", "HOME", "LANG", "TERM", "TMPDIR")
+
+
+def minimal_env(extra: tuple[str, ...] | list[str] = ()) -> dict[str, str]:
+    """Allow-listed environment for model-driven child processes.
+
+    Model-authored commands and scripts must not inherit secrets such as
+    NATS_TOKEN or INFERENCE_API_KEY from the worker's environment. ``extra``
+    names variables an operator explicitly chose to pass through.
+    """
+    return {k: os.environ[k] for k in (*_ENV_KEYS, *extra) if k in os.environ}
+
+
+def harness_env(pass_var: str) -> dict[str, str]:
+    """minimal_env plus the comma-separated names in the ``pass_var`` env var."""
+    extra = [k.strip() for k in os.environ.get(pass_var, "").split(",") if k.strip()]
+    return minimal_env(extra)
+
 
 async def run_shell(
     root: Path,
@@ -34,17 +52,12 @@ async def run_shell(
             workdir = Path(root).resolve()
         timeout = min(timeout_s if timeout_s > 0 else 120, 3600)
 
-        # Minimal env: model-driven shell commands must not inherit secrets
-        # like NATS_TOKEN or INFERENCE_API_KEY from os.environ.
-        shell_env = {
-            k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TERM", "TMPDIR") if k in os.environ
-        }
         process = await asyncio.create_subprocess_exec(
             "bash",
             "-c",
             cmd,
             cwd=str(workdir),
-            env=shell_env,
+            env=minimal_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
@@ -59,17 +72,17 @@ async def run_shell(
         # Bounded incremental reads: never buffer unbounded process output.
         async def _read_stream(stream, limit) -> tuple[bytes, bool]:
             chunks: list[bytes] = []
+            kept = 0
             truncated = False
             while True:
                 chunk = await stream.read(65536)
                 if not chunk:
                     break
-                if len(chunks) * 65536 < limit:
-                    room = limit - sum(len(c) for c in chunks)
-                    chunks.append(chunk[:room])
-                    if len(chunk) > room:
-                        truncated = True
-                else:
+                room = max(limit - kept, 0)
+                piece = chunk[:room]
+                chunks.append(piece)
+                kept += len(piece)
+                if len(chunk) > room:
                     truncated = True
                 # keep draining to EOF, discarding beyond the cap
             return b"".join(chunks), truncated

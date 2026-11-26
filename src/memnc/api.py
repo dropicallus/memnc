@@ -1,6 +1,6 @@
 """M11a Mesh API — anycast read path over NATS.
 
-Concept: docs/mesh-api-concept.md §4/§5. The server answers
+Concept: docs/plan.md §4/§5. The server answers
 ``mesh.api.request.<verb>`` requests (queue-group ``mesh-api`` — anycast,
 exactly one server answers) and replies with ``served_by`` so frontends
 always know which node answered.

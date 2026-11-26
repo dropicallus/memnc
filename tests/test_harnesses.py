@@ -724,7 +724,11 @@ def test_opencode_harness_missing_binary(tmp_path):
 def test_opencode_harness_clean_state_flag(tmp_path, monkeypatch):
     from memnc.harnesses.opencode import OpenCodeHarness
 
-    state = Path.home() / ".local/share/opencode"
+    home = tmp_path / "home"
+    state = home / ".local/share/opencode"
+    state.mkdir(parents=True)
+    (state / "session.db").write_text("x")
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("OPENCODE_CLEAN_STATE", "1")
     oc_bin = _write_fake_opencode(tmp_path, "#!/bin/sh\nexit 0\n")
     harness = OpenCodeHarness(model="x", opencode_bin=oc_bin)
@@ -766,3 +770,18 @@ def test_build_user_prompt_workspace_state() -> None:
     assert "WORKSPACE STATE" in prompt and "venv/" in prompt
     prompt = build_user_prompt(Role.PLANNER, {"task": "t"})
     assert "WORKSPACE STATE" not in prompt
+
+
+def test_opencode_harness_does_not_inherit_secrets(tmp_path, monkeypatch):
+    from memnc.harnesses.opencode import OpenCodeHarness
+
+    monkeypatch.setenv("NATS_TOKEN", "leak-me")
+    monkeypatch.setenv("INFERENCE_API_KEY", "leak-me-too")
+    monkeypatch.setenv("MY_PROVIDER_KEY", "passed-on-purpose")
+    monkeypatch.setenv("OPENCODE_ENV_PASS", "MY_PROVIDER_KEY")
+    oc_bin = _write_fake_opencode(tmp_path, '#!/bin/sh\nenv > "$PWD/env.txt"\nexit 0\n')
+    asyncio.run(OpenCodeHarness(model="x", opencode_bin=oc_bin).run("do it", tmp_path))
+    dumped = (tmp_path / "env.txt").read_text()
+    assert "NATS_TOKEN" not in dumped
+    assert "INFERENCE_API_KEY" not in dumped
+    assert "MY_PROVIDER_KEY=passed-on-purpose" in dumped

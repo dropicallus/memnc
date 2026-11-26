@@ -1,22 +1,22 @@
-# Konzept: Hermes ↔ memnc-Mesh
+# Concept: Hermes ↔ memnc Mesh
 
-> Stand: 2026-11-20 · Autor: Hermes · Status: zum Nachdenken (Frank)
+> Status: concept, not built. Tracked as roadmap T8.8. Subjects and grant rules follow `docs/plan.md`.
 
-## Kernidee
+## Core Idea
 
-Hermes ist **kein** Mesh-Worker. Es ist der **Supervisor** — die Intelligenz,
-die Aufgaben dekomponiert, delegiert, Ergebnisse validiert und entscheidet.
-Das Mesh bleibt die **Ressourcen-Schicht** (Modelle, VRAM, Nodes).
+Hermes is **not** a mesh worker. It is the **supervisor** — the intelligence that
+decomposes tasks, delegates, validates results and decides. The mesh remains the
+**resource layer** (models, VRAM, nodes).
 
-Zwei Verbindungen:
+Two connections:
 
 ```
 ┌─────────────────────────────────────────────────┐
 │  HERMES (Supervisor)                            │
 │  - Task Decomposition                           │
 │  - Subagent Orchestration                       │
-│  - Ergebnis-Validierung                         │
-│  - Mensch-Kontakt (Telegram)                    │
+│  - Result Validation                            │
+│  - Human contact (Telegram)                     │
 └──────────┬──────────────────────┬──────────────┘
            │                      │
      [1] NATS Bus            [2] Events
@@ -26,82 +26,84 @@ Zwei Verbindungen:
 │  memnc MESH                                   │
 │  - NATS JetStream (tasks, registry, events)   │
 │  - Orchestrator (routing, dispatch, ACL)      │
-│  - Nodes: RX 7600 XT, maco, node-a            │
+│  - Nodes: node-a, node-b (GPU and CPU hosts)  │
 │  - Models: GGUF, Ollama, llama-server         │
 └─────────────────────────────────────────────────┘
 ```
 
-## [1] AgentAdapter — Hermes als Mesh-Agent
+## [1] AgentAdapter — Hermes as Mesh Agent
 
-**Was existiert:** `src/memnc/adapter.py` (M7, fertig). Generischer NATS-Adapter:
-- `advertise(skill)` → Capability ins Registry-KV
-- `_work_loop(subject)` → Request/Reply auf `mem.agent.<id>.work`
-- `_heartbeat_loop` → Liveness + TTL-Refresh
+**What exists:** `src/memnc/adapter.py` (M7, done). Generic NATS adapter:
+- `advertise(skill)` → capability into the registry KV
+- `_work_loop(subject)` → request/reply on `mem.agent.<id>.work`
+- `_heartbeat_loop` → liveness + TTL refresh
 
-**Was fehlt für Hermes:** Ein konkreter **Handler**, der Mesh-Aufgaben in
-Hermes-Tasks übersetzt:
+**What is missing for Hermes:** a concrete **handler** that translates mesh tasks into
+Hermes tasks:
 
 ```python
 class HermesAdapter(AgentAdapter):
     def handler(self, payload: dict) -> dict:
         # payload: task, context, plan, role, model_override
-        # → delegiere an Hermes (CLI: hermes run --task "..." oder API)
-        # → Hermes dekomponiert, delegiert an Subagenten, validiert
-        # → Ergebnis zurück als JSON
+        # → delegate to Hermes (CLI: hermes run --task "..." or API)
+        # → Hermes decomposes, delegates to subagents, validates
+        # → result back as JSON
         ...
 ```
 
 **Flow:**
-1. Orchestrator dispatcht Rolle (z.B. `ROLE_CODING`)
-2. Adapter empfängt auf `mem.agent.hermes-supervisor.work`
-3. Adapter ruft Hermes auf
-4. Hermes dekomponiert, delegiert, validiert
-5. Ergebnis geht zurück ins Mesh
-6. Orchestrator prüft: Task fertig?
+1. Orchestrator dispatches a role (e.g. `ROLE_CODING`)
+2. Adapter receives on `mem.agent.hermes-supervisor.work`
+3. Adapter calls Hermes
+4. Hermes decomposes, delegates, validates
+5. Result goes back into the mesh
+6. Orchestrator checks: task done?
 
 **Identity & ACL (M9):**
 - `agent_id = "hermes-supervisor"`
-- **CHAIN-Grant** vom Orchestrator (nicht AUTO — deny-by-default)
-- Nur auf eigenen pinned Inbox antworten
-- Kein Zugriff auf fremde Inboxes
+- **CHAIN grant**, issued manually by the operator (`meshctl grant`), not AUTO. The automatic
+  bootstrap grants only agents named after a node (`<node>-<role>`), and `hermes-supervisor` is
+  not one (plan §21.2)
+- Only reply on the own pinned inbox
+- No access to foreign inboxes
 
 **Skills:** `orchestration`, `code`, `research`, `planning`
 
 ## [2] Live-State Bridge — Mesh → Hermes (Read-only)
 
-Hermes braucht Echtzeit-Einblick ins Mesh, ohne es zu steuern.
+Hermes needs real-time insight into the mesh without controlling it.
 
-**Option A (empfohlen): NATS-Subscription im Hermes-Plugin**
-- `plugins/memnc/` subscribt `mesh.events.*` + `mesh.router.scores`
-- Pusht Events in Hermes-Session
-- Frank fragt "Was läuft im Mesh?" → Hermes antwortet aus Live-State
-- Kein Extra-Prozess, Gerüst schon da
+**Option A (recommended): NATS subscription in the Hermes plugin**
+- `plugins/memnc/` subscribes to `mesh.task.*.events` + `mesh.router.scores`
+- Pushes events into the Hermes session
+- The owner asks "What is running in the mesh?" → Hermes answers from live state
+- No extra process, the scaffolding already exists
 
-**Option B: HTTP Sidecar**
-- Kleiner Service liest NATS, serviert REST/SSE auf `:8480`
-- Hermes ruft via curl ab
-- Entkoppelt, aber Extra-Prozess
+**Option B: HTTP sidecar**
+- A small service reads NATS and serves REST/SSE on `:8480`
+- Hermes fetches via curl
+- Decoupled, but an extra process
 
-## Was Hermes NICHT macht
+## What Hermes Does NOT Do
 
-| ❌ | Warum |
+| ❌ | Why |
 |---|---|
-| Mesh-Worker | Hat kein eigenes Modell; ist Supervisor |
-| Registry schreiben (ohne Grant) | M9: deny-by-default |
-| Fremde Inboxes adressieren | M9: pinned inbox |
-| Router-Entscheidungen | M8: Orchestrator bleibt routing-authoritative |
-| Node-Power-Steuerung | T5: bleibt am Node-Controller |
+| Mesh worker | Has no own model; is the supervisor |
+| Write to the registry (without grant) | M9: deny by default |
+| Address foreign inboxes | M9: pinned inbox |
+| Router decisions | M8: orchestrator remains routing-authoritative |
+| Node power control | Stays with the node controller (llauncher and WOL; roadmap T9.1, T3.6) |
 
-## Implementierungsschritte (Reihenfolge)
+## Implementation Steps (Order)
 
-1. `HermesAdapter` in `plugins/memnc/` — konkreter Handler
-2. Grant-Bootstrap — Orchestrator erteilt CHAIN-Grant
-3. Events-Subscription — Plugin subscribt `mesh.events.*`
-4. Test: Mesh dispatcht Task → Hermes antwortet → Mesh bestätigt
+1. `HermesAdapter` in `plugins/memnc/` — concrete handler
+2. Manual CHAIN grant by the operator
+3. Events subscription — plugin subscribes to `mesh.task.*.events`
+4. Test: mesh dispatches task → Hermes responds → mesh confirms
 
-## Offene Fragen
+## Open Questions
 
-- Wie ruft Hermes-Adapter Hermes auf? (CLI vs. API vs. direkt im Prozess?)
-- Grant-Bootstrap: einmalig manuell oder automatisch beim ersten Heartbeat?
-- Soll Hermes auch **Claims** stellen können (M11 Referee-Modus)?
-- Fehlerfall: Hermes timeout → Mesh retry? Wer entscheidet?
+- How does the Hermes adapter call Hermes? (CLI vs. API vs. directly in the process?)
+- Grant bootstrap: decided. Manual, because the automatic bootstrap covers node-named agents only (plan §21.2).
+- Should Hermes also be able to place **claims** (M11 referee mode)?
+- Failure case: Hermes timeout → mesh retry? Who decides?

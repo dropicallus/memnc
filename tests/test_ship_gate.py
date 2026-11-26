@@ -1,4 +1,4 @@
-"""Ship-gate V2: mechanical deliverable checks (docs/design-ship-gate.md).
+"""Ship-gate V2: mechanical deliverable checks (docs/roadmap.md).
 
 The orchestrator must refuse coder results whose claimed deliverables are
 missing, thin stubs, or too few - based on worker-stamped evidence

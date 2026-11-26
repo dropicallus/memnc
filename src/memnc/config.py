@@ -181,7 +181,7 @@ class Settings(BaseSettings):
     # M14: claimed tasks run their pipeline worker-driven — the finishing
     # worker advances the snapshot itself; the orchestrator is a spectator.
     self_pipeline: bool = True
-    # Structured message tuples (docs/design-message-tuple.md): when on, the
+    # Structured message tuples (docs/roadmap.md): when on, the
     # orchestrator attaches a MessageTuple to every dispatch payload and the
     # worker renders the prompt as MESSAGE/BACKGROUND/INTERMEDIATE OUTPUT
     # sections instead of re-derived prose. Off = byte-identical arm C.
@@ -207,11 +207,11 @@ class Settings(BaseSettings):
     # advertised model from the roster instead of re-picking the broken one.
     # Human retry intent (model_override) always wins.
     model_rotate_on_fail: bool = True
-    # Ship-gate V2 (docs/design-ship-gate.md): mechanical deliverable
+    # Ship-gate V2 (docs/roadmap.md): mechanical deliverable
     # checks, opt-in like done_requires_activity. 0 = check off.
     verify_min_lines: int = 0
     verify_min_files: int = 0
-    # Model management twin (plan 2026-11-16): staleness kills a node in the
+    # Model management twin: staleness kills a node in the
     # allocation matrix; the model_manager announces health on this interval.
     twin_stale_s: int = 30
     health_interval_s: int = 5
@@ -276,11 +276,16 @@ class Settings(BaseSettings):
     retire_threshold: int = 3
 
     log_level: str = "INFO"
+    # Bench checkers import model-written code. Off by default; a node that
+    # runs bench with untrusted output turns this on to run each checker in a
+    # child process with a minimal environment and a wall-clock limit.
+    bench_isolate: bool = False
 
     # T1: read-only Telegram observer. Empty TELEGRAM_ALLOW = mirror to nobody
     # (the observer refuses to start, so a leaked token alone does nothing).
     telegram_bot_token: str | None = None
     telegram_allow: str = ""
+    telegram_allow_users: str = ""
     telegram_poll_s: int = 25
     telegram_verbose: bool = False
     # Quieter digest: suppress routine progress-state transitions (RECEIVED/

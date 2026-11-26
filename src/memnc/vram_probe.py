@@ -1,6 +1,6 @@
 """T2: VRAM live-probe — real free/total VRAM per node, never registry JSON.
 
-Order of preference (Frank's decision 2026-11-16, all-AMD fleet):
+Order of preference (all-AMD fleet):
 1. sysfs /sys/class/drm/cardN/device/mem_info_vram_{used,total} (works on
    AMD dGPUs and usually on iGPUs like the 780M),
 2. amdgpu_top --json -n (iGPU/pre-init cards where sysfs files are absent),

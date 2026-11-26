@@ -117,3 +117,11 @@ def test_save_and_load(tmp_path):
     loaded = Verifier.load(path)
     assert loaded.score(GOOD_SOLUTION) == model.score(GOOD_SOLUTION)
     assert loaded.trained_on == len(make_pairs())
+
+
+def test_run_isolated_runs_checker_in_child_process(tmp_path):
+    from memnc.bench.checkers import run_isolated
+
+    assert run_isolated("check_no_such_checker", tmp_path, timeout_s=60) == [
+        "unknown checker: check_no_such_checker"
+    ]

@@ -8,7 +8,9 @@ from typing import Any
 from . import journal
 from .schema import MessageTuple, Role
 
-PROMPT_VERSION = "2026-11-17.1"
+# Recorded with every bench result and worker deposit. Bump it when the prompt
+# text changes; records written under an older value keep that value.
+PROMPT_VERSION = "1.1"
 
 MAX_FILE_CHARS = 20_000
 MAX_PROMPT_CHARS = 90_000
@@ -95,7 +97,7 @@ def build_user_prompt(
 ) -> str:
     """Render task context for the model from the orchestrator payload.
 
-    With a message tuple (docs/design-message-tuple.md) the task/context/plan
+    With a message tuple (docs/roadmap.md) the task/context/plan
     sections are replaced by the structured MESSAGE / BACKGROUND /
     INTERMEDIATE OUTPUT sections; all role-specific sections below are kept.
     """

@@ -71,10 +71,12 @@ class LlamaCppControl:
         return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
 
     def _matches(self, argv: list[str]) -> bool:
-        for arg in argv[:4]:
-            if os.path.basename(arg) == self.binary_name:
-                return True
-        return False
+        """True when the process *is* the server: argv[0] names the binary.
+
+        Matching any of the first arguments made editors, greps and shells that
+        merely mention the binary look like servers, and stop() could signal them.
+        """
+        return bool(argv) and os.path.basename(argv[0]) == self.binary_name
 
     def _unit(self, pid: int) -> str:
         try:
@@ -197,6 +199,12 @@ class LlamaCppControl:
         pid = _pid_from_svc(svc.service)
         if pid is None:
             return ActionResult(False, "stop", self.name, name, "no pid recorded for this server")
+        # The pid came from an earlier scan; the process may have exited and the
+        # pid been reused. Signal only if it is still the server.
+        if not self._matches(self._cmdline(pid)):
+            return ActionResult(
+                False, "stop", self.name, name, f"pid {pid} is no longer llama-server"
+            )
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError as exc:

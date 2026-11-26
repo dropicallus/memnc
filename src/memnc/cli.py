@@ -41,6 +41,7 @@ from .schema import (
     TaskNeeds,
     TaskSubmission,
     model_pull_allowed,
+    resolve_request_id,
 )
 from .version import code_version, is_stale
 from .wol import WolWaker, send_wol
@@ -354,7 +355,10 @@ async def cmd_backup(args: argparse.Namespace, settings: Settings) -> int:
         data = await dump_buckets(bus)
     finally:
         await bus.close()
-    with open(args.out, "w", encoding="utf-8") as fh:
+    # Grants, trust and observations are in the dump: owner-only, never umask-widened.
+    fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
     counts = {k: len(v) for k, v in data["buckets"].items()}
     print(f"backup written to {args.out}: {counts}")
@@ -423,13 +427,15 @@ async def cmd_decide(args: argparse.Namespace, settings: Settings) -> int:
     await bus.connect()
     try:
         status = "approved" if args.action == "approve" else "rejected"
-        matches = [
-            r for r in await bus.list_model_requests() if r.request_id.startswith(args.request_id)
-        ]
-        if not matches:
-            print(f"no model request matching {args.request_id}")
+        requests = await bus.list_model_requests()
+        rid, candidates = resolve_request_id(args.request_id, [r.request_id for r in requests])
+        if not rid:
+            if candidates:
+                print(f"ambiguous request id {args.request_id}: {', '.join(candidates[:5])}")
+            else:
+                print(f"no model request matching {args.request_id}")
             return 1
-        request = matches[0]
+        request = next(r for r in requests if r.request_id == rid)
         if request.status != "pending":
             print(f"{request.request_id} already {request.status}")
             return 1
@@ -874,7 +880,7 @@ def _mesh_dep_checker(settings: Settings) -> Callable[[str], Awaitable[bool]]:
     cancelled): backlog deps injected as mesh ids express ordering, not a
     success gate — a terminal-failed attempt is followed by backlog
     strong-retries, and blocking on it deadlocks the driver forever (see
-    docs/design-backlog-dep-resolution.md). Unknown ids stay blocked.
+    docs/roadmap.md). Unknown ids stay blocked.
     """
     snapshots: dict[str, bool] | None = None
 

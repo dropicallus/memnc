@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,16 @@ from nats.js import JetStreamContext
 from nats.js.errors import KeyNotFoundError
 
 log = logging.getLogger(__name__)
+
+# Manifest names come from the bus: one path component, no separators, no
+# leading dot, so they cannot leave the models directory.
+_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
+
+
+def _model_path(models_dir: Path, name: str) -> Path:
+    if not _MODEL_NAME.fullmatch(name):
+        raise ValueError(f"refusing model name {name!r}")
+    return models_dir / name
 
 OBJECT_STORE_BUCKET = "gguf"
 KV_MANIFEST = "model-manifest"
@@ -95,14 +106,14 @@ class ModelTransport:
                 f"sha256 mismatch for {name}: {digest} != {manifest['sha256']}"
             )
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        out = self.models_dir / name
+        out = _model_path(self.models_dir, name)
         out.write_bytes(data)
         log.info("model fetched: %s → %s", name, out)
         return out
 
     async def ensure_local(self, name: str) -> Path | None:
         """Model present locally? Then nothing to do, else fetch from mesh."""
-        local = self.models_dir / name
+        local = _model_path(self.models_dir, name)
         if local.exists():
             return local
         try:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Block personal information from entering the repo.
 
-Decision 2026-11-16: no names, no personal setup details (hardware,
+Decision: no names, no personal setup details (hardware,
 machine names, home paths), no quoted/dated personal attributions in
 tracked content. Runs as part of the pre-commit hook and `make lint`.
 """

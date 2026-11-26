@@ -200,3 +200,19 @@ def test_unit_from_cgroup_picks_user_unit():
         "0::/user.slice/user-1000.slice/user@1000.service/app.slice/swift.service\n"
     ) == ("swift.service")
     assert unit_from_cgroup("0::/user.slice/session-3.scope\n") == ""
+
+
+def test_discovery_matches_only_processes_whose_argv0_is_the_server(tmp_path):
+    from memnc.control.llamacpp import LlamaCppControl
+
+    def add_proc(pid: int, argv: list[str]) -> None:
+        d = tmp_path / str(pid)
+        d.mkdir()
+        (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+
+    add_proc(100, ["/usr/bin/llama-server", "-m", "m.gguf", "--port", "8098"])
+    add_proc(200, ["vim", "llama-server"])
+    add_proc(300, ["grep", "-r", "llama-server", "."])
+    ctl = LlamaCppControl(proc_root=str(tmp_path))
+    matched = [pid for pid in sorted(ctl._pids()) if ctl._matches(ctl._cmdline(pid))]
+    assert matched == [100]

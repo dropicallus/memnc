@@ -9,7 +9,7 @@ with a static cost prior:
 
 ALPHA weights learned success, BETA weights the cost prior. The numeric
 defaults (TAU0, ALPHA, BETA) and the seed deposits below are initialized
-from the measured 40-task hard-tier full run of 2026-11-15 (5 reps per
+from the measured 40-task hard-tier full run (5 reps per
 (task, arm) cell): the rescue matrix A 32/40, B 38/40, C 35/40 and the
 per-cell mean tokens are frozen into the seed so routing starts from
 evidence instead of a flat prior.
@@ -63,7 +63,7 @@ UNSURE_MARKER = "unsure"
 # Escalation floor: single-shot -> self-reflect -> mesh (arm A -> B -> C).
 ESCALATION_CHAIN: tuple[str, ...] = ("A", "B", "C")
 
-# Seed deposits from the 2026-11-15 hard-tier full run: (task_type, edge)
+# Seed deposits from the hard-tier full run: (task_type, edge)
 # -> (successes, reps, mean tokens). task_type is the bench task id, so a
 # live task of the same kind routes against real measurements, not priors.
 SEED_RUN: tuple[tuple[str, str, int, int, int], ...] = (
