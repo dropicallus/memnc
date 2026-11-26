@@ -223,7 +223,7 @@ services:
     depends_on:
       nats:
         condition: service_healthy
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 4.0
     pids_limit: 512
 
@@ -250,7 +250,7 @@ services:
     depends_on:
       nats:
         condition: service_healthy
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 4.0
     pids_limit: 512
 
