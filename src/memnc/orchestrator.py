@@ -92,6 +92,7 @@ class Allocator:
         self._seen_at: dict[str, float] = {}
         self._claims: dict[str, str] = {}  # task_id → node
         self._reserved_mb: dict[str, float] = {}  # node → reserved VRAM
+        self._claim_size: dict[str, float] = {}  # task_id → reserved MB
 
     def update_health(self, *healths: NodeHealth) -> None:
         for health in healths:
@@ -149,6 +150,21 @@ class Allocator:
             AllocResult(ok=True, model=model, node=node), task_id, size_mb
         )
 
+    def release(self, task_id: str) -> None:
+        """Free a task's claim and VRAM reservation once the task is terminal.
+
+        Without this, reservations only grew and each node eventually looked
+        full to the planner.
+        """
+        node = self._claims.pop(task_id, "")
+        size = self._claim_size.pop(task_id, 0.0)
+        if node and size:
+            left = self._reserved_mb.get(node, 0.0) - size
+            if left > 0:
+                self._reserved_mb[node] = left
+            else:
+                self._reserved_mb.pop(node, None)
+
     def _claim(
         self, result: AllocResult, task_id: str, size_mb: float
     ) -> AllocResult:
@@ -157,6 +173,8 @@ class Allocator:
         node = result.node or ""
         if node and size_mb:
             self._reserved_mb[node] = self._reserved_mb.get(node, 0.0) + size_mb
+            if task_id:
+                self._claim_size[task_id] = size_mb
         logging.getLogger(__name__).info(
             "alloc claim: task=%s model=%s node=%s size_mb=%.0f reserved=%.0f",
             task_id or "-",
@@ -574,7 +592,10 @@ class Orchestrator:
         try:
             payload = Envelope.model_validate_json(message.data).payload or {}
             patterns = [p for p in self.settings.grant_nodes.split(",") if p.strip()]
-            for agent_id in acl.auto_grant_agents(payload, patterns):
+            node = message.subject.split(".")[2] if message.subject.count(".") >= 3 else ""
+            if not node or await self.bus.revocation_of(node) is not None:
+                return
+            for agent_id in acl.auto_grant_agents(node, payload, patterns):
                 if await self.bus.grant_read(agent_id) is not None:
                     continue
                 await self.bus.issue_grant(
@@ -1002,9 +1023,22 @@ class Orchestrator:
             },
         )
 
+        # 15.4.5: the activity gate decides the outcome before anything is
+        # deposited, so a DONE it refuses is recorded as FAILED everywhere.
+        gate_block = ""
+        if self.settings.done_requires_activity and any(a.type == "finish" for a in result.actions):
+            gate_block = done_block_reason(snapshot) or ""
+        if gate_block:
+            snapshot.state = TaskState.FAILED
+            snapshot.record("task.failed", gate_block)
+            snapshot.error = gate_block
+
         # 14.13 step 1: deposit an observation for every terminal transition
         # into the experience graph. Duck-typed + best effort: a broken
         # observation store must never fail the task lifecycle itself.
+        if result.state in TERMINAL_STATES and getattr(self, "_allocator", None) is not None:
+            self._allocator.release(snapshot.task_id)
+
         if result.state in TERMINAL_STATES and hasattr(self.bus, "deposit_observation"):
             await self._deposit_observation(snapshot)
 
@@ -1015,15 +1049,9 @@ class Orchestrator:
             if action.type == "dispatch" and action.role is not None:
                 await self._dispatch(snapshot, action.role)
             elif action.type == "finish":
-                # 15.4.5: opt-in structural gate - refuse DONE without any
-                # executed command or tool call on the snapshot.
-                block = done_block_reason(snapshot)
-                if self.settings.done_requires_activity and block:
-                    snapshot.state = TaskState.FAILED
-                    snapshot.record("task.failed", block)
-                    snapshot.error = block
+                if gate_block:
                     await self.bus.put_snapshot(snapshot)
-                    await self.bus.emit_event(snapshot, "task.failed", block)
+                    await self.bus.emit_event(snapshot, "task.failed", gate_block)
                     continue
                 snapshot.record("task.done")
                 await self.bus.put_snapshot(snapshot)
@@ -1163,12 +1191,9 @@ class Orchestrator:
         store is a side channel: a write failure costs one bullet, nothing
         else.
         """
-        from .experience_store import ExperienceStore, record_observation
+        from .experience_store import record_observation_locked
 
-        store = ExperienceStore(self.settings.experience_store_path).load()
-        added = record_observation(store, observation)
-        if added:
-            store.save()
+        record_observation_locked(self.settings.experience_store_path, observation)
 
     async def _dispatch(self, snapshot: TaskSnapshot, role: Role) -> None:
         timeout_s = self.settings.timeout_for(role)

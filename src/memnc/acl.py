@@ -122,27 +122,30 @@ def matches_any(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, p.strip()) for p in patterns if p.strip())
 
 
-def auto_grant_agents(payload: dict, patterns: list[str]) -> list[str]:
+def auto_grant_agents(subject_node: str, payload: dict, patterns: list[str]) -> list[str]:
     """Agent ids a heartbeat authorizes for a CHAIN grant (M9 bootstrap).
 
-    The orchestrator (ROOT) listens to ``mesh.node.*.heartbeat`` and issues
-    grants only for nodes matching ``MESH_GRANT_NODES`` patterns — this is how
-    a joining machine (node-b) gets write access without a manual
-    ``meshctl grant`` on the orchestrator host. Worker heartbeats carry
-    ``{role, node}`` (agent id ``<node>-<role>``); adapter heartbeats carry
-    ``{agent_id, ...}``. Returns [] when nothing matches.
+    ``subject_node`` comes from the heartbeat subject (``mesh.node.<node>.
+    heartbeat``), never from the payload. A node may only be granted agents
+    named after itself, and a payload that declares another node is refused.
+    Worker heartbeats carry ``{role}`` (agent id ``<node>-<role>``); adapter
+    heartbeats carry ``{agent_id}`` and must start with ``<node>-``. Returns []
+    when nothing matches.
     """
-    if not patterns:
+    if not patterns or not subject_node:
         return []
-    node = str(payload.get("node", ""))
-    agent_id = str(payload.get("agent_id", ""))
+    declared = str(payload.get("node", ""))
+    if declared and declared != subject_node:
+        return []
     role = str(payload.get("role", ""))
-    out: list[str] = []
-    if agent_id and (matches_any(agent_id, patterns) or matches_any(node, patterns)):
-        out.append(agent_id)
-    elif node and role and matches_any(f"{node}-{role}", patterns):
-        out.append(f"{node}-{role}")
-    return out
+    agent_id = str(payload.get("agent_id", ""))
+    if role:
+        candidate = f"{subject_node}-{role}"
+    elif agent_id == subject_node or agent_id.startswith(f"{subject_node}-"):
+        candidate = agent_id
+    else:
+        return []
+    return [candidate] if matches_any(candidate, patterns) else []
 
 
 def pinned_inbox(agent_id: str) -> str:

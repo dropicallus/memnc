@@ -165,3 +165,38 @@ def test_mesh_submit_reports_orchestrator_rejection_as_failure():
 
     from memnc.worker import Worker
 
+
+def test_command_for_finished_task_is_acked_without_running():
+    import asyncio
+    from types import SimpleNamespace
+
+    from memnc.schema import Envelope, TaskSnapshot, TaskState
+    from memnc.worker import Worker
+
+    class _Bus:
+        async def get_snapshot(self, task_id):
+            return TaskSnapshot(task_id=task_id, trace_id="tr", task="x", state=TaskState.FAILED)
+
+        async def dead_letter(self, *args, **kwargs):
+            raise AssertionError("unexpected dead letter")
+
+    acked: list[bool] = []
+
+    class _Msg:
+        data = Envelope(id="cmd1", task_id="t1", trace_id="tr", kind="command").model_dump_json()
+
+        async def ack(self):
+            acked.append(True)
+
+        async def nak(self, delay=None):
+            raise AssertionError("unexpected nak")
+
+    async def _run(*args, **kwargs):
+        raise AssertionError("command ran for a finished task")
+
+    worker = Worker.__new__(Worker)
+    worker.bus = _Bus()
+    worker.settings = SimpleNamespace(prefer_node="", node_name="node-a-coder", enforce_node_version=False)
+    worker._run = _run  # type: ignore[method-assign]
+    asyncio.run(worker._handle(_Msg()))
+    assert acked == [True]

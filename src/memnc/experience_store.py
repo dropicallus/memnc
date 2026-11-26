@@ -16,8 +16,11 @@ attention over observation deposits — read-only ranking, not storage.)
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -265,3 +268,32 @@ def record_bench_run(jsonl_path: str | Path, store: ExperienceStore) -> dict[str
             )
         reports[topic] = store.merge(topic, bullets, source="bench")
     return reports
+
+
+@contextmanager
+def exclusive(path: str | Path) -> Iterator[None]:
+    """Hold an advisory lock across one load-modify-save cycle on ``path``.
+
+    The worker, the orchestrator and the dreaming job all write the same store.
+    Without the lock two cycles interleave and one update is lost. The lock is
+    advisory and per host: it protects the store on one machine's filesystem.
+    """
+    path = Path(path)
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def record_observation_locked(path: str | Path, observation: TaskObservation) -> bool:
+    """Record one observation under the store lock; True when it was added."""
+    with exclusive(path):
+        store = ExperienceStore(path).load()
+        added = record_observation(store, observation)
+        if added:
+            store.save()
+    return bool(added)

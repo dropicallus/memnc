@@ -870,13 +870,17 @@ class Bus:
         # M8: submitter-signed attribution into the trust ledger — written at
         # the moment the CAS claim wins, because the orchestrator referee loop
         # ticks every 5s and loses the race against a fast worker otherwise.
+        # Only ids that hold a grant earn trust on claim. A self-asserted name
+        # would otherwise build trust by choosing a name.
         try:
             await self.ensure_trust()
-            await self.trust_credit(
-                worker_id,
-                "claim",
-                attribution=[signed_attribution(snapshot)],
-            )
+            await self.ensure_grants()
+            if await self.grant_read(worker_id) is not None:
+                await self.trust_credit(
+                    worker_id,
+                    "claim",
+                    attribution=[signed_attribution(snapshot)],
+                )
         except Exception:  # noqa: BLE001 - the ledger is best-effort
             pass
         return snapshot

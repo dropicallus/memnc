@@ -84,27 +84,35 @@ class TestAutoGrantBootstrap:
     """M9 heartbeat bootstrap: which agents a joining node's heartbeat grants."""
 
     def test_empty_patterns_grant_nothing(self):
-        assert acl.auto_grant_agents({"node": "node-b", "role": "coder"}, []) == []
+        assert acl.auto_grant_agents("node-b", {"node": "node-b", "role": "coder"}, []) == []
 
     def test_worker_heartbeat_matches_node_role(self):
         p = {"node": "node-b", "role": "coder"}
-        assert acl.auto_grant_agents(p, ["node-b-*"]) == ["node-b-coder"]
+        assert acl.auto_grant_agents("node-b", p, ["node-b-*"]) == ["node-b-coder"]
 
     def test_adapter_heartbeat_matches_agent_id(self):
         p = {"node": "node-b", "agent_id": "node-b-agent", "skills": ["code"]}
-        assert acl.auto_grant_agents(p, ["node-b-*"]) == ["node-b-agent"]
+        assert acl.auto_grant_agents("node-b", p, ["node-b-*"]) == ["node-b-agent"]
+
+    def test_payload_cannot_claim_another_node(self):
+        p = {"node": "node-b", "role": "coder"}
+        assert acl.auto_grant_agents("node-c", p, ["node-*"]) == []
+
+    def test_adapter_cannot_name_another_nodes_agent(self):
+        p = {"agent_id": "node-b-agent"}
+        assert acl.auto_grant_agents("node-c", p, ["node-*"]) == []
 
     def test_non_matching_node_denied(self):
         p = {"node": "node-c", "role": "coder"}
-        assert acl.auto_grant_agents(p, ["node-b-*"]) == []
+        assert acl.auto_grant_agents("node-c", p, ["node-b-*"]) == []
 
     def test_pattern_list_with_spaces(self):
         p = {"node": "node-b", "role": "critic"}
-        assert acl.auto_grant_agents(p, ["node-a-*", " node-b-* "]) == ["node-b-critic"]
+        assert acl.auto_grant_agents("node-b", p, ["node-a-*", " node-b-* "]) == ["node-b-critic"]
 
     def test_exact_pattern(self):
         p = {"node": "node-b", "role": "coder"}
-        assert acl.auto_grant_agents(p, ["node-b-coder"]) == ["node-b-coder"]
+        assert acl.auto_grant_agents("node-b", p, ["node-b-coder"]) == ["node-b-coder"]
 
 
 class TestPinnedInbox:

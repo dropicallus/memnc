@@ -46,7 +46,7 @@ async def test_gate_naks_foreign_alloc():
     worker._loaded_models = set()
 
     async def get_snapshot(task_id):
-        return SimpleNamespace(needs=None)
+        return SimpleNamespace(needs=None, state="CODING")
 
     dlq_calls: list[tuple[object, str]] = []
 
@@ -77,7 +77,7 @@ async def test_gate_passes_matching_node():
     worker._current_task = None
 
     async def get_snapshot(task_id):
-        return SimpleNamespace(needs=None)
+        return SimpleNamespace(needs=None, state="CODING")
 
     async def dead_letter(envelope, reason):
         raise AssertionError("must not dlq a matching-node command")

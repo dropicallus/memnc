@@ -139,3 +139,11 @@ def test_record_bench_run_is_merge_deterministic() -> None:
 
 def test_ratio_constant_matches_design() -> None:
     assert MAX_PRUNE_RATIO == 0.3
+
+
+def test_exclusive_creates_a_lock_file_beside_the_store(tmp_path):
+    from memnc.experience_store import exclusive
+
+    target = tmp_path / "store.json"
+    with exclusive(target):
+        assert (tmp_path / "store.json.lock").exists()

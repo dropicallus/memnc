@@ -1,6 +1,6 @@
 # Concept: Hermes ↔ memnc Mesh
 
-> Status: for consideration
+> Status: concept, not built. Tracked as roadmap T8.8. Subjects and grant rules follow `docs/plan.md`.
 
 ## Core Idea
 
@@ -26,7 +26,7 @@ Two connections:
 │  memnc MESH                                   │
 │  - NATS JetStream (tasks, registry, events)   │
 │  - Orchestrator (routing, dispatch, ACL)      │
-│  - Nodes: RX 7600 XT, maco, node-a            │
+│  - Nodes: node-a, node-b (GPU and CPU hosts)  │
 │  - Models: GGUF, Ollama, llama-server         │
 └─────────────────────────────────────────────────┘
 ```
@@ -61,7 +61,9 @@ class HermesAdapter(AgentAdapter):
 
 **Identity & ACL (M9):**
 - `agent_id = "hermes-supervisor"`
-- **CHAIN grant** from the orchestrator (not AUTO — deny by default)
+- **CHAIN grant**, issued manually by the operator (`meshctl grant`), not AUTO. The automatic
+  bootstrap grants only agents named after a node (`<node>-<role>`), and `hermes-supervisor` is
+  not one (plan §21.2)
 - Only reply on the own pinned inbox
 - No access to foreign inboxes
 
@@ -72,7 +74,7 @@ class HermesAdapter(AgentAdapter):
 Hermes needs real-time insight into the mesh without controlling it.
 
 **Option A (recommended): NATS subscription in the Hermes plugin**
-- `plugins/memnc/` subscribes to `mesh.events.*` + `mesh.router.scores`
+- `plugins/memnc/` subscribes to `mesh.task.*.events` + `mesh.router.scores`
 - Pushes events into the Hermes session
 - The owner asks "What is running in the mesh?" → Hermes answers from live state
 - No extra process, the scaffolding already exists
@@ -90,18 +92,18 @@ Hermes needs real-time insight into the mesh without controlling it.
 | Write to the registry (without grant) | M9: deny by default |
 | Address foreign inboxes | M9: pinned inbox |
 | Router decisions | M8: orchestrator remains routing-authoritative |
-| Node power control | T5: stays with the node controller |
+| Node power control | Stays with the node controller (llauncher and WOL; roadmap T9.1, T3.6) |
 
 ## Implementation Steps (Order)
 
 1. `HermesAdapter` in `plugins/memnc/` — concrete handler
-2. Grant bootstrap — orchestrator issues the CHAIN grant
-3. Events subscription — plugin subscribes to `mesh.events.*`
+2. Manual CHAIN grant by the operator
+3. Events subscription — plugin subscribes to `mesh.task.*.events`
 4. Test: mesh dispatches task → Hermes responds → mesh confirms
 
 ## Open Questions
 
 - How does the Hermes adapter call Hermes? (CLI vs. API vs. directly in the process?)
-- Grant bootstrap: one-time manual step, or automatic at the first heartbeat?
+- Grant bootstrap: decided. Manual, because the automatic bootstrap covers node-named agents only (plan §21.2).
 - Should Hermes also be able to place **claims** (M11 referee mode)?
 - Failure case: Hermes timeout → mesh retry? Who decides?

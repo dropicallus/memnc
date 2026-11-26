@@ -92,3 +92,18 @@ class TestGenerator:
         # orchestrator block precedes the first node block and has mesh.>
         orch_part = conf.split("nkey:")[1].split("nkey:")[0]
         assert "mesh.>" in orch_part
+
+
+class TestNodeDenyList:
+    def test_each_node_denies_authorization_buckets_and_stream_admin(self, tmp_path: Path):
+        text = generate_config("alpha", ["node-b", "node-c"], tmp_path).read_text()
+        assert text.count("deny: [") == 2
+        assert text.count("'$KV.mesh_grants.>'") == 2
+        assert text.count("'$KV.mesh_revocations.>'") == 2
+        assert text.count("'$JS.API.STREAM.DELETE.>'") == 2
+
+    def test_orchestrator_has_no_deny_list(self, tmp_path: Path):
+        text = generate_config("alpha", ["node-b"], tmp_path).read_text()
+        orch = text[: text.index("nkey:", text.index("nkey:") + 1)]
+        assert "deny: [" not in orch
+        assert text.count("deny: [") == 1

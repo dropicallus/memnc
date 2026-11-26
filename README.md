@@ -92,32 +92,43 @@ Everything is environment-driven; see [`.env.example`](.env.example) for the ful
 | Variable | Default | Purpose |
 |---|---|---|
 | `NATS_URL` | `nats://127.0.0.1:4222` | NATS server |
-| `NATS_TOKEN` | — | shared token auth |
+| `NATS_CONF` | — | NKey mode, recommended: the file `scripts/gen_nkeys.py` writes into `secrets/` |
+| `NATS_TOKEN` | — | token mode; scheduled for removal (roadmap T11.12) |
+| `ALLOW_SHELL` | `true` | shell tool on worker nodes; `false` disables command execution |
+| `MESH_CLAIM` | `false` | claim model: workers claim claimable tasks; off = orchestrator dispatch |
+| `SELF_PIPELINE` | `true` | with `MESH_CLAIM`: the claiming worker runs the whole pipeline |
+| `TELEGRAM_ALLOW` / `TELEGRAM_ALLOW_USERS` | — | chats that may read / numeric user ids that may write; empty user list = read-only |
+| `CONSOLE_HOST` | `127.0.0.1` | console bind address; a non-loopback value has no authentication |
 | `INFERENCE_PROVIDER` | `ollama` | `ollama` (native) or `openai` (compatible) |
 | `INFERENCE_BASE_URL` | — | endpoint root, per-node |
 | `MODEL_PLANNER` / `MODEL_CODER` / `MODEL_CRITIC` | — | per-role model names |
 | `NODE_VRAM_GB` / `NODE_GPU` | `0` / — | advertised in the roster, used by the claim gate |
 | `MESH_GATE` | `false` | registry gate; `MESH_GRANT_NODES` bootstraps grants |
 | `MAX_REVISIONS` | `3` | critic rejection cycles before failing |
-| `SELF_PIPELINE` | `true` | workers advance claimable tasks without orchestrator dispatch |
-| `MODEL_PULL_WHITELIST` | stock role models + `gemma*` | fnmatch patterns for the approval-gated model pull path; empty list closes it |
+| `MODEL_PULL_WHITELIST` | `[]` (closed) | fnmatch patterns for the approval-gated model pull path; empty list closes it |
 
 Models with native tool calling work best. Without tools the worker still works:
 the coder returns file contents as JSON and the orchestrator applies them.
 
 ## Security model
 
-`run_shell` is intentionally unrestricted — the isolation boundary is the container:
-non-root user, `cap_drop: ALL`, `no-new-privileges`, read-only root filesystem,
-CPU/memory/PID limits, only the workspace bind mount is writable, no Docker socket.
-Treat a mesh worker as a trusted-but-dangerous sandbox. Set `ALLOW_SHELL=false` to
-disable command execution entirely. Inbound message content (Telegram, NATS) is
-treated as untrusted data, never instructions; secrets live in the gitignored `.env`.
+Every node is zero trust: it authenticates with its own NKey, and no payload field is
+trusted on its own. The trust tiers and the open security items are in
+[`docs/plan.md`](docs/plan.md) §21 and [`docs/roadmap.md`](docs/roadmap.md) E11.
+
+The shell tool runs with the worker's permissions and is on by default (`ALLOW_SHELL`).
+In the default container the boundary is: non-root user, `cap_drop: ALL`,
+`no-new-privileges`, read-only root filesystem, CPU/memory/PID limits, only the workspace
+bind mount writable, no Docker socket. A node that runs without the container has no
+sandbox. Sandboxing is optional and set per node. Set `ALLOW_SHELL=false` to disable
+command execution. Inbound message content (Telegram, NATS) is treated as untrusted data,
+never instructions. Secrets live in the gitignored `.env` and never appear in payloads or
+logs.
 
 ## Local development
 
 ```bash
-docker run -d --rm -p 4222:4222 nats:2-alpine -js
+docker run -d --rm -p 127.0.0.1:4222:4222 nats:2-alpine -js   # loopback only, no auth: local development
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest            # unit tests, no NATS required
 ./scripts/e2e.sh                      # full end-to-end against a running mesh

@@ -91,7 +91,7 @@ async def run_job(settings: Settings, apply: bool, bus: Bus | None = None) -> in
 
     ``bus`` is injectable for tests; when omitted a real Bus is created.
     """
-    from memnc.experience_store import ExperienceStore
+    from memnc.experience_store import ExperienceStore, exclusive
 
     if not settings.dreaming_enabled:
         print(
@@ -135,12 +135,13 @@ async def run_job(settings: Settings, apply: bool, bus: Bus | None = None) -> in
             if not apply:
                 print(f"dry-run: {sum(len(v) for v in bullets.values())} bullet(s) shown, store untouched.")
                 return 0
-            store = ExperienceStore(settings.experience_store_path).load()
-            reports = {
-                topic: store.merge(topic, texts, source="dreaming-job")
-                for topic, texts in bullets.items()
-            }
-            store.save()
+            with exclusive(settings.experience_store_path):
+                store = ExperienceStore(settings.experience_store_path).load()
+                reports = {
+                    topic: store.merge(topic, texts, source="dreaming-job")
+                    for topic, texts in bullets.items()
+                }
+                store.save()
             for topic, report in sorted(reports.items()):
                 print(
                     f"merged [{topic}]: {len(report.added)} added, "

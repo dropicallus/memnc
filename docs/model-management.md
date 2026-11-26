@@ -30,7 +30,7 @@ Status: Draft (incorporate feedback)
   do NOT choose it as serving layer.** Kept here only as a conceptual reference
   (groups/ttl/swap semantics).
 
-### llauncher (the owner's own infrastructure — PRIMARY option)
+### llauncher (separate project, PRIMARY option)
 - **The MCP concept is agent-native** (owner: "The cool thing about llauncher is the
   MCP concept") — registry truth as MCP resource; agents query state instead of
   self-loading into Ollama. Exactly the fix for "agent loads blindly on its own".
@@ -47,7 +47,7 @@ Status: Draft (incorporate feedback)
 - **Assessment, honestly corrected:** previously insufficiently covered — the agent
   instead loaded models into Ollama itself. llauncher covers lifecycle (start/stop/swap),
   observability (status/slots/metrics/logs/audit) and validation — more than llama-swap,
-  and tested on the owner's rig (RX 7600 XT / 780M / RX 6800 XT).
+  and tested on a mixed AMD fleet (discrete and integrated GPUs).
 
 ### vLLM (reference for pool management)
 - `--gpu-memory-utilization` = "claim at most X% of VRAM" — the central pool principle.
@@ -96,14 +96,14 @@ Our path remains: a lean own twin on NATS (MM1–MM5), no K8s dependency.
   Takeaway: **mDNS as a discovery extension** for us (nodes announce themselves instead of
   a hardcoded roster).
 - **Mesh-LLM** — see its own section below (primary reference).
-- **Exo** — Apple Silicon focus, MLX backend; only conditionally useful for maco/180 (780M),
+- **Exo** — Apple Silicon focus, MLX backend; only conditionally useful for the iGPU-only host,
   but the discovery pattern is the same.
 
 **llama.cpp cluster managers:**
 - **Tightwad** — pools CUDA+ROCm via llama.cpp RPC across machines; killer feature:
   **speculative decoding over the network** (a small model drafts on the weak machine, a
-  large one verifies on the strong one → 2–3×). Interesting for the node-a (6800 XT) +
-  Hermes host (7600 XT) combination, but complex; note the idea, not now.
+  large one verifies on the strong one → 2–3×). Interesting for the node-a (discrete GPU) +
+  supervisor host combination, but complex; note the idea, not now.
 - **RPC Manager** — web UI + mDNS discovery + **live telemetry (VRAM, temperature) per
   node**. Confirms: telemetry as first-class twin data.
 - **BareMetalRT** — TensorRT-native, NVIDIA-only; irrelevant (AMD).
@@ -344,7 +344,9 @@ Docker adapter, only via llauncher).
 
 ## Open Questions (for the owner)
 
-- Should all nodes get llama-swap, or only the ones with a GPU (node-a: RX 6800 XT)?
+Tracked in roadmap E9 (T9.7–T9.11); answers go into the roadmap log.
+
+- Should all nodes get llama-swap, or only the ones with a GPU (node-a: discrete GPU)?
 - Keep Ollama as a backend behind llama-swap, or go directly to llama-server?
 - Persistence strategy: which model should stay "always loaded"? (Suggestion: the smallest
   planner, ~5 GB — then the mesh task always remains startable.)

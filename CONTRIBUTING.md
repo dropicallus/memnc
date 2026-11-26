@@ -19,9 +19,10 @@ docker compose up -d          # NATS + workers
 1. Create a feature branch from `main`
    (`git checkout -b feat/my-change`).
 2. Make your change.
-3. Run the test suite:
+3. Run the lint and the test suite (CI runs the same two commands):
 
    ```bash
+   ruff check src tests
    pytest tests/ -q
    ```
 

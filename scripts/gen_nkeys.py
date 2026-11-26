@@ -51,16 +51,30 @@ def _generate_user_nkey(secrets_dir: Path, user: str, rotate: bool) -> tuple[byt
     return seed, pub
 
 
-def _user_block(pub: str, pubs: list[str], subs: list[str]) -> str:
-    """Render one nats.conf user entry with deny-by-default permissions."""
+def _user_block(pub: str, pubs: list[str], subs: list[str], deny: list[str] = ()) -> str:
+    """Render one nats.conf user entry with deny-by-default permissions.
+
+    ``deny`` is applied on top of the allow list. NATS evaluates deny first,
+    so a subject in ``deny`` is refused even when a wildcard allows it.
+    """
     pub_list = "\n".join(f"        {p!r}," for p in pubs)
     sub_list = "\n".join(f"        {s!r}," for s in subs)
+    if deny:
+        deny_list = "\n".join(f"          {d!r}," for d in deny)
+        publish = (
+            "        publish: {\n"
+            "          allow: [" + pub_list + "\n          ]\n"
+            "          deny: [\n" + deny_list + "\n          ]\n"
+            "        }\n"
+        )
+    else:
+        publish = "        publish: [" + pub_list + "\n        ]\n"
     return (
         "    {\n"
         f"      nkey: {pub!r}\n"
         "      permissions: {\n"
-        "        publish: [" + pub_list + "\n        ]\n"
-        "        subscribe: [" + sub_list + "\n        ]\n"
+        + publish
+        + "        subscribe: [" + sub_list + "\n        ]\n"
         "      }\n"
         "    },"
     )
@@ -97,6 +111,22 @@ _ORCH_SUB = [
     "$KV.>",
         "$kv.>",
     "_INBOX.>",
+]
+
+
+# Node users never write the authorization buckets (grants, revocations) and
+# never reshape or delete JetStream streams. Workers do not need either; the
+# orchestrator and the operator CLI do. Deny is evaluated before allow, so
+# these hold even though the node allow list is wide.
+_NODE_DENY = [
+    "$KV.mesh_grants.>",
+    "$kv.mesh_grants.>",
+    "$KV.mesh_revocations.>",
+    "$kv.mesh_revocations.>",
+    "$JS.API.STREAM.UPDATE.>",
+    "$JS.API.STREAM.DELETE.>",
+    "$JS.API.STREAM.PURGE.>",
+    "$JS.API.STREAM.MSG.DELETE.>",
 ]
 
 
@@ -151,7 +181,9 @@ def generate_config(
     entries.append(_user_block(op_pub, _OP_PUB, _OP_SUB))
     for node in nodes:
         _, pub = _generate_user_nkey(secrets_dir, node, rotate)
-        entries.append(_user_block(pub, _node_pubs(node), _node_subs(node)))
+        entries.append(
+            _user_block(pub, _node_pubs(node), _node_subs(node), deny=_NODE_DENY)
+        )
     # Trim the trailing comma off the last entry.
     entries[-1] = entries[-1].rstrip(",")
 

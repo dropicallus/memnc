@@ -86,6 +86,28 @@ mechanical ones. Detailed, task-focused versions of these rules live in
   driven child processes get the allow-listed environment (`minimal_env()`),
   never the worker's full environment.
 
+## Task tracking
+
+- **The board is the entry point.** Read the board at the top of `docs/roadmap.md` before you
+  start work. It lists every task with its state and priority.
+- **Pick work by priority.** Take a `P0` task first, then `P1`. Do not start `P2` or deferred
+  (⏸) work unless the owner asks.
+- **States follow the A2A task lifecycle:** `SUBMITTED` (planned), `WORKING` (in progress),
+  `COMPLETED` (done and verified), `CANCELED` (dropped), `DEFERRED` (kept, not scheduled). Only the
+  owner moves a task to `CANCELED` or `DEFERRED`.
+- **Use the board tools.** The `memnc-board` MCP server offers `board_list` and `board_get` to read.
+  `board_set_state` changes a state, and works only when the operator starts the server with
+  `BOARD_WRITE=1`. Set a task to `WORKING` when you start it.
+- **Completion needs evidence.** Set `COMPLETED` only after the task's test passes. A task whose
+  row names a live check stays `WORKING` until that check is recorded in Part II.
+- **Never edit inside the board markers.** The block between `<!-- board:start -->` and
+  `<!-- board:end -->` is generated. Edit the Part I row, then run `python scripts/board.py`.
+- **New work** gets a Part I row: the next free ID, a title, a state glyph, and a priority tag
+  (`**P0**`, `**P1**` or `**P2**`). Every open row needs a priority. `tests/test_board.py` checks it.
+- **Findings and decisions** go into Part II as dated entries. Plan changes go into `docs/plan.md`
+  without dates or status.
+- **Keep rows short.** One line per task. Put detail in Part II and link to it.
+
 ## Docs
 
 - `docs/plan.md` is the current specification; `docs/roadmap.md` is the roadmap —
