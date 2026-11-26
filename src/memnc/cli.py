@@ -1116,6 +1116,73 @@ async def cmd_backlog_run(args: argparse.Namespace, settings: Settings) -> int:
         await client.close()
 
 
+async def cmd_board_feed(args: argparse.Namespace, settings: Settings) -> int:
+    """Bridge the roadmap board into the mesh pipeline (reconcile + fill)."""
+    from pathlib import Path
+
+    from .board_feed import FeedStore, InProcessBoard, MCPBoard
+
+    store = FeedStore(Path(settings.experience_store_path).parent / "board-feed.json")
+    roadmap = Path(args.file)
+    if args.mcp:
+        board = MCPBoard(roadmap, write=not args.dry_run)
+        await board.__aenter__()
+        try:
+            return await _feed_loop(args, settings, board, store)
+        finally:
+            await board.__aexit__(None, None, None)
+    return await _feed_loop(args, settings, InProcessBoard(roadmap, write=not args.dry_run), store)
+
+
+async def _feed_loop(args, settings: Settings, board, store) -> int:
+    from .board_feed import BoardFeeder
+
+    # --dry-run previews the board only; it must not need a reachable mesh.
+    bus = None if args.dry_run else Bus(settings)
+    if bus is not None:
+        await bus.connect()
+
+    async def submit(text: str) -> str:
+        if bus is None:
+            raise RuntimeError("dry run: no submit")
+        submission = TaskSubmission(task=text, claimable=args.mode == "pull")
+        response = await bus.nc.request(  # type: ignore[union-attr]
+            SUBJECT_SUBMIT_NODE.format(node=settings.node_name),
+            submission.model_dump_json().encode(),
+            timeout=10,
+        )
+        data = json.loads(response.data)
+        if "error" in data:
+            raise RuntimeError(data["error"])
+        return str(data["task_id"])
+
+    async def snapshot(task_id: str):
+        if bus is None:
+            return None
+        return await bus.get_snapshot(task_id)
+
+    feeder = BoardFeeder(
+        board,
+        submit,
+        snapshot,
+        store,
+        capacity=args.capacity,
+        mode=args.mode,
+        max_attempts=args.max_attempts,
+        dry_run=args.dry_run,
+    )
+    try:
+        while True:
+            result = await feeder.tick()
+            print(json.dumps(result.summary(), indent=2), flush=True)
+            if args.once:
+                return 0
+            await asyncio.sleep(args.interval)
+    finally:
+        if bus is not None:
+            await bus.close()
+
+
 def cmd_wol(args: argparse.Namespace, settings: Settings) -> int:
     mac = args.mac or settings.wol_mac
     if not mac:
@@ -1442,6 +1509,32 @@ def build_parser() -> argparse.ArgumentParser:
     roadmap_sync.add_argument("--plan-id", default="roadmap", help="plan id for new entries")
     roadmap_sync.add_argument("--dry-run", action="store_true", help="print without adding")
     roadmap_sync.set_defaults(func=cmd_roadmap_sync)
+
+    board_feed = subparsers.add_parser(
+        "board-feed", help="bridge the roadmap board into the mesh pipeline"
+    )
+    board_feed.add_argument(
+        "--file", default="docs/roadmap.md", help="roadmap document (default: docs/roadmap.md)"
+    )
+    board_feed.add_argument("--once", action="store_true", help="one tick then exit")
+    board_feed.add_argument("--interval", type=float, default=15.0, help="seconds between ticks")
+    board_feed.add_argument(
+        "--capacity", type=int, default=1, help="how many board tasks may be in flight"
+    )
+    board_feed.add_argument(
+        "--mode",
+        choices=("pull", "push"),
+        default="pull",
+        help="pull: submit claimable so a worker takes it (default); push: plain submit",
+    )
+    board_feed.add_argument(
+        "--max-attempts", type=int, default=3, help="failures before the row is DEFERRED"
+    )
+    board_feed.add_argument(
+        "--mcp", action="store_true", help="go through the board MCP server instead of the module"
+    )
+    board_feed.add_argument("--dry-run", action="store_true", help="preview, write nothing")
+    board_feed.set_defaults(func=cmd_board_feed)
 
     return parser
 
